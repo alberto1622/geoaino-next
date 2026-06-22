@@ -34,3 +34,34 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## 06/082026
+
+- ✅Corriger la superficie sur les erreurs topologiques
+  - ✅A tester
+
+- ✅ correction directe des erreurs topologiques
+  - corrections manuelles implémenter
+
+- ✅Ajouter un module veriCAD
+  - il faudra intégrer la base syscol avec les communes correspondants
+
+- Ajouter des fichiers d'extension .dgn
+
+- Sur la map:
+  - ✅Faire clignoté la parcelle avec erreur selectionnée
+  - ✅Recherche suivant le nicad
+  - ✅Ajouter de la table attributaire des parcelles selectionnées
+
+- ✅Afichage des données dans une table
+  - Avec possibilité de supprimer des lignes
+
+## 18/06/2026
+
+- il faudra intégrer la base syscol avec les communes correspondants
+- Augmenter la capacité de chargement des données
+
+## 21/06/2026
+
+- Mettre un code les non-correspondance en couleur différents
+- Ajouter les syscol pour la formation des nicad des fichiers .dxf

@@ -1,0 +1,378 @@
+import { NextRequest, NextResponse } from "next/server";
+import * as shapefile from "shapefile";
+import JSZip from "jszip";
+import { parseDGN } from "@/lib/dgn-parser";
+import { convertDgnToDxf } from "@/lib/dgn-to-dxf";
+import { ingestDxfToParcelles, parcellesToFeatureCollection } from "@/lib/parcelle-ingestion";
+import type { DxfIngestionReport } from "@/lib/parcelle-ingestion";
+import { assignNicad2026FromCommunes } from "@/lib/cadastre/assign-nicad-2026";
+
+const UTM28N = "+proj=utm +zone=28 +datum=WGS84 +units=m +no_defs";
+const WGS84 = "+proj=longlat +datum=WGS84 +no_defs";
+
+function reprojectFeaturesToWgs84(features: unknown[]): unknown[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let proj4: any;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require("proj4");
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+    proj4 = mod.default ?? mod;
+  } catch { return features; }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+  if (typeof proj4 !== "function") return features;
+
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+  const reproject = (pt: number[]): number[] => proj4(UTM28N, WGS84, [pt[0], pt[1]]) as number[];
+  const reprojectRing = (ring: number[][]): number[][] => ring.map(reproject);
+
+  return features.map((feat: unknown) => {
+    const f = feat as { type: string; geometry: { type: string; coordinates: unknown } | null; properties: unknown };
+    if (!f?.geometry) return feat;
+    const { type, coordinates } = f.geometry;
+    let newCoords: unknown;
+    if (type === "Polygon") {
+      newCoords = (coordinates as number[][][]).map(reprojectRing);
+    } else if (type === "MultiPolygon") {
+      newCoords = (coordinates as number[][][][]).map((p) => p.map(reprojectRing));
+    } else if (type === "Point") {
+      newCoords = reproject(coordinates as number[]);
+    } else if (type === "MultiPoint" || type === "LineString") {
+      newCoords = (coordinates as number[][]).map(reproject);
+    } else if (type === "MultiLineString") {
+      newCoords = (coordinates as number[][][]).map(reprojectRing);
+    } else {
+      return feat;
+    }
+    return { ...f, geometry: { ...f.geometry, coordinates: newCoords } };
+  });
+}
+
+interface ParseResult {
+  geoJson: string;
+  featureCount: number;
+  format: string;
+  crs: string;
+  /** Rapport d'ingestion DXF (étapes Microstation 4-10) — uniquement pour les fichiers DXF. */
+  microstationReport?: DxfIngestionReport;
+}
+
+/**
+ * Ingestion DXF via le pipeline "parcelle-ingestion" (nomenclature DGID des
+ * calques Microstation, jointure spatiale numéro/dénomination ⇄ parcelle,
+ * détection doublons/chevauchements — étapes 4 à 10 de
+ * "Etapes de travail sur Microstation.md").
+ *
+ * TOUT fichier DXF passe obligatoirement par ce processus de construction des
+ * NICAD : il n'y a pas de repli "géométrie brute" (`parseDXF`). Un DXF sans
+ * parcelle exploitable retourne le résultat d'ingestion vide accompagné de son
+ * rapport (`microstationReport`) expliquant pourquoi aucune parcelle/NICAD n'a
+ * pu être construit — aucun DXF ne contourne le pipeline NICAD.
+ *
+ * Le Syscol (préfixe 8 chiffres du NICAD) est résolu par jointure spatiale sur
+ * `cad_communes_2026` (`assignNicad2026FromCommunes`) : il n'est pas dans le
+ * dessin, seule la commune 2026 contenant la parcelle le fournit.
+ */
+async function parseDxfAsParcelles(buf: Buffer): Promise<ParseResult> {
+  const ingestion = await assignNicad2026FromCommunes(
+    await ingestDxfToParcelles(buf, "input.dxf"),
+  );
+
+  const fc = parcellesToFeatureCollection(ingestion.parcelles);
+  return {
+    geoJson: JSON.stringify(fc),
+    featureCount: fc.features.length,
+    format: "DXF",
+    crs: "EPSG:4326",
+    microstationReport: ingestion.report,
+  };
+}
+
+/**
+ * Traitement d'un fichier DGN :
+ * 1. Si un convertisseur DGN→DXF externe est configuré (`DGN_TO_DXF_BIN`, p.ex.
+ *    GDAL avec driver DGNv8, ou MicroStation en batch), on l'utilise pour
+ *    obtenir un DXF (gère le DGN v8), puis on route vers le pipeline d'ingestion
+ *    complet (`parseDxfAsParcelles` : calques Microstation, NICAD, jointures).
+ * 2. Sinon (non configuré) ou en cas d'échec, on retombe sur GDAL (`parseDGN`),
+ *    qui lit le DGN v7 et affiche un message d'aide explicite pour le DGN v8.
+ */
+async function parseDgnFile(buf: Buffer): Promise<ParseResult> {
+  try {
+    const dxfBuf = await convertDgnToDxf(buf);
+    if (dxfBuf) {
+      const res = await parseDxfAsParcelles(dxfBuf);
+      return { ...res, format: "DGN" }; // provenance : source DGN, convertie en DXF
+    }
+  } catch (err) {
+    console.warn("[upload-geo] Conversion DGN→DXF externe échouée, repli sur GDAL:", err);
+  }
+  return parseDGN(buf);
+}
+
+async function parseShapefileBuffers(
+  shpBuf: Buffer,
+  dbfBuf?: Buffer,
+  prjBuf?: Buffer
+): Promise<ParseResult> {
+  const features: unknown[] = [];
+  const toArrayBuffer = (b: Buffer) =>
+    b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+  const source = await shapefile.open(
+    toArrayBuffer(shpBuf) as ArrayBuffer,
+    dbfBuf ? (toArrayBuffer(dbfBuf) as ArrayBuffer) : undefined
+  );
+
+  let result = await source.read();
+  while (!result.done) {
+    if (result.value) features.push(result.value);
+    result = await source.read();
+  }
+
+  let crs = "EPSG:4326";
+  if (prjBuf) {
+    const prj = prjBuf.toString("utf8");
+    if (prj.includes("UTM") && prj.includes("28")) crs = "EPSG:32628";
+  }
+
+  const finalFeatures = crs === "EPSG:32628" ? reprojectFeaturesToWgs84(features) : features;
+
+  return {
+    geoJson: JSON.stringify({ type: "FeatureCollection", features: finalFeatures }),
+    featureCount: finalFeatures.length,
+    format: "SHP",
+    crs: "EPSG:4326",
+  };
+}
+
+async function parseZip(buffer: Buffer): Promise<ParseResult> {
+  const zip = await JSZip.loadAsync(buffer);
+  const files = Object.keys(zip.files).filter((f) => !zip.files[f].dir);
+
+  // Tout DXF présent dans le ZIP doit passer par le processus de construction
+  // des NICAD (au même titre qu'un DXF déposé directement), avant tout autre
+  // format : on le route donc vers le pipeline d'ingestion `parcelle-ingestion`.
+  const dxfInZip = files.find((f) => f.toLowerCase().endsWith(".dxf"));
+  if (dxfInZip) {
+    const buf = Buffer.from(await zip.files[dxfInZip].async("arraybuffer"));
+    return parseDxfAsParcelles(buf);
+  }
+
+  // Un DGN compressé est routé vers le même pipeline (conversion DGN→DXF puis NICAD).
+  const dgnInZip = files.find((f) => f.toLowerCase().endsWith(".dgn"));
+  if (dgnInZip) {
+    const buf = Buffer.from(await zip.files[dgnInZip].async("arraybuffer"));
+    return parseDgnFile(buf);
+  }
+
+  const geojsonFile = files.find(
+    (f) => f.toLowerCase().endsWith(".geojson") || f.toLowerCase().endsWith(".json")
+  );
+  if (geojsonFile) {
+    const content = await zip.files[geojsonFile].async("string");
+    const parsed = JSON.parse(content);
+    return {
+      geoJson: content,
+      featureCount: (parsed.features || []).length,
+      format: "GeoJSON",
+      crs: "EPSG:4326",
+    };
+  }
+
+  const shpFiles = files.filter((f) => f.toLowerCase().endsWith(".shp"));
+  if (shpFiles.length === 0) {
+    throw new Error("Aucun fichier SHP, GeoJSON, DXF ou DGN trouvé dans le ZIP");
+  }
+
+  const allFeatures: unknown[] = [];
+  let crs = "EPSG:4326";
+
+  for (const shpFile of shpFiles) {
+    const base = shpFile.slice(0, -4); // remove .shp
+    const dbfFile = files.find((f) => f.toLowerCase() === (base + ".dbf").toLowerCase());
+    const prjFile = files.find((f) => f.toLowerCase() === (base + ".prj").toLowerCase());
+
+    const shpBuf = Buffer.from(await zip.files[shpFile].async("arraybuffer"));
+    const dbfBuf = dbfFile
+      ? Buffer.from(await zip.files[dbfFile].async("arraybuffer"))
+      : undefined;
+    const prjBuf = prjFile
+      ? Buffer.from(await zip.files[prjFile].async("arraybuffer"))
+      : undefined;
+
+    const result = await parseShapefileBuffers(shpBuf, dbfBuf, prjBuf);
+    const parsed = JSON.parse(result.geoJson);
+    allFeatures.push(...(parsed.features ?? []));
+    if (result.crs !== "EPSG:4326") crs = result.crs;
+  }
+
+  return {
+    geoJson: JSON.stringify({ type: "FeatureCollection", features: allFeatures }),
+    featureCount: allFeatures.length,
+    format: "SHP",
+    crs,
+  };
+}
+
+export async function POST(req: NextRequest): Promise<NextResponse> {
+  try {
+    const formData = await req.formData();
+    const files = formData.getAll("files") as File[];
+
+    if (!files.length) {
+      return NextResponse.json({ error: "Aucun fichier fourni" }, { status: 400 });
+    }
+
+    const shpFile = files.find((f) => f.name.toLowerCase().endsWith(".shp"));
+    const dbfFile = files.find((f) => f.name.toLowerCase().endsWith(".dbf"));
+    const prjFile = files.find((f) => f.name.toLowerCase().endsWith(".prj"));
+    const zipFile = files.find((f) => f.name.toLowerCase().endsWith(".zip"));
+    const geoJsonFile = files.find(
+      (f) =>
+        f.name.toLowerCase().endsWith(".geojson") ||
+        f.name.toLowerCase().endsWith(".json")
+    );
+    const kmlFile = files.find((f) => f.name.toLowerCase().endsWith(".kml"));
+    const csvFile = files.find((f) => f.name.toLowerCase().endsWith(".csv"));
+    const dgnFile = files.find((f) => f.name.toLowerCase().endsWith(".dgn"));
+    const dxfFile = files.find((f) => f.name.toLowerCase().endsWith(".dxf"));
+
+    let result: ParseResult;
+
+    if (shpFile) {
+      const shpBuf = Buffer.from(await shpFile.arrayBuffer());
+      const dbfBuf = dbfFile
+        ? Buffer.from(await dbfFile.arrayBuffer())
+        : undefined;
+      const prjBuf = prjFile
+        ? Buffer.from(await prjFile.arrayBuffer())
+        : undefined;
+      result = await parseShapefileBuffers(shpBuf, dbfBuf, prjBuf);
+    } else if (zipFile) {
+      const buf = Buffer.from(await zipFile.arrayBuffer());
+      result = await parseZip(buf);
+    } else if (geoJsonFile) {
+      const text = await geoJsonFile.text();
+      const parsed = JSON.parse(text);
+      result = {
+        geoJson: text,
+        featureCount: (parsed.features || []).length,
+        format: "GeoJSON",
+        crs: "EPSG:4326",
+      };
+    } else if (kmlFile) {
+      const text = await kmlFile.text();
+      result = await parseKML(text);
+    } else if (csvFile) {
+      const text = await csvFile.text();
+      result = parseCSV(text);
+    } else if (dgnFile) {
+      const buf = Buffer.from(await dgnFile.arrayBuffer());
+      result = await parseDgnFile(buf);
+    } else if (dxfFile) {
+      const buf = Buffer.from(await dxfFile.arrayBuffer());
+      result = await parseDxfAsParcelles(buf);
+    } else {
+      return NextResponse.json(
+        { error: "Format non supporté. Utilisez SHP, GeoJSON, ZIP, KML, CSV, DGN ou DXF." },
+        { status: 400 }
+      );
+    }
+
+    return NextResponse.json(result);
+  } catch (err) {
+    console.error("[upload-geo]", err);
+    return NextResponse.json(
+      { error: String(err) },
+      { status: 500 }
+    );
+  }
+}
+
+async function parseKML(content: string): Promise<ParseResult> {
+  const features: unknown[] = [];
+  const placemarkRegex = /<Placemark>([\s\S]*?)<\/Placemark>/gi;
+  const nameRegex = /<name>([\s\S]*?)<\/name>/i;
+  const coordsRegex = /<coordinates>([\s\S]*?)<\/coordinates>/i;
+
+  let match;
+  while ((match = placemarkRegex.exec(content)) !== null) {
+    const block = match[1];
+    const name = nameRegex.exec(block)?.[1]?.trim() || "";
+    const coordsStr = coordsRegex.exec(block)?.[1]?.trim() || "";
+
+    if (!coordsStr) continue;
+    const coords = coordsStr
+      .split(/\s+/)
+      .map((c) => c.split(",").map(Number).slice(0, 2))
+      .filter((c) => c.length === 2 && !isNaN(c[0]) && !isNaN(c[1]));
+
+    if (coords.length >= 3) {
+      if (
+        coords[0][0] !== coords[coords.length - 1][0] ||
+        coords[0][1] !== coords[coords.length - 1][1]
+      ) {
+        coords.push(coords[0]);
+      }
+      features.push({
+        type: "Feature",
+        geometry: { type: "Polygon", coordinates: [coords] },
+        properties: { name },
+      });
+    }
+  }
+
+  return {
+    geoJson: JSON.stringify({ type: "FeatureCollection", features }),
+    featureCount: features.length,
+    format: "KML",
+    crs: "EPSG:4326",
+  };
+}
+
+function parseCSV(content: string): ParseResult {
+  const lines = content.trim().split("\n");
+  if (lines.length < 2) {
+    return {
+      geoJson: JSON.stringify({ type: "FeatureCollection", features: [] }),
+      featureCount: 0,
+      format: "CSV",
+      crs: "EPSG:4326",
+    };
+  }
+
+  const headers = lines[0].split(",").map((h) => h.trim().replace(/"/g, ""));
+  const lonIdx = headers.findIndex((h) => /^(lon|longitude|lng|x)$/i.test(h));
+  const latIdx = headers.findIndex((h) => /^(lat|latitude|y)$/i.test(h));
+
+  if (lonIdx === -1 || latIdx === -1) {
+    throw new Error("CSV doit contenir des colonnes lat/lon");
+  }
+
+  const features = lines
+    .slice(1)
+    .map((line) => {
+      const values = line.split(",").map((v) => v.trim().replace(/"/g, ""));
+      const props: Record<string, unknown> = {};
+      headers.forEach((h, i) => { props[h] = values[i]; });
+      const lon = parseFloat(values[lonIdx]);
+      const lat = parseFloat(values[latIdx]);
+      return {
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [lon, lat] },
+        properties: props,
+      };
+    })
+    .filter(
+      (f) =>
+        !isNaN(f.geometry.coordinates[0]) &&
+        !isNaN(f.geometry.coordinates[1])
+    );
+
+  return {
+    geoJson: JSON.stringify({ type: "FeatureCollection", features }),
+    featureCount: features.length,
+    format: "CSV",
+    crs: "EPSG:4326",
+  };
+}

@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  serverExternalPackages: ["shapefile", "jszip", "proj4"],
+  experimental: {
+    serverActions: { bodySizeLimit: "500mb" },
+  },
 };
 
 export default nextConfig;
