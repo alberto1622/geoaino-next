@@ -24,9 +24,18 @@ export async function POST(_req: NextRequest, { params }: { params: Params }) {
   const result = analyzeGeoJSON(parsed);
   const aiReport = await generateAIReport(result, analysis.fileName);
 
+  // Met aussi à jour summaryStats (conformeCount, etc.) en conservant les champs
+  // hors moteur déjà présents (outOfSenegalCount, microstationReport…).
+  const prevStats = (analysis.summaryStats as Record<string, unknown> | null) ?? {};
+  const summaryStats = { ...prevStats, ...result.stats };
+
   await prisma.analysis.update({
     where: { id: analysisId },
-    data: { aiReport },
+    data: {
+      aiReport,
+      conformityScore: result.stats.conformityScore.toString(),
+      summaryStats: summaryStats as object,
+    },
   });
 
   return NextResponse.json({ success: true, aiReport });

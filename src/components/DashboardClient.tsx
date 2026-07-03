@@ -19,7 +19,7 @@ import { toNum } from "@/lib/utils";
 const ERROR_COLORS: Record<string, string> = {
   OVERLAP: "#ef4444", GAP: "#f59e0b", SLIVER: "#a855f7",
   DUPLICATE: "#3b82f6", INVALID_GEOM: "#ec4899",
-  BOUNDARY_CROSS: "#06b6d4", MISSING_NICAD: "#22c55e", SELF_INTERSECT: "#f97316",
+  BOUNDARY_CROSS: "#06b6d4", MISSING_NICAD: "#6366f1", SHORT_NICAD: "#14b8a6", SELF_INTERSECT: "#f97316",
 };
 
 interface Analysis {
@@ -164,7 +164,7 @@ export default function DashboardClient({ user, stats, period, selectedAnalysisI
           <div className="relative" ref={dropdownRef}>
             <button
               onClick={() => setFileDropdownOpen((v) => !v)}
-              className={`flex items-center gap-2 h-8 px-3 rounded-lg border text-sm transition-all ${
+              className={`cursor-pointer flex items-center gap-2 h-8 px-3 rounded-lg border text-sm transition-all ${
                 selectedAnalysisId
                   ? "border-primary bg-primary/5 text-foreground"
                   : "border-border text-muted-foreground hover:border-primary/40"
@@ -203,7 +203,7 @@ export default function DashboardClient({ user, stats, period, selectedAnalysisI
                 <div className="max-h-60 overflow-y-auto py-1">
                   <button
                     onClick={() => handleFileSelect(null)}
-                    className={`w-full text-left px-3 py-2 text-xs hover:bg-secondary/50 transition-colors ${!selectedAnalysisId ? "text-primary font-medium" : "text-foreground"}`}
+                    className={`cursor-pointer w-full text-left px-3 py-2 text-xs hover:bg-secondary/50 transition-colors ${!selectedAnalysisId ? "text-primary font-medium" : "text-foreground"}`}
                   >
                     Tous les fichiers
                   </button>
@@ -211,7 +211,7 @@ export default function DashboardClient({ user, stats, period, selectedAnalysisI
                     <button
                       key={f.id}
                       onClick={() => handleFileSelect(f.id)}
-                      className={`w-full text-left px-3 py-2 text-xs hover:bg-secondary/50 transition-colors ${
+                      className={`cursor-pointer w-full text-left px-3 py-2 text-xs hover:bg-secondary/50 transition-colors ${
                         selectedAnalysisId === f.id ? "text-primary font-medium bg-primary/5" : "text-foreground"
                       }`}
                     >
@@ -238,7 +238,7 @@ export default function DashboardClient({ user, stats, period, selectedAnalysisI
               <button
                 key={key}
                 onClick={() => handlePeriodChange(key)}
-                className={`text-xs px-3 py-1 rounded-full border transition-all ${
+                className={`cursor-pointer text-xs px-3 py-1 rounded-full border transition-all ${
                   period === key
                     ? "bg-primary text-primary-foreground border-primary"
                     : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
@@ -390,7 +390,7 @@ export default function DashboardClient({ user, stats, period, selectedAnalysisI
                     <button
                       key={s}
                       onClick={() => setStatusFilter(s)}
-                      className={`text-[11px] px-2.5 py-0.5 rounded-full border transition-all ${
+                      className={`cursor-pointer text-[11px] px-2.5 py-0.5 rounded-full border transition-all ${
                         statusFilter === s
                           ? "bg-primary/10 border-primary text-primary"
                           : "border-border text-muted-foreground hover:border-primary/40"
@@ -412,7 +412,7 @@ export default function DashboardClient({ user, stats, period, selectedAnalysisI
                     <button
                       key={key}
                       onClick={() => setConformityFilter(key)}
-                      className={`text-[11px] px-2.5 py-0.5 rounded-full border transition-all ${
+                      className={`cursor-pointer text-[11px] px-2.5 py-0.5 rounded-full border transition-all ${
                         conformityFilter === key
                           ? "bg-primary/10 border-primary text-primary"
                           : "border-border text-muted-foreground hover:border-primary/40"
@@ -426,7 +426,7 @@ export default function DashboardClient({ user, stats, period, selectedAnalysisI
                 {hasActiveFilters && (
                   <button
                     onClick={resetFilters}
-                    className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors ml-auto"
+                    className="cursor-pointer flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors ml-auto"
                   >
                     <X className="w-3 h-3" /> Réinitialiser
                   </button>

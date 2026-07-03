@@ -10,7 +10,15 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { NavBar } from "@/components/NavBar";
+import LayerMappingModal, { type LayerInventoryEntry } from "@/components/LayerMappingModal";
 import { toNum } from "@/lib/utils";
+
+interface LayerInventory {
+  fileKey: string;
+  fileName: string;
+  sourceType: "DXF" | "DGN";
+  layers: LayerInventoryEntry[];
+}
 
 const FORMATS = ["SHP", "GeoJSON", "DGN v7", "DXF", "KML", "CSV"];
 
@@ -45,12 +53,28 @@ interface Props {
 }
 
 type UploadStep = "reading" | "analyzing" | "ai" | "done" | null;
+// "analyze" : flux historique (topologie + rapport IA → /map/[id]).
+// "import"  : gros fichiers CAO (DXF/DGN) → job d'import asynchrone vers
+//             cad_parcelles (PostGIS), sondé par progression (Phase 1).
+type UploadMode = "analyze" | "import";
 
 interface AnalysisResult {
   id: number;
   totalFeatures: number;
   errorCount: number;
   conformityScore: number;
+}
+
+/** Libellé lisible de la phase courante d'un job de traitement Microstation. */
+function caoPhaseLabel(phase: string | null): string {
+  switch (phase) {
+    case "read": return "📂 Lecture du fichier…";
+    case "build": return "🧩 Reconstruction des parcelles (polygonisation)…";
+    case "nicad": return "🛰️ Résolution des NICAD (jointure communes)…";
+    case "persist": return "💾 Enregistrement en base…";
+    case "done": return "✅ Terminé";
+    default: return "⏳ Démarrage…";
+  }
 }
 
 export default function HomeClient({ user, stats }: Props) {
@@ -60,13 +84,202 @@ export default function HomeClient({ user, stats }: Props) {
   const [uploadStep, setUploadStep] = useState<UploadStep>(null);
   const [uploadFileName, setUploadFileName] = useState<string | null>(null);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  const [mode, setMode] = useState<UploadMode>("analyze");
+  const [jobPhase, setJobPhase] = useState<string | null>(null);
+  const [jobProgress, setJobProgress] = useState(0);
+  // Inventaire des calques en attente de validation (variante « simple »).
+  const [pendingInventory, setPendingInventory] = useState<LayerInventory | null>(null);
+
+  const resetUpload = useCallback(() => {
+    setIsUploading(false);
+    setUploadStep(null);
+    setAnalysisResult(null);
+    setUploadFileName(null);
+    setMode("analyze");
+    setJobPhase(null);
+    setJobProgress(0);
+    setPendingInventory(null);
+  }, []);
+
+  /**
+   * Import asynchrone d'un fichier CAO volumineux (DXF/DGN) : démarre un job
+   * (`POST /api/import-jobs`) puis sonde son avancement
+   * (`GET /api/import-jobs/[id]`) jusqu'à `completed`/`failed`. Les parcelles
+   * sont persistées dans cad_parcelles (pas de gros GeoJSON renvoyé au
+   * navigateur), d'où la consultation finale sur la carte cadastrale.
+   */
+  /** Sonde l'avancement d'un job d'import jusqu'à `completed`/`failed`. */
+  const pollImportJob = useCallback(async (jobId: number) => {
+    const startedAt = Date.now();
+    const TIMEOUT_MS = 20 * 60 * 1000; // garde-fou : 20 min
+    let netErrors = 0;
+
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1500));
+      if (Date.now() - startedAt > TIMEOUT_MS) throw new Error("Délai d'import dépassé.");
+
+      let job: {
+        status: string; phase: string | null; progress: number;
+        totalBuilt: number; analysisId: number | null;
+        report?: {
+          warnings?: string[]; errorCount?: number;
+          conformityScore?: number; totalFeatures?: number;
+        } | null;
+        error?: string | null;
+      };
+      try {
+        const jr = await fetch(`/api/import-jobs/${jobId}`, { cache: "no-store" });
+        if (!jr.ok) throw new Error(String(jr.status));
+        job = await jr.json();
+        netErrors = 0;
+      } catch {
+        if (++netErrors > 5) throw new Error("Suivi de l'import interrompu (réseau).");
+        continue;
+      }
+
+      setJobPhase(job.phase ?? null);
+      setJobProgress(job.progress ?? 0);
+
+      if (job.status === "completed") {
+        const warnings = job.report?.warnings ?? [];
+        const errorCount = job.report?.errorCount ?? 0;
+        setUploadStep("done");
+        setAnalysisResult({
+          id: job.analysisId ?? 0,
+          totalFeatures: job.report?.totalFeatures ?? job.totalBuilt ?? 0,
+          errorCount,
+          conformityScore: job.report?.conformityScore ?? 0,
+        });
+        if (warnings.length) {
+          toast.warning("Vérifications", { description: warnings.slice(0, 3).join(" · ") });
+        }
+        toast.success("Traitement terminé", {
+          description: `${job.totalBuilt} parcelles · ${errorCount} erreur(s)`,
+        });
+        return;
+      }
+      if (job.status === "failed") {
+        throw new Error(job.error || "Import échoué.");
+      }
+      setUploadStep("analyzing"); // conserve le spinner pendant le traitement
+    }
+  }, []);
+
+  /** Démarre un job depuis un fichier déjà téléversé (inventaire) + mappage validé. */
+  const startMappedImport = useCallback(
+    async (inv: LayerInventory, layerMapping: Record<string, string> | undefined) => {
+      setMode("import");
+      setIsUploading(true);
+      setUploadFileName(inv.fileName);
+      setUploadStep("reading");
+      setJobPhase("read");
+      setJobProgress(0);
+      setAnalysisResult(null);
+
+      try {
+        const res = await fetch("/api/import-jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileKey: inv.fileKey,
+            fileName: inv.fileName,
+            sourceType: inv.sourceType,
+            layerMapping,
+          }),
+        });
+        if (!res.ok) {
+          const e = await res.json().catch(() => ({ error: res.statusText }));
+          throw new Error(e.error || `Erreur serveur: ${res.status}`);
+        }
+        const { jobId } = (await res.json()) as { jobId: number };
+        await pollImportJob(jobId);
+      } catch (err) {
+        toast.error("Erreur d'import", { description: String(err) });
+        resetUpload();
+      }
+    },
+    [pollImportJob, resetUpload],
+  );
+
+  /**
+   * Import direct (voie historique multipart, sans mappage) — repli si
+   * l'inventaire des calques échoue.
+   */
+  const runCaoImport = useCallback(async (fileList: File[], mainFile: File) => {
+    setMode("import");
+    setIsUploading(true);
+    setUploadFileName(mainFile.name);
+    setUploadStep("reading");
+    setJobPhase("read");
+    setJobProgress(0);
+    setAnalysisResult(null);
+
+    try {
+      const formData = new FormData();
+      fileList.forEach((f) => formData.append("files", f));
+
+      const res = await fetch("/api/import-jobs", { method: "POST", body: formData });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(e.error || `Erreur serveur: ${res.status}`);
+      }
+      const { jobId } = (await res.json()) as { jobId: number };
+      await pollImportJob(jobId);
+    } catch (err) {
+      toast.error("Erreur d'import", { description: String(err) });
+      resetUpload();
+    }
+  }, [pollImportJob, resetUpload]);
+
+  /**
+   * Étape « variante simple » : inventorie les calques du fichier CAO puis ouvre
+   * la modale de mappage. En cas d'échec (calques illisibles, conversion DGN
+   * indisponible…), repli sur l'import direct.
+   */
+  const requestLayerInventory = useCallback(async (fileList: File[], mainFile: File) => {
+    setMode("import");
+    setIsUploading(true);
+    setUploadFileName(mainFile.name);
+    setUploadStep("reading");
+    setAnalysisResult(null);
+
+    try {
+      const formData = new FormData();
+      fileList.forEach((f) => formData.append("files", f));
+
+      const res = await fetch("/api/import-jobs/inventory", { method: "POST", body: formData });
+      if (!res.ok) throw new Error(String(res.status));
+      const inv = (await res.json()) as LayerInventory;
+
+      if (!inv.layers?.length) {
+        // Aucun calque lisible : lancer directement le traitement (sans mappage).
+        await startMappedImport(inv, undefined);
+        return;
+      }
+
+      // Suspend le spinner, la modale prend le relais jusqu'à validation.
+      setIsUploading(false);
+      setUploadStep(null);
+      setPendingInventory(inv);
+    } catch {
+      // Repli robuste : import direct via la voie multipart historique.
+      await runCaoImport(fileList, mainFile);
+    }
+  }, [runCaoImport, startMappedImport]);
 
   const handleFiles = useCallback(async (fileList: File[]) => {
-    if (!fileList.length || isUploading) return;
+    if (!fileList.length || isUploading || pendingInventory) return;
 
     const mainFile = fileList.find(
       (f) => !f.name.toLowerCase().endsWith(".dbf") && !f.name.toLowerCase().endsWith(".prj")
     ) || fileList[0];
+
+    // Fichiers CAO volumineux (DXF/DGN) → inventaire des calques + mappage, puis
+    // import asynchrone vers cad_parcelles (cf. Phase 1).
+    if (/\.(dxf|dgn)$/i.test(mainFile.name)) {
+      void requestLayerInventory(fileList, mainFile);
+      return;
+    }
 
     setIsUploading(true);
     setUploadFileName(mainFile.name);
@@ -135,7 +348,7 @@ export default function HomeClient({ user, stats }: Props) {
       setUploadStep(null);
       setUploadFileName(null);
     }
-  }, [isUploading, router]);
+  }, [isUploading, pendingInventory, requestLayerInventory]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -283,8 +496,8 @@ export default function HomeClient({ user, stats }: Props) {
                       </div>
 
                       <button
-                        onClick={() => { setIsUploading(false); setUploadStep(null); setAnalysisResult(null); setUploadFileName(null); }}
-                        className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                        onClick={resetUpload}
+                        className="cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors"
                       >
                         Charger un autre fichier
                       </button>
@@ -292,9 +505,13 @@ export default function HomeClient({ user, stats }: Props) {
                   ) : (
                     /* ── Progression ── */
                     <>
-                      <div className="relative">
-                        <div className="w-20 h-20 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
-                        <Brain className="w-8 h-8 text-primary absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
+                      <div className="relative w-20 h-20">
+                        {/* Anneau de chargement */}
+                        <div className="absolute inset-0 rounded-full border-4 border-primary/20 border-t-primary animate-spin" />
+                        {/* Halo pulsant dans le cercle (signal « traitement en cours ») */}
+                        <div className="absolute inset-2 rounded-full bg-primary/10 animate-pulse" />
+                        {/* Cerveau au centre, pulsant */}
+                        <Brain className="w-8 h-8 text-primary absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 animate-pulse" />
                       </div>
                       {uploadFileName && (
                         <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-secondary border text-xs">
@@ -302,11 +519,26 @@ export default function HomeClient({ user, stats }: Props) {
                           <span className="font-mono truncate max-w-48">{uploadFileName}</span>
                         </div>
                       )}
-                      <div className="text-sm text-primary font-medium">
-                        {uploadStep === "reading" && "📂 Lecture du fichier..."}
-                        {uploadStep === "analyzing" && "🔍 Analyse topologique en cours..."}
-                        {uploadStep === "ai" && "🤖 Génération du rapport IA..."}
-                      </div>
+                      {mode === "import" ? (
+                        <div className="w-full max-w-xs space-y-2">
+                          <div className="text-sm text-primary font-medium text-center">
+                            {caoPhaseLabel(jobPhase)}
+                          </div>
+                          <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+                            <div
+                              className="h-full rounded-full bg-primary transition-all duration-500"
+                              style={{ width: `${jobProgress}%` }}
+                            />
+                          </div>
+                          <div className="text-center text-xs text-muted-foreground">{jobProgress}%</div>
+                        </div>
+                      ) : (
+                        <div className="text-sm text-primary font-medium">
+                          {uploadStep === "reading" && "📂 Lecture du fichier..."}
+                          {uploadStep === "analyzing" && "🔍 Analyse topologique en cours..."}
+                          {uploadStep === "ai" && "🤖 Génération du rapport IA..."}
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
@@ -472,6 +704,19 @@ export default function HomeClient({ user, stats }: Props) {
           </div>
         </div>
       </footer>
+
+      {pendingInventory && (
+        <LayerMappingModal
+          fileName={pendingInventory.fileName}
+          layers={pendingInventory.layers}
+          onCancel={resetUpload}
+          onConfirm={(mapping) => {
+            const inv = pendingInventory;
+            setPendingInventory(null);
+            void startMappedImport(inv, mapping);
+          }}
+        />
+      )}
     </div>
   );
 }

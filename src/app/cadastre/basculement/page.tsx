@@ -60,9 +60,12 @@ export default function BasculementPage() {
           <GitBranch className="h-5 w-5" />
         </div>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Basculement 2013 → 2026</h1>
+          <h1 className="text-2xl font-bold tracking-tight">
+            Basculement 2013 → 2026
+          </h1>
           <p className="text-sm text-muted-foreground">
-            Cas simple (Syscol seul) ou complexe (changement de section → nouvelle numérotation).
+            Cas simple (Syscol seul) ou complexe (changement de section →
+            nouvelle numérotation).
           </p>
         </div>
       </div>
@@ -73,7 +76,9 @@ export default function BasculementPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-muted-foreground">NICAD d&apos;origine (2013)</label>
+            <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
+              NICAD d&apos;origine (2013)
+            </label>
             <Input
               value={nicadAncien}
               onChange={(e) => setNicadAncien(e.target.value)}
@@ -121,7 +126,9 @@ export default function BasculementPage() {
       {result && result.success && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Résultat — cas {result.cas}</CardTitle>
+            <CardTitle className="text-base">
+              Résultat — cas {result.cas}
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <div className="flex flex-wrap items-center gap-2">
@@ -129,13 +136,17 @@ export default function BasculementPage() {
               <ArrowRight className="h-4 w-4 text-muted-foreground" />
               <NicadDisplay nicad={result.nicadNouveau} />
             </div>
-            <p className="text-xs text-muted-foreground">{result.description}</p>
+            <p className="text-xs text-muted-foreground">
+              {result.description}
+            </p>
           </CardContent>
         </Card>
       )}
       {result && !result.success && (
         <Card className="border-rose-500/40">
-          <CardContent className="p-5 text-sm text-rose-500">{result.error}</CardContent>
+          <CardContent className="p-5 text-sm text-rose-500">
+            {result.error}
+          </CardContent>
         </Card>
       )}
     </div>

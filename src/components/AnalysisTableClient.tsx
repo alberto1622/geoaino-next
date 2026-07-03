@@ -246,14 +246,14 @@ export default function AnalysisTableClient({ user, analysis, errorIndex }: Prop
                   <div className="absolute right-0 top-full mt-1 w-40 bg-card border border-border rounded-lg shadow-xl z-20 py-1 overflow-hidden">
                     <button
                       onClick={() => { handleExportCsv(); setShowExportMenu(false); }}
-                      className="w-full text-left px-3 py-2 text-xs hover:bg-secondary/60 transition-colors flex items-center gap-2"
+                      className="cursor-pointer w-full text-left px-3 py-2 text-xs hover:bg-secondary/60 transition-colors flex items-center gap-2"
                     >
                       <span className="font-mono text-[10px] px-1 py-0.5 rounded bg-secondary border border-border">CSV</span>
                       Tableur
                     </button>
                     <button
                       onClick={() => { handleExportGeoJson(); setShowExportMenu(false); }}
-                      className="w-full text-left px-3 py-2 text-xs hover:bg-secondary/60 transition-colors flex items-center gap-2"
+                      className="cursor-pointer w-full text-left px-3 py-2 text-xs hover:bg-secondary/60 transition-colors flex items-center gap-2"
                     >
                       <span className="font-mono text-[10px] px-1 py-0.5 rounded bg-secondary border border-border">GeoJSON</span>
                       Carte / SIG
@@ -282,7 +282,7 @@ export default function AnalysisTableClient({ user, analysis, errorIndex }: Prop
             </Button>
             <button
               onClick={() => setSelected(new Set())}
-              className="text-muted-foreground hover:text-foreground transition-colors"
+              className="cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
               title="Désélectionner tout"
             >
               <X className="w-4 h-4" />
@@ -301,7 +301,7 @@ export default function AnalysisTableClient({ user, analysis, errorIndex }: Prop
               className="pl-8 h-8 text-sm"
             />
             {search && (
-              <button onClick={() => handleSearch("")} className="absolute right-2.5 top-1/2 -translate-y-1/2">
+              <button onClick={() => handleSearch("")} className="cursor-pointer absolute right-2.5 top-1/2 -translate-y-1/2">
                 <X className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground" />
               </button>
             )}
@@ -337,7 +337,7 @@ export default function AnalysisTableClient({ user, analysis, errorIndex }: Prop
               <div className="absolute right-0 top-full mt-1 w-52 bg-card border border-border rounded-lg shadow-xl z-20 p-2 max-h-72 overflow-y-auto">
                 <div className="flex items-center justify-between mb-2 px-1">
                   <span className="text-xs font-medium">Colonnes visibles</span>
-                  <button onClick={() => setHiddenCols(new Set())} className="text-[10px] text-primary hover:underline">
+                  <button onClick={() => setHiddenCols(new Set())} className="cursor-pointer text-[10px] text-primary hover:underline">
                     Tout afficher
                   </button>
                 </div>
@@ -381,7 +381,7 @@ export default function AnalysisTableClient({ user, analysis, errorIndex }: Prop
                   <th className="px-3 py-2.5 w-10 border-r border-border/50">
                     <button
                       onClick={togglePageAll}
-                      className="flex items-center justify-center w-4 h-4 rounded border border-border hover:border-primary transition-colors"
+                      className="cursor-pointer flex items-center justify-center w-4 h-4 rounded border border-border hover:border-primary transition-colors"
                       title={pageAllSelected ? "Désélectionner la page" : "Sélectionner la page"}
                     >
                       {pageAllSelected ? (
@@ -434,7 +434,7 @@ export default function AnalysisTableClient({ user, analysis, errorIndex }: Prop
                         <td className="px-3 py-2 border-r border-border/30" onClick={(e) => e.stopPropagation()}>
                           <button
                             onClick={() => toggleRow(feature._rowId)}
-                            className={`flex items-center justify-center w-4 h-4 rounded border transition-colors ${
+                            className={`cursor-pointer flex items-center justify-center w-4 h-4 rounded border transition-colors ${
                               isSelected ? "border-primary bg-primary" : "border-border hover:border-primary"
                             }`}
                           >
@@ -498,7 +498,7 @@ export default function AnalysisTableClient({ user, analysis, errorIndex }: Prop
                   <button
                     key={pageIdx}
                     onClick={() => setPage(pageIdx)}
-                    className={`w-7 h-7 rounded text-xs transition-colors ${
+                    className={`cursor-pointer w-7 h-7 rounded text-xs transition-colors ${
                       pageIdx === safePage ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary"
                     }`}
                   >

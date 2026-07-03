@@ -29,7 +29,10 @@ const MAP_STYLE: StyleSpecification = {
   layers: [{ id: "osm", type: "raster", source: "osm" }],
 };
 
-const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
+// Valeurs de NICAD considérées « manquantes » (alignées sur geo-engine).
+const MISSING_NICAD_VALUES = [
+  "", "null", "undefined", "na", "n/a", "néant", "neant", "aucun", "sans nicad", "0", "-",
+];
 
 interface GeoError {
   id: number;
@@ -45,20 +48,25 @@ interface GeoError {
 }
 
 interface Props {
-  geoJson: string | null;
+  /** Analyse dont les parcelles sont servies en tuiles vectorielles (MVT). */
+  analysisId: number;
+  /** Version (updatedAt/hash corrections) : invalide le cache des tuiles côté client. */
+  tilesVersion?: string | number | null;
+  /** Emprise globale [w,s,e,n] (EPSG:4326) pour le fit initial (via map-meta). */
+  initialBounds?: [number, number, number, number] | null;
   errors: GeoError[];
   selectedErrorId?: number;
-  onFeatureClick?: (props: Record<string, unknown>) => void;
+  /** Clignotement renforcé (plus rapide/opaque/épais) — parcelles à NICAD dupliqué. */
+  blinkIntense?: boolean;
+  onFeatureClick?: (props: Record<string, unknown>, point?: { lng: number; lat: number }) => void;
   selectedNicads?: string[];
   searchedNicads?: string[];
   focusTarget?: { nicad: string; key: number } | null;
+  conformeHighlight?: boolean;
+  nonConformeNicads?: string[];
 }
 
 interface PopupState { lng: number; lat: number; html: string }
-
-function extractNicad(props: Record<string, unknown>): string {
-  return String(props.NICAD ?? props.nicad ?? props.NIC ?? props.Nicad ?? "");
-}
 
 function escHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -85,12 +93,13 @@ function computeBbox(features: unknown[]): [[number, number], [number, number]] 
   return found ? [[w, s], [e, n]] : null;
 }
 
-export default function MapLibreMap({ geoJson, errors, selectedErrorId, onFeatureClick, selectedNicads = [], searchedNicads = [], focusTarget }: Props) {
+export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, errors, selectedErrorId, blinkIntense = false, onFeatureClick, selectedNicads = [], searchedNicads = [], focusTarget, conformeHighlight = false, nonConformeNicads = [] }: Props) {
   const mapRef = useRef<MapRef>(null);
-  const featureMapRef = useRef<Map<string, GeoJSON.Feature>>(new Map());
   const blinkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const onClickRef = useRef(onFeatureClick);
   useEffect(() => { onClickRef.current = onFeatureClick; });
+  // Cache des emprises par NICAD résolues côté serveur (évite de re-fetcher).
+  const boundsCacheRef = useRef<Map<string, [[number, number], [number, number]] | null>>(new Map());
 
   const [mapReady, setMapReady] = useState(false);
   const [popup, setPopup] = useState<PopupState | null>(null);
@@ -98,23 +107,36 @@ export default function MapLibreMap({ geoJson, errors, selectedErrorId, onFeatur
   const [blinkColor, setBlinkColor] = useState("#ffffff");
   const [cursor, setCursor] = useState("grab");
 
-  // ── Augmented parcelles GeoJSON ──────────────────────────────────────────
-  const augmentedGeoJson = useMemo<GeoJSON.FeatureCollection>(() => {
-    if (!geoJson) { featureMapRef.current = new Map(); return EMPTY_FC; }
-    try {
-      const fc = JSON.parse(geoJson) as GeoJSON.FeatureCollection;
-      const fMap = new Map<string, GeoJSON.Feature>();
-      const features = (fc.features ?? []).map((feat) => {
-        const props = (feat.properties ?? {}) as Record<string, unknown>;
-        const nicad = extractNicad(props);
-        const augmented = { ...feat, properties: { ...props, _nicad: nicad } } as GeoJSON.Feature;
-        if (nicad) fMap.set(nicad, augmented);
-        return augmented;
-      });
-      featureMapRef.current = fMap;
-      return { type: "FeatureCollection", features };
-    } catch { return EMPTY_FC; }
-  }, [geoJson]);
+  // ── URL des tuiles vectorielles ───────────────────────────────────────────
+  // Composant client-only (ssr:false) → `window` disponible. `tilesVersion`
+  // (updatedAt) invalide le cache navigateur après une correction.
+  const tilesUrl = useMemo(() => {
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const v = tilesVersion != null ? `?v=${encodeURIComponent(String(tilesVersion))}` : "";
+    return `${origin}/api/analyses/${analysisId}/tiles/{z}/{x}/{y}${v}`;
+  }, [analysisId, tilesVersion]);
+
+  // ── Fit sur un NICAD via l'emprise servie par map-meta ─────────────────────
+  // Les géométries ne sont plus embarquées côté client : on résout l'emprise
+  // d'une parcelle à la demande (mise en cache) pour le focus/recherche/erreur.
+  const fitToNicad = useCallback(async (nicad: string) => {
+    const map = mapRef.current;
+    if (!map || !nicad) return;
+    let bounds = boundsCacheRef.current.get(nicad);
+    if (bounds === undefined) {
+      try {
+        const res = await fetch(`/api/analyses/${analysisId}/map-meta?nicad=${encodeURIComponent(nicad)}`);
+        const data = (await res.json()) as { bounds: [number, number, number, number] | null };
+        bounds = data.bounds
+          ? [[data.bounds[0], data.bounds[1]], [data.bounds[2], data.bounds[3]]]
+          : null;
+      } catch {
+        bounds = null;
+      }
+      boundsCacheRef.current.set(nicad, bounds);
+    }
+    if (bounds) map.fitBounds(bounds, { padding: 80, maxZoom: 18, duration: 600 });
+  }, [analysisId]);
 
   // ── Error geometries GeoJSON ──────────────────────────────────────────────
   const errorGeomsFc = useMemo<GeoJSON.FeatureCollection>(() => ({
@@ -133,14 +155,21 @@ export default function MapLibreMap({ geoJson, errors, selectedErrorId, onFeatur
       })),
   }), [errors, selectedErrorId]);
 
-  // ── Blink GeoJSON ─────────────────────────────────────────────────────────
-  const blinkFc = useMemo<GeoJSON.FeatureCollection>(() => {
-    if (!selectedErrorId) return EMPTY_FC;
-    const err = errors.find((e) => e.id === selectedErrorId);
-    if (!err?.nicad1) return EMPTY_FC;
-    const feat = featureMapRef.current.get(err.nicad1);
-    return feat ? { type: "FeatureCollection", features: [feat] } : EMPTY_FC;
+  // ── Blink (surlignage clignotant de la parcelle en erreur) ────────────────
+  // Plus de géométrie côté client : on cible la parcelle par son `_nicad` dans
+  // la source vecteur via un filtre (opacité animée plus bas).
+  const blinkNicad = useMemo(() => {
+    if (!selectedErrorId) return null;
+    return errors.find((e) => e.id === selectedErrorId)?.nicad1 ?? null;
   }, [errors, selectedErrorId]);
+
+  const blinkFilter = useMemo(
+    () =>
+      (blinkNicad
+        ? ["==", ["get", "_nicad"], blinkNicad]
+        : ["in", ["get", "_nicad"], ["literal", []]]) as any,
+    [blinkNicad]
+  );
 
   // ── NiCAD lists per error type ────────────────────────────────────────────
   const nicadsByType = useMemo<Record<string, string[]>>(() => {
@@ -155,60 +184,79 @@ export default function MapLibreMap({ geoJson, errors, selectedErrorId, onFeatur
   }, [errors]);
   const errorTypes = useMemo(() => Object.keys(nicadsByType), [nicadsByType]);
 
+  // Filtre « parcelle conforme » : NICAD d'au moins 8 caractères, non listé comme
+  // valeur « vide », et absent des NICAD en erreur. Aligné sur le décompte client.
+  const conformeFilter = useMemo(
+    () =>
+      [
+        "all",
+        [">=", ["length", ["get", "_nicad"]], 8],
+        ["!", ["in", ["downcase", ["get", "_nicad"]], ["literal", MISSING_NICAD_VALUES]]],
+        ["!", ["in", ["get", "_nicad"], ["literal", nonConformeNicads]]],
+      ] as any,
+    [nonConformeNicads]
+  );
+
   // ── Blink animation ───────────────────────────────────────────────────────
   useEffect(() => {
     if (blinkTimerRef.current) { clearInterval(blinkTimerRef.current); blinkTimerRef.current = null; }
-    if (!selectedErrorId || blinkFc.features.length === 0) { setBlinkOpacity(0); return; }
+    if (!selectedErrorId || !blinkNicad) { setBlinkOpacity(0); return; }
     const err = errors.find((e) => e.id === selectedErrorId);
     if (!err) { setBlinkOpacity(0); return; }
     setBlinkColor(errorTypeColor(err.errorType));
+    // Clignotement renforcé pour les doublons : plus rapide et plus contrasté.
+    const period = blinkIntense ? 200 : 420;
+    const hi = blinkIntense ? 0.95 : 0.65;
+    const lo = blinkIntense ? 0.25 : 0.05;
     let bright = true;
-    const tick = () => { bright = !bright; setBlinkOpacity(bright ? 0.65 : 0.05); };
+    const tick = () => { bright = !bright; setBlinkOpacity(bright ? hi : lo); };
     tick();
-    blinkTimerRef.current = setInterval(tick, 420);
+    blinkTimerRef.current = setInterval(tick, period);
     return () => { if (blinkTimerRef.current) clearInterval(blinkTimerRef.current); };
-  }, [selectedErrorId, blinkFc, errors]);
+  }, [selectedErrorId, blinkNicad, errors, blinkIntense]);
 
-  // ── Fit bounds on new geoJson (runs also when map becomes ready) ──────────
+  // ── Fit bounds initial (emprise globale via map-meta) ─────────────────────
   useEffect(() => {
-    if (!mapReady) return;
+    if (!mapReady || !initialBounds) return;
     const map = mapRef.current;
-    if (!map || augmentedGeoJson.features.length === 0) return;
-    const bbox = computeBbox(augmentedGeoJson.features);
-    if (bbox) map.fitBounds(bbox, { padding: 40, maxZoom: 16, duration: 600 });
-  }, [mapReady, augmentedGeoJson]);
+    if (!map) return;
+    map.fitBounds(
+      [[initialBounds[0], initialBounds[1]], [initialBounds[2], initialBounds[3]]],
+      { padding: 40, maxZoom: 16, duration: 600 }
+    );
+  }, [mapReady, initialBounds]);
 
   // ── Fit bounds on selected error ──────────────────────────────────────────
   useEffect(() => {
-    if (!mapReady) return;
+    if (!mapReady || !selectedErrorId) return;
     const map = mapRef.current;
-    if (!map || !selectedErrorId) return;
+    if (!map) return;
     const err = errors.find((e) => e.id === selectedErrorId);
     if (!err) return;
-    const targets: unknown[] = err.geometry
-      ? [{ geometry: err.geometry }]
-      : err.nicad1 ? [featureMapRef.current.get(err.nicad1)].filter(Boolean) : [];
-    if (!targets.length) return;
-    const bbox = computeBbox(targets);
-    if (bbox) map.fitBounds(bbox, { padding: 80, maxZoom: 18, duration: 600 });
-  }, [mapReady, errors, selectedErrorId]);
+    // L'erreur porte sa propre géométrie (gap/sliver/overlap) → fit direct ;
+    // sinon on résout l'emprise de la parcelle nicad1 côté serveur.
+    if (err.geometry) {
+      const bbox = computeBbox([{ geometry: err.geometry }]);
+      if (bbox) map.fitBounds(bbox, { padding: 80, maxZoom: 18, duration: 600 });
+    } else if (err.nicad1) {
+      void fitToNicad(err.nicad1);
+    }
+  }, [mapReady, errors, selectedErrorId, fitToNicad]);
 
   // ── Fit bounds on search/focus target ─────────────────────────────────────
   useEffect(() => {
     if (!mapReady || !focusTarget) return;
-    const map = mapRef.current;
-    const feat = featureMapRef.current.get(focusTarget.nicad);
-    if (!map || !feat) return;
-    const bbox = computeBbox([feat]);
-    if (bbox) map.fitBounds(bbox, { padding: 80, maxZoom: 18, duration: 600 });
-  }, [mapReady, focusTarget]);
+    void fitToNicad(focusTarget.nicad);
+  }, [mapReady, focusTarget, fitToNicad]);
 
   // ── Click handler ─────────────────────────────────────────────────────────
   const handleClick = useCallback((e: MapLayerMouseEvent) => {
     const feat = e.features?.[0];
     if (!feat?.properties) { setPopup(null); return; }
     const props = feat.properties as Record<string, unknown>;
-    onClickRef.current?.(props);
+    // Le point cliqué (WGS84) est garanti intérieur à la parcelle : sert de
+    // localisateur fiable pour la suppression depuis la table attributaire.
+    onClickRef.current?.(props, { lng: e.lngLat.lng, lat: e.lngLat.lat });
     const rows = Object.entries(props)
       .filter(([k]) => !k.startsWith("_"))
       .slice(0, 10)
@@ -238,10 +286,10 @@ export default function MapLibreMap({ geoJson, errors, selectedErrorId, onFeatur
         <NavigationControl position="top-right" showCompass={false} />
         <ScaleControl position="bottom-left" maxWidth={100} unit="metric" />
 
-        {/* ── Parcelles ── */}
-        <Source id="parcelles" type="geojson" data={augmentedGeoJson}>
-          <Layer id="parcelles-fill" type="fill" paint={{ "fill-color": "#6b7280", "fill-opacity": 0.22 }} />
-          <Layer id="parcelles-line" type="line" paint={{ "line-color": "#9ca3af", "line-width": 0.8, "line-opacity": 0.6 }} />
+        {/* ── Parcelles (tuiles vectorielles MVT, couche « parcelles ») ── */}
+        <Source id="parcelles" type="vector" tiles={[tilesUrl]} minzoom={0} maxzoom={20}>
+          <Layer id="parcelles-fill" source-layer="parcelles" type="fill" paint={{ "fill-color": "#6b7280", "fill-opacity": 0.22 }} />
+          <Layer id="parcelles-line" source-layer="parcelles" type="line" paint={{ "line-color": "#9ca3af", "line-width": 0.8, "line-opacity": 0.6 }} />
         </Source>
 
         {/* ── Error geometry overlays ── */}
@@ -265,20 +313,59 @@ export default function MapLibreMap({ geoJson, errors, selectedErrorId, onFeatur
           />
         </Source>
 
-        {/* ── Blink ── */}
-        <Source id="blink" type="geojson" data={blinkFc}>
-          <Layer id="blink-fill" type="fill" paint={{ "fill-color": blinkColor, "fill-opacity": blinkOpacity }} />
-          <Layer id="blink-line" type="line" paint={{ "line-color": blinkColor, "line-width": 3, "line-opacity": blinkOpacity }} />
-        </Source>
+        {/* ── Blink (filtre sur _nicad dans la source vecteur) ── */}
+        <Layer
+          id="blink-fill"
+          source="parcelles"
+          source-layer="parcelles"
+          type="fill"
+          filter={blinkFilter}
+          paint={{ "fill-color": blinkColor, "fill-opacity": blinkOpacity }}
+        />
+        <Layer
+          id="blink-line"
+          source="parcelles"
+          source-layer="parcelles"
+          type="line"
+          filter={blinkFilter}
+          paint={{ "line-color": blinkColor, "line-width": blinkIntense ? 6 : 3, "line-opacity": blinkOpacity }}
+        />
 
         {/* ── Anchor: error type layers insert before this, selection highlight inserts after ── */}
         <Layer
           id="error-type-top"
           source="parcelles"
+          source-layer="parcelles"
           type="fill"
           beforeId="error-geoms-fill"
           paint={{ "fill-color": "#000", "fill-opacity": 0 }}
         />
+
+        {/* ── Parcelles conformes (vert) — surlignage optionnel ──
+            Conforme = NICAD valide (≥ 8 car., pas une valeur « vide ») ET absent de
+            la liste des NICAD en erreur. Même définition que le décompte « conformes ». ── */}
+        {conformeHighlight && (
+          <>
+            <Layer
+              id="conforme-fill"
+              source="parcelles"
+              source-layer="parcelles"
+              type="fill"
+              beforeId="error-type-top"
+              paint={{ "fill-color": "#22c55e", "fill-opacity": 0.35 }}
+              filter={conformeFilter}
+            />
+            <Layer
+              id="conforme-line"
+              source="parcelles"
+              source-layer="parcelles"
+              type="line"
+              beforeId="error-type-top"
+              paint={{ "line-color": "#16a34a", "line-width": 1, "line-opacity": 0.85 }}
+              filter={conformeFilter}
+            />
+          </>
+        )}
 
         {/* ── Error type fill overlays (below anchor) ── */}
         {errorTypes.map((type) => (
@@ -286,6 +373,7 @@ export default function MapLibreMap({ geoJson, errors, selectedErrorId, onFeatur
             key={`err-${type}`}
             id={`err-${type}`}
             source="parcelles"
+            source-layer="parcelles"
             type="fill"
             beforeId="error-type-top"
             paint={{ "fill-color": errorTypeColor(type), "fill-opacity": 0.45 }}
@@ -297,6 +385,7 @@ export default function MapLibreMap({ geoJson, errors, selectedErrorId, onFeatur
         <Layer
           id="selected-fill"
           source="parcelles"
+          source-layer="parcelles"
           type="fill"
           beforeId="error-geoms-fill"
           paint={{ "fill-color": "#3b82f6", "fill-opacity": 0.38 }}
@@ -305,6 +394,7 @@ export default function MapLibreMap({ geoJson, errors, selectedErrorId, onFeatur
         <Layer
           id="selected-line"
           source="parcelles"
+          source-layer="parcelles"
           type="line"
           beforeId="error-geoms-fill"
           paint={{ "line-color": "#60a5fa", "line-width": 2.5, "line-opacity": 1 }}
@@ -315,6 +405,7 @@ export default function MapLibreMap({ geoJson, errors, selectedErrorId, onFeatur
         <Layer
           id="searched-fill"
           source="parcelles"
+          source-layer="parcelles"
           type="fill"
           beforeId="error-geoms-fill"
           paint={{ "fill-color": "#facc15", "fill-opacity": 0.45 }}
@@ -323,6 +414,7 @@ export default function MapLibreMap({ geoJson, errors, selectedErrorId, onFeatur
         <Layer
           id="searched-line"
           source="parcelles"
+          source-layer="parcelles"
           type="line"
           beforeId="error-geoms-fill"
           paint={{ "line-color": "#eab308", "line-width": 3, "line-opacity": 1 }}

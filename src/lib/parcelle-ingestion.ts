@@ -37,15 +37,17 @@ import * as os from "os";
 import * as crypto from "crypto";
 import proj4 from "proj4";
 import * as turf from "@turf/turf";
+import * as jsts from "jsts";
 import { resolveOgr2Ogr } from "./dgn-parser";
 import {
   filterDxfCadastralFeatures,
   normalizeFeatureCollection,
   type FeatureCollection as DgidFeatureCollection,
   type GeoFeature as DgidGeoFeature,
+  type LayerMapping,
 } from "./cadastral-filter";
 import { normalizeNumeroParcelle, normalizeSection } from "./nicad";
-import { readDxfWorldFeatures } from "./dxf-native";
+import { readDxfWorldFeatures, decodeMText } from "./dxf-native";
 import { polygonizeLines } from "./polygonize";
 
 const execFileAsync = promisify(execFile);
@@ -103,6 +105,10 @@ export interface DxfIngestionReport {
   nbPolygonesInvalidesRejetes: number;
   nbAutresCouchesIgnorees: number;
   nbDoublonsGeometrie: number;
+  /** Parcelles superposées fusionnées par recouvrement (doublons de représentation). */
+  nbDoublonsRecouvrement: number;
+  /** Grandes parcelles/enveloppes supprimées car contenant des parcelles numérotées. */
+  nbEnveloppesSupprimees: number;
   nbChevauchements: number;
   surfaceTotaleM2: number;
   surfacePiscinesM2: number;
@@ -303,7 +309,14 @@ class BBoxGridIndex {
   private minX: number;
   private minY: number;
 
-  constructor(bboxes: BBox[], targetCellsPerAxis = 32) {
+  constructor(bboxes: BBox[], targetCellsPerAxis?: number) {
+    // Grille adaptative : viser ~2 bbox/cellule pour que les requêtes (jointures,
+    // chevauchements) restent quasi linéaires même à 100k+ polygones. Une grille
+    // fixe (32×32) entasse des milliers de polygones par cellule sur un grand
+    // plan cadastral → comparaisons quasi O(n²).
+    if (targetCellsPerAxis == null) {
+      targetCellsPerAxis = Math.min(1024, Math.max(32, Math.round(Math.sqrt(bboxes.length / 2))));
+    }
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const [bx0, by0, bx1, by1] of bboxes) {
       minX = Math.min(minX, bx0);
@@ -361,6 +374,139 @@ class BBoxGridIndex {
 
 function bboxIntersects(a: BBox, b: BBox): boolean {
   return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+}
+
+/** Aire de recouvrement de deux bbox (0 si disjointes). */
+function bboxOverlapArea(a: BBox, b: BBox): number {
+  const w = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
+  const h = Math.min(a[3], b[3]) - Math.max(a[1], b[1]);
+  return w > 0 && h > 0 ? w * h : 0;
+}
+
+// Ratio de recouvrement (aire d'intersection / plus petite aire) au-delà duquel
+// deux polygones sont réputés être la MÊME parcelle (dessinée en double :
+// 3DFACE/polyligne fermée + reconstruction depuis segments, ou triangulation
+// partielle contenue dans une parcelle). Un vrai voisin cadastral ne partage
+// qu'une limite (recouvrement ~0), il n'est donc jamais fusionné.
+//
+// Deux relations distinctes sont traitées séparément :
+//  - COÏNCIDENCE (recouvrement > ratio de la PLUS GRANDE aire) : deux polygones
+//    de même emprise = même parcelle dessinée en double (3DFACE + reconstruction
+//    depuis segments) → on n'en garde qu'un.
+//  - CONTENANCE (recouvrement > ratio de la PLUS PETITE aire, sans coïncidence) :
+//    une petite parcelle est ~entièrement à l'intérieur d'une grande. Ce n'est PAS
+//    un doublon : les petites parcelles sont réelles et distinctes. Si la petite
+//    porte un numéro de parcelle, la grande est une enveloppe/îlot → on SUPPRIME la
+//    grande et on garde les petites numérotées. Si la petite n'a pas de numéro,
+//    c'est un sliver/triangulation → on la retire et on garde la grande.
+const OVERLAP_COINCIDE_RATIO = Number(process.env.DXF_OVERLAP_COINCIDE_RATIO || 0.9);
+const OVERLAP_CONTAIN_RATIO = Number(process.env.DXF_OVERLAP_CONTAIN_RATIO || 0.9);
+
+/**
+ * Dédoublonne/nettoie les parcelles superposées par recouvrement géométrique.
+ * `hasNumero[i]` indique que la parcelle `i` est le plus petit contenant d'un
+ * numéro de parcelle (elle porte donc réellement ce numéro). Retourne les
+ * parcelles conservées et le décompte des retraits par coïncidence
+ * (`removedDuplicates`) et par contenance (`removedContained` : enveloppes +
+ * slivers).
+ */
+function dedupParcellesByOverlap(
+  polygons: ValidPolygon[],
+  hasNumero: boolean[]
+): { kept: ValidPolygon[]; removedDuplicates: number; removedContained: number } {
+  const n = polygons.length;
+  if (n < 2) return { kept: polygons, removedDuplicates: 0, removedContained: 0 };
+
+  // Union-find pour les grappes de COÏNCIDENCE (vrais doublons de même emprise).
+  const parent = new Int32Array(n);
+  for (let i = 0; i < n; i++) parent[i] = i;
+  const find = (x: number): number => {
+    let r = x;
+    while (parent[r] !== r) r = parent[r];
+    while (parent[x] !== r) {
+      const nx = parent[x];
+      parent[x] = r;
+      x = nx;
+    }
+    return r;
+  };
+  const union = (a: number, b: number): void => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[ra] = rb;
+  };
+
+  // Retraits directs par CONTENANCE (enveloppes englobantes ou slivers internes).
+  const contained = new Uint8Array(n);
+
+  const prefilter = Math.min(OVERLAP_COINCIDE_RATIO, OVERLAP_CONTAIN_RATIO);
+  const index = new BBoxGridIndex(polygons.map((p) => p.bbox));
+  for (let i = 0; i < n; i++) {
+    const pi = polygons[i];
+    const fi = turf.feature(pi.geom);
+    for (const j of index.queryRange(pi.bbox)) {
+      if (j <= i) continue;
+      const pj = polygons[j];
+      if (!bboxIntersects(pi.bbox, pj.bbox)) continue;
+      const minArea = Math.min(pi.surfaceM2, pj.surfaceM2);
+      const maxArea = Math.max(pi.surfaceM2, pj.surfaceM2);
+      if (minArea <= 0) continue;
+      // Pré-filtre bon marché : l'intersection réelle ⊆ recouvrement des bbox ;
+      // si celui-ci est déjà trop faible, inutile d'appeler turf.intersect
+      // (coûteux) — ce qui élimine la grande majorité des voisins mitoyens.
+      if (bboxOverlapArea(pi.bbox, pj.bbox) <= prefilter * minArea) continue;
+      let inter: GeoJSON.Feature | null = null;
+      try {
+        inter = turf.intersect(turf.featureCollection([fi, turf.feature(pj.geom)]));
+      } catch {
+        continue;
+      }
+      if (!inter?.geometry) continue;
+      const ia = geometryAreaM2(inter.geometry as PolygonGeom);
+
+      if (ia / maxArea > OVERLAP_COINCIDE_RATIO) {
+        // Même emprise → doublon de représentation.
+        union(i, j);
+      } else if (ia / minArea > OVERLAP_CONTAIN_RATIO) {
+        // La petite est ~entièrement dans la grande.
+        const small = pi.surfaceM2 <= pj.surfaceM2 ? i : j;
+        const large = small === i ? j : i;
+        // Numéro prioritaire : si la petite porte un numéro, la grande est une
+        // enveloppe → on la retire ; sinon la petite est un sliver → on la retire.
+        if (hasNumero[small]) contained[large] = 1;
+        else contained[small] = 1;
+      }
+    }
+  }
+
+  // Représentant de chaque grappe de coïncidence, parmi les non-retirés :
+  // préférer la parcelle NUMÉROTÉE, puis la source `polygonized` (réseau planaire
+  // propre), puis le plus petit index.
+  const better = (a: number, b: number): number => {
+    if (hasNumero[a] !== hasNumero[b]) return hasNumero[a] ? a : b;
+    const pa = polygons[a];
+    const pb = polygons[b];
+    if (pa.source !== pb.source) return pa.source === "polygonized" ? a : b;
+    return a < b ? a : b;
+  };
+  const bestByRoot = new Map<number, number>();
+  for (let i = 0; i < n; i++) {
+    if (contained[i]) continue; // déjà retiré par contenance
+    const r = find(i);
+    const cur = bestByRoot.get(r);
+    bestByRoot.set(r, cur === undefined ? i : better(cur, i));
+  }
+  const keepIdx = new Set(bestByRoot.values());
+
+  const kept: ValidPolygon[] = [];
+  let removedDuplicates = 0;
+  let removedContained = 0;
+  for (let i = 0; i < n; i++) {
+    if (keepIdx.has(i)) kept.push(polygons[i]);
+    else if (contained[i]) removedContained++;
+    else removedDuplicates++;
+  }
+  return { kept, removedDuplicates, removedContained };
 }
 
 // ───────────────────────────── Nomenclature des calques (DGID) ─────────────────────────────
@@ -458,8 +604,18 @@ function splitTextLines(raw: string): string[] {
 
 // ───────────────────────────── Pipeline principal ─────────────────────────────
 
+/**
+ * Provenance d'un polygone de parcelle :
+ *  - `authored` : dessiné explicitement (polyligne fermée, 3DFACE) ;
+ *  - `polygonized` : reconstruit par polygonisation des segments de limites.
+ * Sert au dédoublonnage par recouvrement : une même parcelle peut exister dans
+ * les deux représentations superposées.
+ */
+type ParcelSource = "authored" | "polygonized";
+
 interface RawPolygon {
   geom: PolygonGeom;
+  source: ParcelSource;
 }
 
 interface RawLabel {
@@ -525,10 +681,10 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
       nbHorsEmprise++;
       return;
     }
-    if (layerClass === PISCINE_CLASS) piscinePolygons.push({ geom });
-    else if (layerClass === SECTION_BOUNDARY_CLASS) sectionPolygons.push({ geom });
+    if (layerClass === PISCINE_CLASS) piscinePolygons.push({ geom, source: "authored" });
+    else if (layerClass === SECTION_BOUNDARY_CLASS) sectionPolygons.push({ geom, source: "authored" });
     else if (IGNORED_BOUNDARY_CLASSES.has(layerClass)) nbAutresCouchesIgnorees++;
-    else parcelPolygons.push({ geom });
+    else parcelPolygons.push({ geom, source: "authored" });
   };
 
   /** Collecte une polyligne ouverte pour polygonisation ultérieure, ou l'ignore. */
@@ -573,8 +729,11 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
     }
 
     if (geom.type === "Point" || geom.type === "MultiPoint") {
-      const rawText = String(
-        props.Text ?? props.text ?? props.MTEXT ?? props.mtext ?? props.Label ?? ""
+      // Nettoie les codes de formatage inline MTEXT (\fArial Black|…;, \A1;, {}, …)
+      // pour ne garder que le texte lisible (numéro de lot/parcelle, propriétaire).
+      // Défensif : couvre aussi le repli ogr2ogr (qui ne passe pas par dxf-native).
+      const rawText = decodeMText(
+        String(props.Text ?? props.text ?? props.MTEXT ?? props.mtext ?? props.Label ?? "")
       ).trim();
       if (!rawText) continue;
       const isSectionLabel = layerClass === SECTION_NUMERO_CLASS;
@@ -633,19 +792,25 @@ function polygonizeBoundaries(
       continue;
     }
 
-    const target =
-      layerClass === SECTION_BOUNDARY_CLASS
-        ? sectionPolygons
-        : layerClass === PISCINE_CLASS
-        ? piscinePolygons
-        : parcelPolygons;
+    const isSection = layerClass === SECTION_BOUNDARY_CLASS;
+    const target = isSection
+      ? sectionPolygons
+      : layerClass === PISCINE_CLASS
+      ? piscinePolygons
+      : parcelPolygons;
 
     for (const geom of polygons) {
-      if (geometryAreaM2(geom) > POLYGONIZE_MAX_AREA_M2) {
+      // Le plafond d'aire écarte l'anneau enveloppe global / les emprises de zone
+      // parmi les PARCELLES. Il ne doit PAS s'appliquer aux sections : une section
+      // cadastrale est par nature vaste (souvent > POLYGONIZE_MAX_AREA_M2). Sans
+      // cette exemption, tous les polygones de section reconstruits étaient jetés
+      // → aucune section rattachée → numero_section absent → NICAD sans section
+      // (000) → collisions massives de NICAD (faux doublons).
+      if (!isSection && geometryAreaM2(geom) > POLYGONIZE_MAX_AREA_M2) {
         oversized++;
         continue;
       }
-      target.push({ geom });
+      target.push({ geom, source: "polygonized" });
       reconstructed++;
     }
   }
@@ -697,31 +862,85 @@ interface ValidPolygon {
   surfaceM2: number;
   bbox: BBox;
   geomHash: string;
+  source: ParcelSource;
 }
 
-/** Valide une liste de polygones : aire > 0 et validité topologique. */
-function validatePolygons(polygons: RawPolygon[]): { valid: ValidPolygon[]; rejected: number } {
+/**
+ * Valide une liste de polygones : aire > 0 et, par défaut, validité topologique
+ * (`turf.booleanValid`).
+ *
+ * `requireValid: false` désactive le contrôle de validité topologique. À utiliser
+ * pour les couches servant UNIQUEMENT de support de jointure spatiale (sections) :
+ * les tracés de section exportés de Microstation sont fréquemment auto-intersectants
+ * (anneaux jugés invalides), alors qu'ils restent parfaitement exploitables en
+ * point-dans-polygone. Les rejeter vidait `validSections` → aucune section
+ * rattachée → NICAD sans section ("000") → collisions massives de NICAD (faux
+ * doublons). On les conserve donc pour la seule jointure de contenance.
+ */
+const jstsReader = new jsts.io.GeoJSONReader();
+const jstsWriter = new jsts.io.GeoJSONWriter();
+
+/**
+ * Répare un polygone topologiquement invalide via `buffer(0)` (JSTS) : les
+ * anneaux auto-tangents / auto-intersectants issus de polylignes Microstation
+ * fermées sont réassemblés en polygone(s) valide(s). Retourne `null` si la
+ * réparation échoue ou produit une géométrie vide/non surfacique.
+ */
+function repairPolygonGeometry(geom: PolygonGeom): PolygonGeom | null {
+  try {
+    const fixed = jstsReader.read(geom).buffer(0);
+    if (!fixed || fixed.isEmpty()) return null;
+    const out = jstsWriter.write(fixed) as GeoJSON.Geometry;
+    if (out.type === "Polygon" || out.type === "MultiPolygon") return out as PolygonGeom;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function validatePolygons(
+  polygons: RawPolygon[],
+  opts: { requireValid?: boolean } = {}
+): { valid: ValidPolygon[]; rejected: number; repaired: number } {
+  const requireValid = opts.requireValid !== false;
   const valid: ValidPolygon[] = [];
   let rejected = 0;
-  for (const { geom } of polygons) {
+  let repaired = 0;
+  const push = (g: PolygonGeom, area: number, source: ParcelSource) =>
+    valid.push({ geom: g, surfaceM2: area, bbox: geometryBBox(g), geomHash: hashGeometry(g), source });
+
+  for (const { geom, source } of polygons) {
     const surfaceM2 = geometryAreaM2(geom);
     if (surfaceM2 <= 0) {
       rejected++;
       continue;
     }
-    let ok = true;
-    try {
-      ok = turf.booleanValid(turf.feature(geom));
-    } catch {
-      ok = false;
+    if (requireValid) {
+      let ok = true;
+      try {
+        ok = turf.booleanValid(turf.feature(geom));
+      } catch {
+        ok = false;
+      }
+      if (!ok) {
+        // Avant de rejeter : tenter une réparation géométrique (buffer(0)).
+        // Les polylignes fermées de Microstation/AutoCAD sont massivement
+        // auto-tangentes ; les jeter privait l'import de ~87 % des parcelles
+        // déjà closes. On ne rejette donc que si la réparation échoue.
+        const fixed = repairPolygonGeometry(geom);
+        const fixedArea = fixed ? geometryAreaM2(fixed) : 0;
+        if (fixed && fixedArea > 0) {
+          push(fixed, fixedArea, source);
+          repaired++;
+        } else {
+          rejected++;
+        }
+        continue;
+      }
     }
-    if (!ok) {
-      rejected++;
-      continue;
-    }
-    valid.push({ geom, surfaceM2, bbox: geometryBBox(geom), geomHash: hashGeometry(geom) });
+    push(geom, surfaceM2, source);
   }
-  return { valid, rejected };
+  return { valid, rejected, repaired };
 }
 
 /** Trouve l'index du polygone contenant un point, via index en grille. */
@@ -739,12 +958,61 @@ function findContainingPolygon(
   return -1;
 }
 
+/**
+ * Trouve l'index du PLUS PETIT polygone contenant un point. Un numéro de
+ * parcelle placé à l'intérieur d'un îlot/enveloppe est géométriquement dans la
+ * grande ET dans la petite parcelle ; il « appartient » à la plus fine (la
+ * parcelle qu'il annote). Sert à savoir quelle parcelle porte réellement un
+ * numéro pour le dédoublonnage par contenance.
+ */
+function findSmallestContainingPolygon(
+  point: [number, number],
+  polygons: ValidPolygon[],
+  index: BBoxGridIndex
+): number {
+  const pt = turf.point(point);
+  let best = -1;
+  let bestArea = Infinity;
+  for (const idx of index.query(point)) {
+    const p = polygons[idx];
+    if (p.surfaceM2 >= bestArea) continue;
+    const [bx0, by0, bx1, by1] = p.bbox;
+    if (point[0] < bx0 || point[0] > bx1 || point[1] < by0 || point[1] > by1) continue;
+    if (turf.booleanPointInPolygon(pt, turf.feature(p.geom))) {
+      best = idx;
+      bestArea = p.surfaceM2;
+    }
+  }
+  return best;
+}
+
+// Profilage par phase (activé via DXF_PROFILE=1) — aucun effet sur le résultat.
+const PROFILE = !!process.env.DXF_PROFILE;
+function phase(label: string, t0: number): number {
+  if (PROFILE) console.log(`[profile] ${label}: ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+  return Date.now();
+}
+
+export interface IngestOptions {
+  /** Mappage calque → classe DGID validé par l'utilisateur (variante « simple »). */
+  layerMapping?: LayerMapping;
+}
+
 export function buildParcellesFromFc32628(
-  fc: GeoJSON.FeatureCollection
+  fc: GeoJSON.FeatureCollection,
+  options: IngestOptions = {}
 ): DxfIngestionResult {
   const warnings: string[] = [];
+  let _t = Date.now();
 
-  const classified = filterDxfCadastralFeatures(normalizeFeatureCollection(fc));
+  // Pas de plafond ici : la classification est intermédiaire (elle alimente la
+  // construction des parcelles, pas la réponse HTTP). Tronquer jetterait des
+  // limites/numéros/propriétaires avant l'assemblage → parcelles manquantes.
+  const classified = filterDxfCadastralFeatures(normalizeFeatureCollection(fc), {
+    maxFeatures: null,
+    layerMapping: options.layerMapping,
+  });
+  _t = phase("classify", _t);
 
   const {
     parcelPolygons,
@@ -757,30 +1025,64 @@ export function buildParcellesFromFc32628(
     nbPolylignesOuvertesIgnorees,
     nbAutresCouchesIgnorees,
   } = extractPolygonsAndLabels(classified);
+  _t = phase(`extract (parcels=${parcelPolygons.length}, lines=${Object.values(boundaryLinesByClass).reduce((s, a) => s + a.length, 0)})`, _t);
 
   // Polygonisation des limites dessinées en segments séparés (DGN→DXF) :
   // reconstruit les parcelles/sections/piscines fermées et les ajoute aux
   // couches correspondantes.
   const { reconstructed: nbParcellesPolygonisees, oversized: nbPolygonesEnveloppeIgnores } =
     polygonizeBoundaries(boundaryLinesByClass, parcelPolygons, sectionPolygons, piscinePolygons);
+  _t = phase(`polygonize (+${nbParcellesPolygonisees})`, _t);
 
   // Validation géométrique : anneaux fermés, aire > 0, validité topologique.
-  const { valid: validParcelsAll, rejected: nbPolygonesInvalidesRejetes } =
+  const { valid: validParcelsAll, rejected: nbPolygonesInvalidesRejetes, repaired: nbPolygonesRepares } =
     validatePolygons(parcelPolygons);
-  const { valid: validSections } = validatePolygons(sectionPolygons);
+  // Sections : support de jointure uniquement → on tolère les anneaux invalides
+  // (tracés Microstation auto-intersectants) plutôt que de les rejeter.
+  const { valid: validSections } = validatePolygons(sectionPolygons, { requireValid: false });
   const { valid: validPiscines } = validatePolygons(piscinePolygons);
+  _t = phase(`validate (valid=${validParcelsAll.length})`, _t);
 
   // Plafond d'aire : un polygone de parcelle plus grand que POLYGONIZE_MAX_AREA_M2
   // est une emprise de zone/anneau enveloppe (pas une parcelle de lotissement).
   // Ne s'applique pas aux sections (par nature plus vastes).
   let nbParcellesTropGrandes = nbPolygonesEnveloppeIgnores;
-  const validPolygons = validParcelsAll.filter((p) => {
+  const validPolygonsPreDedup = validParcelsAll.filter((p) => {
     if (p.surfaceM2 > POLYGONIZE_MAX_AREA_M2) {
       nbParcellesTropGrandes++;
       return false;
     }
     return true;
   });
+
+  // Numéro de parcelle prioritaire : marque, pour chaque parcelle candidate, si
+  // elle est le PLUS PETIT contenant d'un numéro de parcelle (elle porte donc ce
+  // numéro). Un îlot/enveloppe englobant plusieurs parcelles numérotées n'est PAS
+  // le plus petit contenant → il ne sera pas marqué, et sera retiré au profit des
+  // parcelles numérotées qu'il contient.
+  const numeroLabels = labels.filter(
+    (l) => (l.cls ?? classifyLabelText(l.text)) === "numero"
+  );
+  const preIndex = new BBoxGridIndex(validPolygonsPreDedup.map((p) => p.bbox));
+  const hasNumero = new Array<boolean>(validPolygonsPreDedup.length).fill(false);
+  for (const lbl of numeroLabels) {
+    const idx = findSmallestContainingPolygon(lbl.point, validPolygonsPreDedup, preIndex);
+    if (idx >= 0) hasNumero[idx] = true;
+  }
+
+  // Dédoublonnage/nettoyage par recouvrement :
+  //  - coïncidence (même emprise) : doublon de représentation (3DFACE + segments) → 1 gardé ;
+  //  - contenance : une grande parcelle contenant des parcelles NUMÉROTÉES est une
+  //    enveloppe/îlot → supprimée au profit des parcelles numérotées (numéro prioritaire).
+  const {
+    kept: validPolygons,
+    removedDuplicates: nbDoublonsRecouvrement,
+    removedContained: nbEnveloppesSupprimees,
+  } = dedupParcellesByOverlap(validPolygonsPreDedup, hasNumero);
+  _t = phase(
+    `dedup-overlap (doublons=-${nbDoublonsRecouvrement}, enveloppes=-${nbEnveloppesSupprimees}, kept=${validPolygons.length})`,
+    _t
+  );
 
   // Étape 2 : plausibilité de l'unité/CRS — alerte si l'emprise sort de la
   // zone UTM28N attendue (signe d'un dessin en millimètres ou mal géoréférencé).
@@ -813,6 +1115,7 @@ export function buildParcellesFromFc32628(
   for (const count of Array.from(hashCounts.values())) {
     if (count > 1) nbDoublonsGeometrie += count - 1;
   }
+  _t = phase("dedup", _t);
 
   // Étape 10 : chevauchements entre polygones valides (paires non comptées deux fois).
   const overlapIndex = new BBoxGridIndex(validPolygons.map((p) => p.bbox));
@@ -831,6 +1134,7 @@ export function buildParcellesFromFc32628(
       }
     }
   });
+  _t = phase(`overlap (${nbChevauchements})`, _t);
 
   // Jointure spatiale point-dans-polygone via index en grille.
   const index = new BBoxGridIndex(validPolygons.map((p) => p.bbox));
@@ -942,6 +1246,8 @@ export function buildParcellesFromFc32628(
     });
   });
 
+  _t = phase("joins+compose", _t);
+
   const nbPiscines = validPiscines.length;
 
   if (nbParcellesPolygonisees > 0) {
@@ -974,11 +1280,28 @@ export function buildParcellesFromFc32628(
         "(batiment)."
     );
   }
+  if (nbPolygonesRepares > 0) {
+    warnings.push(
+      `${nbPolygonesRepares} polygone(s) auto-tangent(s)/invalide(s) réparé(s) (buffer(0)) au lieu d'être rejeté(s).`
+    );
+  }
   if (nbPolygonesInvalidesRejetes > 0) {
     warnings.push(`${nbPolygonesInvalidesRejetes} polygone(s) invalide(s) ou d'aire nulle rejeté(s).`);
   }
   if (nbDoublonsGeometrie > 0) {
     warnings.push(`${nbDoublonsGeometrie} géométrie(s) en double détectée(s) (doublons, étape 10).`);
+  }
+  if (nbDoublonsRecouvrement > 0) {
+    warnings.push(
+      `${nbDoublonsRecouvrement} parcelle(s) superposée(s) fusionnée(s) par recouvrement ` +
+        "(même parcelle dessinée en 3DFACE/polyligne fermée et reconstruite depuis les segments)."
+    );
+  }
+  if (nbEnveloppesSupprimees > 0) {
+    warnings.push(
+      `${nbEnveloppesSupprimees} grande(s) parcelle(s)/enveloppe(s) supprimée(s) car contenant ` +
+        "des parcelles numérotées (numéro de parcelle prioritaire, îlot/enveloppe écarté)."
+    );
   }
   if (nbChevauchements > 0) {
     warnings.push(`${nbChevauchements} chevauchement(s) entre parcelles détecté(s) (étape 10).`);
@@ -1027,6 +1350,8 @@ export function buildParcellesFromFc32628(
       nbPolygonesInvalidesRejetes,
       nbAutresCouchesIgnorees,
       nbDoublonsGeometrie,
+      nbDoublonsRecouvrement,
+      nbEnveloppesSupprimees,
       nbChevauchements,
       surfaceTotaleM2,
       surfacePiscinesM2,
@@ -1047,12 +1372,13 @@ export function buildParcellesFromFc32628(
  */
 export async function ingestDxfToParcelles(
   buffer: Buffer,
-  fileName: string
+  fileName: string,
+  options: IngestOptions = {}
 ): Promise<DxfIngestionResult> {
   try {
     const nativeFc = readDxfWorldFeatures(buffer);
     if (nativeFc.features.length > 0) {
-      const nativeResult = buildParcellesFromFc32628(nativeFc);
+      const nativeResult = buildParcellesFromFc32628(nativeFc, options);
       if (nativeResult.parcelles.length > 0) return nativeResult;
     }
   } catch (err) {
@@ -1060,7 +1386,7 @@ export async function ingestDxfToParcelles(
   }
 
   const fc = await convertDxfToFc32628(buffer, fileName);
-  return buildParcellesFromFc32628(fc);
+  return buildParcellesFromFc32628(fc, options);
 }
 
 /**

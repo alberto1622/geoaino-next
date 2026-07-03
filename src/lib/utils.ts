@@ -37,7 +37,8 @@ export function errorTypeColor(type: string): string {
     case "duplicate": return "#3b82f6";
     case "invalid_geom": return "#ec4899";
     case "boundary_cross": return "#06b6d4";
-    case "missing_nicad": return "#22c55e";
+    case "missing_nicad": return "#6366f1";
+    case "short_nicad": return "#14b8a6";
     case "self_intersect": return "#f97316";
     default: return "#6b7280";
   }

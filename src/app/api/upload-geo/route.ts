@@ -10,6 +10,16 @@ import { assignNicad2026FromCommunes } from "@/lib/cadastre/assign-nicad-2026";
 const UTM28N = "+proj=utm +zone=28 +datum=WGS84 +units=m +no_defs";
 const WGS84 = "+proj=longlat +datum=WGS84 +no_defs";
 
+/**
+ * Plafond du nombre de features renvoyées à l'interface (et donc transmises à
+ * `/api/analyses`, stockées, puis rendues sur la carte). Un DXF cadastral peut
+ * produire 100 000+ parcelles : renvoyer tout en un seul GeoJSON sature le
+ * transfert HTTP, la sérialisation et surtout le navigateur (l'onglet « tourne »
+ * sans fin). On tronque l'aperçu **après** avoir construit la totalité (les
+ * compteurs/rapport restent exacts). 0 = aucun plafond.
+ */
+const MAX_ANALYSIS_FEATURES = Number(process.env.MAX_ANALYSIS_FEATURES || 8000);
+
 function reprojectFeaturesToWgs84(features: unknown[]): unknown[] {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let proj4: any;
@@ -79,9 +89,25 @@ async function parseDxfAsParcelles(buf: Buffer): Promise<ParseResult> {
   );
 
   const fc = parcellesToFeatureCollection(ingestion.parcelles);
+  const totalBuilt = fc.features.length;
+
+  // Tronque l'aperçu renvoyé à l'interface si le volume dépasse le plafond, pour
+  // ne pas saturer le transfert/parsing/rendu navigateur. Le tableau de parcelles
+  // est déjà en mémoire : la troncature est gratuite (pas de re-parsing JSON).
+  const truncated = MAX_ANALYSIS_FEATURES > 0 && totalBuilt > MAX_ANALYSIS_FEATURES;
+  const features = truncated ? fc.features.slice(0, MAX_ANALYSIS_FEATURES) : fc.features;
+
+  if (truncated) {
+    ingestion.report.warnings.unshift(
+      `Aperçu tronqué : ${totalBuilt} parcelles construites, seules les ${MAX_ANALYSIS_FEATURES} ` +
+        `premières sont renvoyées à l'interface (analyse/carte) pour éviter de saturer le navigateur. ` +
+        `Les compteurs du rapport portent sur la totalité. Persistance complète à venir (import en lot).`,
+    );
+  }
+
   return {
-    geoJson: JSON.stringify(fc),
-    featureCount: fc.features.length,
+    geoJson: JSON.stringify({ type: "FeatureCollection", features }),
+    featureCount: features.length,
     format: "DXF",
     crs: "EPSG:4326",
     microstationReport: ingestion.report,

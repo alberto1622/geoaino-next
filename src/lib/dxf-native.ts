@@ -169,9 +169,25 @@ function parseEntities(pairs: Pair[], start: number, end: number): RawEntity[] {
           break;
         case "11":
           endX = parseFloat(v);
+          // 3DFACE : 2ᵉ sommet (les codes 11/21, 12/22, 13/23 portent les
+          // coins 2 à 4 de la face, dans l'ordre du contour).
+          if (type === "3DFACE") e.verts.push([endX, NaN]);
           break;
         case "21":
           if (type === "LINE") e.verts[1] = [endX ?? 0, parseFloat(v)];
+          else if (type === "3DFACE" && e.verts.length) e.verts[e.verts.length - 1][1] = parseFloat(v);
+          break;
+        case "12":
+          if (type === "3DFACE") e.verts.push([parseFloat(v), NaN]);
+          break;
+        case "22":
+          if (type === "3DFACE" && e.verts.length) e.verts[e.verts.length - 1][1] = parseFloat(v);
+          break;
+        case "13":
+          if (type === "3DFACE") e.verts.push([parseFloat(v), NaN]);
+          break;
+        case "23":
+          if (type === "3DFACE" && e.verts.length) e.verts[e.verts.length - 1][1] = parseFloat(v);
           break;
         case "41":
           e.scale[0] = parseFloat(v) || 1;
@@ -251,6 +267,45 @@ function effectiveLayer(entityLayer: string | null, parentLayer: string | null):
   return entityLayer;
 }
 
+/**
+ * Nettoie les codes de formatage inline MTEXT (AutoCAD/Microstation/ODA) d'un
+ * texte. Un MTEXT encode la mise en forme dans le contenu même :
+ *   `\fArial Black|b0|i0|c00|p39;ZAR/948` → police + `ZAR/948`.
+ * On retire ces codes pour ne garder que le texte lisible :
+ *   - police `\f...;` / `\F...;`, couleur `\C...;`/`\c...;`, hauteur `\H...;`,
+ *     alignement `\A...;`, largeur `\W...;`, oblique `\Q...;`, interligne `\p...;`,
+ *     interlettrage `\T...;` (argument terminé par `;`) ;
+ *   - empilement de fractions `\S num ^ den ;` → `num/den` ;
+ *   - bascules de style sans argument `\L \l \O \o \K \k` ;
+ *   - accolades de groupement `{ }` ;
+ *   - saut de paragraphe `\P` → retour à la ligne, espace insécable `\~` → espace ;
+ *   - échappements littéraux `\\`, `\{`, `\}` → `\`, `{`, `}`.
+ */
+export function decodeMText(raw: string): string {
+  if (!raw) return "";
+  // Sentinelles (caractères Unicode réservés, absents des textes DXF) protégeant
+  // les échappements littéraux \\ \{ \} pendant le nettoyage des codes.
+  const BSL = "￹";
+  const LBR = "￺";
+  const RBR = "￻";
+  let s = raw;
+  s = s.replace(/\\\\/g, BSL).replace(/\\\{/g, LBR).replace(/\\\}/g, RBR);
+  // Sauts de paragraphe/ligne et espace insécable.
+  s = s.replace(/\\P/g, "\n").replace(/\\~/g, " ");
+  // Empilement (fractions) : garde le contenu, sépare par « / ».
+  s = s.replace(/\\S([^;]*);/g, (_m, g: string) => g.replace(/[#^]/g, "/"));
+  // Codes de formatage avec argument terminé par « ; » (police, couleur,
+  // hauteur, alignement, largeur, oblique, interligne, interlettrage).
+  s = s.replace(/\\[fFcCAHWQTp][^;]*;/g, "");
+  // Bascules de style sans argument (soulignement/surlignage/barré).
+  s = s.replace(/\\[LlOoKk]/g, "");
+  // Accolades de groupement.
+  s = s.replace(/[{}]/g, "");
+  // Restaure les échappements littéraux.
+  s = s.split(BSL).join("\\").split(LBR).join("{").split(RBR).join("}");
+  return s;
+}
+
 function emitGeometryFeatures(
   entities: RawEntity[],
   blocks: Record<string, BlockDef>,
@@ -280,7 +335,7 @@ function emitGeometryFeatures(
       out.push({
         type: "Feature",
         geometry: { type: "Point", coordinates: [x, y] },
-        properties: { Layer: layer, Text: (e.text ?? "").replace(/\\P/g, "\n").trim() },
+        properties: { Layer: layer, Text: decodeMText(e.text ?? "").trim() },
       });
       continue;
     }
@@ -292,6 +347,30 @@ function emitGeometryFeatures(
       out.push({
         type: "Feature",
         geometry: { type: "Point", coordinates: [x, y] },
+        properties: { Layer: layer },
+      });
+      continue;
+    }
+
+    if (e.type === "3DFACE") {
+      // Face pleine (3 ou 4 coins) : fréquente pour les parcelles/emprises
+      // dessinées en surface. Sans cela, ces parcelles n'arrivaient jamais
+      // dans le GeoJSON (le driver n'émettait aucune géométrie 3DFACE).
+      const verts = e.verts.filter((p) => p && Number.isFinite(p[0]) && Number.isFinite(p[1]));
+      if (verts.length < 3) continue;
+      const world = verts.map(xform);
+      // Retire les sommets consécutifs identiques (une face triangulaire répète
+      // souvent le 4ᵉ coin = 3ᵉ) avant de refermer l'anneau.
+      const ring: Pt[] = [];
+      for (const p of world) {
+        const prev = ring[ring.length - 1];
+        if (!prev || prev[0] !== p[0] || prev[1] !== p[1]) ring.push(p);
+      }
+      if (ring.length < 3) continue;
+      ring.push(ring[0]);
+      out.push({
+        type: "Feature",
+        geometry: { type: "Polygon", coordinates: [ring] },
         properties: { Layer: layer },
       });
       continue;
@@ -330,8 +409,14 @@ const IDENTITY: TransformFn = (p) => p;
  * ne contient pas de section ENTITIES exploitable.
  */
 export function readDxfWorldFeatures(buffer: Buffer): GeoJSON.FeatureCollection {
-  // latin1 : les codes de groupe sont ASCII ; suffisant pour la géométrie.
-  const pairs = tokenize(buffer.toString("latin1"));
+  // UTF-8 : les exports DXF modernes (ODA/AutoCAD R2007+/AC1021+) encodent les
+  // noms de calques et textes en UTF-8. Décoder en latin1 mutilait les calques
+  // accentués (« Numéros Parcelle » → « NumÃ©ros Parcelle » → non classé, donc
+  // aucun numéro de parcelle extrait → NICAD non construits). Les codes de groupe
+  // restant ASCII (sous-ensemble d'UTF-8), le parsing géométrique est inchangé ;
+  // un fichier réellement latin1 dégrade proprement (octets hauts → U+FFFD, de
+  // toute façon retirés par la normalisation des noms de calques).
+  const pairs = tokenize(buffer.toString("utf8"));
 
   const [es, ee] = sectionRange(pairs, "ENTITIES");
   if (es < 0 || ee < 0) {

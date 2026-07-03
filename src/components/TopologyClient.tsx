@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { AlertTriangle, Layers, ArrowLeft, Filter } from "lucide-react";
@@ -32,7 +32,6 @@ interface Props {
     totalFeatures: number | null;
     errorCount: number | null;
     conformityScore: number;
-    geoJsonData: string | null;
     errors: GeoError[];
   };
 }
@@ -44,6 +43,23 @@ const SEVERITY_LABELS: Record<string, string> = {
 export default function TopologyClient({ user, analysis }: Props) {
   const [selectedError, setSelectedError] = useState<GeoError | null>(null);
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set());
+  // Rendu par tuiles vectorielles (MVT) : on ne charge que l'emprise globale
+  // pour le fit initial, plus le GeoJSON complet (évite l'OOM sur 100k+ parcelles).
+  const [initialBounds, setInitialBounds] = useState<[number, number, number, number] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/analyses/${analysis.id}/map-meta`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<{ bbox: [number, number, number, number] | null }>;
+      })
+      .then((meta) => { if (!cancelled) setInitialBounds(meta.bbox); })
+      .catch((err) => {
+        console.error("[TopologyClient] Chargement métadonnées carte:", err);
+      });
+    return () => { cancelled = true; };
+  }, [analysis.id]);
 
   const errorTypes = Array.from(new Set(analysis.errors.map((e) => e.errorType)));
 
@@ -117,7 +133,7 @@ export default function TopologyClient({ user, analysis }: Props) {
                   <button
                     key={type}
                     onClick={() => toggleType(type)}
-                    className={`w-full flex items-center gap-2 p-2 rounded-lg text-xs transition-all border ${
+                    className={`cursor-pointer w-full flex items-center gap-2 p-2 rounded-lg text-xs transition-all border ${
                       hidden ? "border-border opacity-50" : "border-primary/30 bg-primary/5"
                     }`}
                   >
@@ -137,7 +153,7 @@ export default function TopologyClient({ user, analysis }: Props) {
                 <button
                   key={err.id}
                   onClick={() => setSelectedError(selectedError?.id === err.id ? null : err)}
-                  className={`w-full text-left p-2.5 rounded-lg border transition-all text-xs ${
+                  className={`cursor-pointer w-full text-left p-2.5 rounded-lg border transition-all text-xs ${
                     selectedError?.id === err.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
                   } ${err.corrected ? "opacity-40" : ""}`}
                 >
@@ -179,7 +195,8 @@ export default function TopologyClient({ user, analysis }: Props) {
         {/* Map */}
         <div className="flex-1 relative">
           <MapLibreMap
-            geoJson={analysis.geoJsonData}
+            analysisId={analysis.id}
+            initialBounds={initialBounds}
             errors={visibleErrors}
             selectedErrorId={selectedError?.id}
           />

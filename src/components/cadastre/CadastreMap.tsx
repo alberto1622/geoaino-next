@@ -320,7 +320,7 @@ export default function CadastreMap() {
               key={v}
               type="button"
               onClick={() => changeVersion(v)}
-              className={`flex items-center gap-1.5 rounded-md px-3 py-1 transition-colors ${
+              className={`cursor-pointer flex items-center gap-1.5 rounded-md px-3 py-1 transition-colors ${
                 version === v
                   ? "bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:text-foreground"
@@ -374,7 +374,7 @@ export default function CadastreMap() {
             <button
               type="button"
               onClick={() => setSyscol("")}
-              className="text-xs text-muted-foreground hover:text-foreground"
+              className="cursor-pointer text-xs text-muted-foreground hover:text-foreground"
             >
               Réinitialiser
             </button>

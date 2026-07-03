@@ -20,6 +20,7 @@ const ACTIONS_BY_TYPE: Record<string, string[]> = {
   INVALID_GEOM: ["delete", "ignore"],
   DUPLICATE: ["delete", "ignore"],
   MISSING_NICAD: ["assign_nicad", "ignore"],
+  SHORT_NICAD: ["assign_nicad", "ignore"],
 };
 
 // Surface planaire (shoelace) dans le système de coordonnées natif — sert
@@ -276,7 +277,7 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
       if (idx === -1) return NextResponse.json({ error: "Occurrence du doublon introuvable dans le GeoJSON" }, { status: 404 });
       removedIndex = idx;
       message = `Doublon NICAD ${error.nicad1 ?? ""} supprimé`.trim();
-    } else if (error.errorType === "MISSING_NICAD" && action === "assign_nicad") {
+    } else if ((error.errorType === "MISSING_NICAD" || error.errorType === "SHORT_NICAD") && action === "assign_nicad") {
       const idx = findFeatureIndexByGeometry(features, error.geometry);
       if (idx === -1) return NextResponse.json({ error: "Parcelle introuvable dans le GeoJSON" }, { status: 404 });
       const provided = body.targetNicad?.trim();

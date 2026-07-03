@@ -115,7 +115,7 @@ export default function ReportsClient({ user, reports }: Props) {
                     <button
                       key={report.id}
                       onClick={() => setSelected(report)}
-                      className={`w-full text-left p-4 rounded-xl border transition-all ${
+                      className={`cursor-pointer w-full text-left p-4 rounded-xl border transition-all ${
                         selected?.id === report.id
                           ? "border-primary bg-primary/5"
                           : "border-border hover:border-primary/30 hover:bg-secondary/20"
@@ -127,7 +127,7 @@ export default function ReportsClient({ user, reports }: Props) {
                           <button
                             onClick={(e) => handleDeleteReport(e, report.id)}
                             disabled={deleting === report.id}
-                            className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                            className="p-1 rounded cursor-pointer hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
                             title="Supprimer le rapport"
                           >
                             {deleting === report.id ? (

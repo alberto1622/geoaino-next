@@ -54,11 +54,11 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
   - ✅Ajouter de la table attributaire des parcelles selectionnées
 
 - ✅Afichage des données dans une table
-  - Avec possibilité de supprimer des lignes
+  - ✅Avec possibilité de supprimer des lignes
 
 ## 18/06/2026
 
-- il faudra intégrer la base syscol avec les communes correspondants
+- ✅il faudra intégrer la base syscol 2026 avec les communes correspondants
 - Augmenter la capacité de chargement des données
 
 ## 21/06/2026

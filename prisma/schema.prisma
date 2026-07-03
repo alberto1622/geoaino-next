@@ -138,6 +138,7 @@ enum ErrorType {
   INVALID_GEOM
   BOUNDARY_CROSS
   MISSING_NICAD
+  SHORT_NICAD
   SELF_INTERSECT
 }
 
@@ -395,6 +396,33 @@ model CadParcelle {
   @@index([syscolCommune, numSection, version])
   @@index([nicad])
   @@map("cad_parcelles")
+}
+
+// Job de traitement asynchrone d'un fichier CAO Microstation (DXF/DGN).
+// Domaine « traitement de données Microstation » (cœur geoaino), PAS le module
+// verifcad : le job rejoue le pipeline d'ingestion + analyse topologique et
+// produit une `Analysis` (consultable sur /map/[analysisId]). Exécuté après la
+// réponse HTTP — la requête d'upload retourne immédiatement un `id` et
+// l'interface sonde l'avancement. cf. src/lib/import/run-job.ts.
+model ImportJob {
+  id         Int      @id @default(autoincrement())
+  fileName   String
+  fileKey    String // chemin du fichier source persisté (préfixe local:)
+  sourceType String // DXF | DGN
+  status     String   @default("pending") // pending | running | completed | failed
+  phase      String? // read | build | nicad | analyze | done
+  progress   Int      @default(0) // 0..100
+  totalBuilt Int      @default(0) // parcelles construites par l'ingestion
+  analysisId Int? // Analysis produite (navigation /map/[analysisId])
+  report     Json? // rapport d'ingestion + stats d'analyse (errorCount, score…)
+  layerMapping Json? // mappage calque → classe DGID validé par l'utilisateur (variante « simple »)
+  error      String?  @db.Text
+  userId     String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([status])
+  @@map("import_jobs")
 }
 
 // Registre principal des NICAD

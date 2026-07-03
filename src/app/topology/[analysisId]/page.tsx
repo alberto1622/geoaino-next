@@ -2,9 +2,12 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { notFound } from "next/navigation";
 import TopologyClient from "@/components/TopologyClient";
-import { loadGeoJsonFromKey } from "@/lib/geo-storage";
 
 type Params = Promise<{ analysisId: string }>;
+
+// Plafond d'erreurs embarquées (cf. /map/[id]) : évite de figer le navigateur
+// sur les analyses à 100k+ erreurs. Le compteur total reste exact.
+const ERROR_RENDER_LIMIT = 2000;
 
 export default async function TopologyPage({ params }: { params: Params }) {
   const session = await auth();
@@ -13,13 +16,17 @@ export default async function TopologyPage({ params }: { params: Params }) {
 
   const analysis = await prisma.analysis.findUnique({
     where: { id },
-    include: { topologicalErrors: { orderBy: [{ severity: "asc" }, { createdAt: "asc" }] } },
+    include: {
+      topologicalErrors: {
+        orderBy: [{ severity: "asc" }, { createdAt: "asc" }],
+        take: ERROR_RENDER_LIMIT,
+      },
+    },
   });
 
   if (!analysis) notFound();
 
-  const geoJsonData = (await loadGeoJsonFromKey(analysis.geojsonKey)) ?? analysis.geoJsonData;
-
+  // Tier 2 : GeoJSON récupéré côté client via /api/analyses/[id]/geojson.
   return (
     <TopologyClient
       user={session?.user ?? null}
@@ -29,7 +36,6 @@ export default async function TopologyPage({ params }: { params: Params }) {
         totalFeatures: analysis.totalFeatures,
         errorCount: analysis.errorCount,
         conformityScore: Number(analysis.conformityScore),
-        geoJsonData: geoJsonData ?? null,
         errors: analysis.topologicalErrors.map((e) => ({
           id: e.id,
           errorType: e.errorType,

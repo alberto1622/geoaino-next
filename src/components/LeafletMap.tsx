@@ -10,7 +10,8 @@ const ERROR_COLORS: Record<string, string> = {
   DUPLICATE: "#3b82f6",
   INVALID_GEOM: "#ec4899",
   BOUNDARY_CROSS: "#06b6d4",
-  MISSING_NICAD: "#22c55e",
+  MISSING_NICAD: "#6366f1",
+  SHORT_NICAD: "#14b8a6",
   SELF_INTERSECT: "#f97316",
 };
 
@@ -362,7 +363,7 @@ export default function LeafletMap({ geoJson, errors, selectedErrorId, onFeature
         <div className="relative">
           <button
             onClick={() => setShowLayerPanel((v) => !v)}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium shadow-md transition-all ${
+            className={`cursor-pointer flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium shadow-md transition-all ${
               showLayerPanel || activeAdmin.size > 0
                 ? "bg-primary text-primary-foreground"
                 : "bg-card border border-border text-foreground hover:border-primary/40"
@@ -387,7 +388,7 @@ export default function LeafletMap({ geoJson, errors, selectedErrorId, onFeature
                     key={key}
                     onClick={() => toggleAdminLayer(key)}
                     disabled={isLoading}
-                    className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-xs transition-all ${
+                    className={`cursor-pointer w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-xs transition-all ${
                       isActive ? "bg-secondary text-foreground" : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
                     }`}
                   >

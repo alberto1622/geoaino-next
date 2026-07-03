@@ -34,6 +34,9 @@ export interface AnalysisResult {
     duplicateCount: number;
     invalidCount: number;
     missingNicadCount: number;
+    shortNicadErrorCount: number;
+    conformeCount: number;
+    nonConformeCount: number;
     withNicadCount: number;
     withoutNicadCount: number;
     shortNicadCount: number;
@@ -161,6 +164,9 @@ export function analyzeGeoJSON(
   let validNicad16Count = 0;
 
   const nicadMap = new Map<string, number[]>();
+  // Index des features (par position) impliquées dans au moins une erreur. Sert à
+  // compter les parcelles conformes de façon fiable même quand le NICAD est absent.
+  const nonConformeIdx = new Set<number>();
 
   // 1. Validity + NICAD check
   features.forEach((f, idx) => {
@@ -168,6 +174,7 @@ export function analyzeGeoJSON(
     const nicad = extractNicad(props);
 
     if (!isValidGeometry(f)) {
+      nonConformeIdx.add(idx);
       errors.push({
         type: "invalid_geom",
         severity: "critical",
@@ -188,13 +195,28 @@ export function analyzeGeoJSON(
     if (!isMissingNicad && idNicad === 16) validNicad16Count++;
     if (!isMissingNicad && idNicad > 0 && idNicad !== 16) invalidLengthNicadCount++;
 
-    if (isMissingNicad || idNicad < 8) {
+    if (isMissingNicad) {
+      // NICAD réellement absent (vide, null, néant…) → aucun NICAD à afficher.
+      nonConformeIdx.add(idx);
       errors.push({
         type: "missing_nicad",
         severity: "critical",
         nicad1: null,
         nicad2: null,
-        description: `Parcelle sans NICAD ou NICAD inférieur à 8 caractères détecté à l'index ${idx}`,
+        description: `Parcelle sans NICAD détectée à l'index ${idx}`,
+        confidence: 1.0,
+        geometry: f.geometry,
+      });
+    } else if (idNicad < 8) {
+      // NICAD présent mais trop court → on conserve la valeur réelle dans nicad1
+      // pour qu'elle s'affiche dans le panneau, cohérente avec le popup carte.
+      nonConformeIdx.add(idx);
+      errors.push({
+        type: "short_nicad",
+        severity: "high",
+        nicad1: nicadClean,
+        nicad2: null,
+        description: `NICAD trop court (${idNicad} caractère${idNicad > 1 ? "s" : ""}, minimum 8 attendu) à l'index ${idx} : « ${nicadClean} »`,
         confidence: 1.0,
         geometry: f.geometry,
       });
@@ -210,6 +232,7 @@ export function analyzeGeoJSON(
       totalSurface += area;
 
       if (isSliver) {
+        nonConformeIdx.add(idx);
         errors.push({
           type: "sliver",
           severity: "medium",
@@ -231,6 +254,7 @@ export function analyzeGeoJSON(
         extractObjectId(features[idx]?.properties ?? {}, idx)
       );
       indices.forEach((featureIndex, pos) => {
+        nonConformeIdx.add(featureIndex);
         const duplicateFeature = features[featureIndex];
         const thisObjectId = allObjectIds[pos];
         const otherObjectIds = allObjectIds.filter((_, i) => i !== pos).join(", ");
@@ -314,6 +338,8 @@ export function analyzeGeoJSON(
         if (overlapAreaM2 < 0.01) continue;
 
         overlapCount++;
+        nonConformeIdx.add(i);
+        nonConformeIdx.add(j);
         const area1M2 = turf.area(fA);
         const area2M2 = turf.area(fB);
         const minArea = Math.min(area1M2, area2M2);
@@ -397,6 +423,7 @@ export function analyzeGeoJSON(
         const props = f.properties || {};
         const nicad = extractNicad(props) || `feature_${idx}`;
         if (bbox[0] < adminBbox[0] || bbox[1] < adminBbox[1] || bbox[2] > adminBbox[2] || bbox[3] > adminBbox[3]) {
+          nonConformeIdx.add(idx);
           errors.push({
             type: "boundary_cross",
             severity: "high",
@@ -428,6 +455,9 @@ export function analyzeGeoJSON(
       duplicateCount: errors.filter((e) => e.type === "duplicate").length,
       invalidCount: errors.filter((e) => e.type === "invalid_geom").length,
       missingNicadCount: errors.filter((e) => e.type === "missing_nicad").length,
+      shortNicadErrorCount: errors.filter((e) => e.type === "short_nicad").length,
+      conformeCount: Math.max(0, features.length - nonConformeIdx.size),
+      nonConformeCount: nonConformeIdx.size,
       withNicadCount,
       withoutNicadCount,
       shortNicadCount,
@@ -525,11 +555,13 @@ Structure obligatoire:
 Analyse de **${totalFeatures} parcelles** terminée. **${errors.length} erreurs** détectées. Score de conformité : **${stats.conformityScore}%**.
 
 ## Statistiques
+- Parcelles conformes : **${stats.conformeCount}** / ${totalFeatures}
 - Chevauchements : **${stats.overlapCount}**
 - Résidus (Slivers) : **${stats.sliverCount}**
 - Doublons NICAD : **${stats.duplicateCount}**
 - Géométries invalides : **${stats.invalidCount}**
 - NICAD manquants : **${stats.missingNicadCount}**
+- NICAD trop courts (< 8 car.) : **${stats.shortNicadCount}**
 - NICAD valides 16 chars : **${stats.validNicad16Count}**
 
 ## Duplications de données (NICAD / OBJECTID)
