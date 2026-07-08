@@ -7,6 +7,7 @@
  */
 import JSZip from "jszip";
 import { convertDgnToDxf } from "../dgn-to-dxf";
+import { convertDgnV7ToDxf } from "../dgn-parser";
 import type { SourceType } from "./jobs";
 
 export function sourceTypeFromName(name: string): SourceType | null {
@@ -45,13 +46,15 @@ export async function resolveSource(file: File): Promise<ResolvedSource | null> 
 /** Retourne un buffer DXF exploitable à partir d'un buffer source (DXF ou DGN). */
 export async function toDxfBuffer(buf: Buffer, sourceType: SourceType): Promise<Buffer> {
   if (sourceType === "DGN") {
+    // 1) Convertisseur externe configuré (DGN_TO_DXF_BIN) : gère le DGN v8
+    //    (Microstation V8) via un outil ODA/MicroStation. `null` = non configuré.
     const dxf = await convertDgnToDxf(buf);
-    if (!dxf) {
-      throw new Error(
-        "Conversion DGN→DXF indisponible (configurer DGN_TO_DXF_BIN) — traitement impossible.",
-      );
-    }
-    return dxf;
+    if (dxf) return dxf;
+
+    // 2) Repli GDAL embarqué : le driver DGN standard lit le v7. Un DGN v8 y lève
+    //    un message explicite (« convertisseur externe requis »), pas un échec
+    //    opaque. Évite d'exiger DGN_TO_DXF_BIN pour les fichiers DGN v7.
+    return await convertDgnV7ToDxf(buf);
   }
   return buf;
 }

@@ -228,7 +228,9 @@ async function parseZip(buffer: Buffer): Promise<ParseResult> {
 
     const result = await parseShapefileBuffers(shpBuf, dbfBuf, prjBuf);
     const parsed = JSON.parse(result.geoJson);
-    allFeatures.push(...(parsed.features ?? []));
+    // Boucle (pas de push(...spread)) : au-delà de ~100k features, le spread
+    // dépasse la limite d'arguments d'appel (RangeError: Maximum call stack).
+    for (const f of parsed.features ?? []) allFeatures.push(f);
     if (result.crs !== "EPSG:4326") crs = result.crs;
   }
 

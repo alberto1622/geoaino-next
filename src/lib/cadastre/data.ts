@@ -184,6 +184,85 @@ export async function getSyscols2026ForPoints(
   return result;
 }
 
+/**
+ * Comme `getSyscols2026ForPoints` mais renvoie aussi `region`/`departement` de la
+ * commune 2026 contenante — utilisé pour renseigner la table `limite_section`
+ * (une section ∈ une commune). Même stratégie : contenance stricte par lots puis
+ * repli de proximité (50 m) pour les points non résolus.
+ */
+export async function getCommuneInfo2026ForPoints(
+  points: Array<{ lng: number; lat: number }>,
+): Promise<Array<{ syscol: string | null; nomCommune: string | null; region: string | null; departement: string | null; approx: boolean }>> {
+  type Info = { syscol: string | null; nomCommune: string | null; region: string | null; departement: string | null; approx: boolean };
+  if (points.length === 0) return [];
+
+  const result: Info[] = points.map(() => ({
+    syscol: null, nomCommune: null, region: null, departement: null, approx: false,
+  }));
+
+  type Row = { i: number; syscol: string | null; nom: string | null; region: string | null; departement: string | null };
+
+  // ── Passe 1 : contenance stricte, par lots. ────────────────────────────────
+  const unresolved: number[] = [];
+  for (let start = 0; start < points.length; start += SYSCOL_RESOLVE_CHUNK) {
+    const slice = points.slice(start, start + SYSCOL_RESOLVE_CHUNK);
+    const payload = JSON.stringify(slice.map((p, k) => ({ i: start + k, lng: p.lng, lat: p.lat })));
+
+    const rows = await prisma.$queryRaw<Row[]>`
+      WITH pts AS (
+        SELECT (e->>'i')::int AS i,
+               ST_SetSRID(ST_MakePoint((e->>'lng')::float8, (e->>'lat')::float8), 4326) AS geom
+        FROM json_array_elements(${payload}::json) AS e
+      )
+      SELECT pts.i AS i, hit."syscolPadded" AS syscol, hit."nomCommune" AS nom,
+             hit."region" AS region, hit."departement" AS departement
+      FROM pts
+      LEFT JOIN LATERAL (
+        SELECT c."syscolPadded", c."nomCommune", c."region", c."departement"
+        FROM "cad_communes_2026" c
+        WHERE c.geom IS NOT NULL AND c.geom && pts.geom AND ST_Contains(c.geom, pts.geom)
+        LIMIT 1
+      ) hit ON true
+    `;
+    for (const r of rows) {
+      const i = Number(r.i);
+      if (r.syscol) result[i] = { syscol: r.syscol, nomCommune: r.nom, region: r.region, departement: r.departement, approx: false };
+      else unresolved.push(i);
+    }
+  }
+
+  // ── Passe 2 : repli de proximité (50 m), non résolus uniquement. ───────────
+  for (let start = 0; start < unresolved.length; start += SYSCOL_RESOLVE_CHUNK) {
+    const idxSlice = unresolved.slice(start, start + SYSCOL_RESOLVE_CHUNK);
+    const payload = JSON.stringify(idxSlice.map((i) => ({ i, lng: points[i].lng, lat: points[i].lat })));
+
+    const rows = await prisma.$queryRaw<Row[]>`
+      WITH pts AS (
+        SELECT (e->>'i')::int AS i,
+               ST_SetSRID(ST_MakePoint((e->>'lng')::float8, (e->>'lat')::float8), 4326) AS geom
+        FROM json_array_elements(${payload}::json) AS e
+      )
+      SELECT pts.i AS i, near."syscolPadded" AS syscol, near."nomCommune" AS nom,
+             near."region" AS region, near."departement" AS departement
+      FROM pts
+      LEFT JOIN LATERAL (
+        SELECT c."syscolPadded", c."nomCommune", c."region", c."departement"
+        FROM "cad_communes_2026" c
+        WHERE c.geom IS NOT NULL
+          AND ST_DWithin(c.geom::geography, pts.geom::geography, 50)
+        ORDER BY c.geom <-> pts.geom
+        LIMIT 1
+      ) near ON true
+    `;
+    for (const r of rows) {
+      const i = Number(r.i);
+      if (r.syscol) result[i] = { syscol: r.syscol, nomCommune: r.nom, region: r.region, departement: r.departement, approx: true };
+    }
+  }
+
+  return result;
+}
+
 export async function countCommunes2026() {
   return prisma.cadCommune2026.count();
 }

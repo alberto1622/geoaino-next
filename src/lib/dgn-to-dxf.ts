@@ -66,7 +66,20 @@ export async function convertDgnToDxf(buffer: Buffer): Promise<Buffer | null> {
       tok.replace("{input}", input).replace("{output}", output)
     );
 
-    await execFileAsync(bin, args, { timeout: 300000, maxBuffer: 1024 * 1024 * 100 });
+    // Windows : `execFile` ne sait pas lancer un script `.bat`/`.cmd` (pas de
+    // shell) → on délègue à `cmd.exe /c` (l'exemple `DGN_TO_DXF_BIN=...bat` du
+    // Dockerfile fonctionne ainsi). `windowsVerbatimArguments` évite un
+    // re-quoting parasite des chemins temporaires par Node.
+    const isBatch = process.platform === "win32" && /\.(bat|cmd)$/i.test(bin);
+    if (isBatch) {
+      const comspec = process.env.COMSPEC || "cmd.exe";
+      await execFileAsync(comspec, ["/c", bin, ...args], {
+        timeout: 300000,
+        maxBuffer: 1024 * 1024 * 100,
+      });
+    } else {
+      await execFileAsync(bin, args, { timeout: 300000, maxBuffer: 1024 * 1024 * 100 });
+    }
 
     if (existsSync(output)) return await readFile(output);
 

@@ -195,3 +195,48 @@ export async function parseDGN(buffer: Buffer): Promise<ParseResult> {
 export async function parseDXF(buffer: Buffer): Promise<ParseResult> {
   return parseWithOgr2Ogr(buffer, "DXF");
 }
+
+/**
+ * Repli DGN v7 → buffer DXF via le GDAL embarqué (`ogr2ogr -f DXF`). Le driver
+ * DGN standard de GDAL lit le v7 (ISFF) mais PAS le v8 : un fichier v8 lève ici
+ * le message explicite `getDgnV8Message()` (convertisseur externe requis). Sert
+ * de repli à `toDxfBuffer` quand aucun `DGN_TO_DXF_BIN` n'est configuré — le DXF
+ * produit est ensuite routé vers le pipeline d'ingestion DXF complet.
+ *
+ * Aucune reprojection (`-t_srs`) : on conserve les coordonnées du dessin telles
+ * quelles (cadastre sénégalais = UTM28N mètres), comme le convertisseur externe
+ * `convertDgnToDxf` et l'export ODA — le pipeline DXF assigne ensuite EPSG:32628.
+ */
+export async function convertDgnV7ToDxf(buffer: Buffer): Promise<Buffer> {
+  const dir = await mkdtemp(path.join(tmpdir(), "geo-dgn7-"));
+  const inputPath = path.join(dir, "input.dgn");
+  const outputPath = path.join(dir, "output.dxf");
+
+  try {
+    await writeFile(inputPath, buffer);
+
+    // Détection précoce du v8 (message clair plutôt qu'un échec ogr2ogr opaque).
+    if (isDgnV8Error(await ogrInfo(inputPath))) {
+      throw new Error(getDgnV8Message());
+    }
+
+    try {
+      await execFileAsync(
+        resolveOgr2Ogr(),
+        ["-f", "DXF", "-skipfailures", outputPath, inputPath],
+        { timeout: 180000, maxBuffer: 1024 * 1024 * 100 },
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (isDgnV8Error(msg)) throw new Error(getDgnV8Message());
+      throw new Error(`Conversion DGN v7 → DXF (ogr2ogr) échouée : ${msg}`);
+    }
+
+    if (!existsSync(outputPath)) {
+      throw new Error("ogr2ogr n'a produit aucun DXF depuis le DGN (fichier illisible ?).");
+    }
+    return await readFile(outputPath);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}

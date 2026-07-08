@@ -156,12 +156,28 @@ DGN_TO_DXF_ARGS="-f DXF -skipfailures {output} {input}"
    DGN_TO_DXF_ARGS="-f DXF -skipfailures {output} {input}"
    ```
    Vérifier le driver : `ogrinfo --formats | grep -i dgnv8`.
-2. **MicroStation en batch** via un script wrapper que vous écrivez (`.bat`/`.sh`)
-   prenant `{input}` et `{output}` :
+2. **MicroStation en batch** (déploiement **local Windows** uniquement : GUI +
+   licence, ne tourne pas dans Docker/Linux). Wrapper + macro fournis :
+   - `scripts/dgn/mstn-dgn2dxf.bat` — wrapper `{input} {output}` (ajuster le
+     chemin `MSTN` et valider la ligne de lancement selon la version CONNECT/V8i) ;
+   - `scripts/dgn/DgnToDxf.bas` — macro VBA à importer dans un projet `DgnToDxf`
+     (ouvre le DGN actif → `DWG SAVEAS *.dxf` → `EXIT`).
    ```env
-   DGN_TO_DXF_BIN="C:\\scripts\\mstn-dgn2dxf.bat"
+   DGN_TO_DXF_BIN="C:\\...\\geoaino-next\\scripts\\dgn\\mstn-dgn2dxf.bat"
    DGN_TO_DXF_ARGS="{input} {output}"
    ```
+   > **Windows/`.bat`** : `convertDgnToDxf` exécute les `.bat`/`.cmd` via `cmd.exe /c`
+   > (`execFile` seul ne lance pas un script batch). Variante explicite si besoin :
+   > `DGN_TO_DXF_BIN="C:\\Windows\\System32\\cmd.exe"` +
+   > `DGN_TO_DXF_ARGS="/c C:\\...\\mstn-dgn2dxf.bat {input} {output}"`.
+   >
+   > **Tester la plomberie sans MicroStation** : pointer `DGN_TO_DXF_BIN` sur
+   > `scripts/dgn/_stub-dgn2dxf.bat` (écrit un DXF minimal) ; si l'import aboutit,
+   > la chaîne `DGN_TO_DXF_BIN → convertDgnToDxf → toDxfBuffer` est fonctionnelle.
+   >
+   > **Limites** : chaque conversion démarre MicroStation (lent, licence + session
+   > interactive) → imports occasionnels. Si ponctuel, préférer un
+   > `Fichier > Enregistrer sous > DXF` manuel dans MicroStation.
 
 ## Types d'erreurs détectées
 | Type | Description |

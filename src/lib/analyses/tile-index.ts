@@ -35,6 +35,8 @@ interface CacheEntry {
   nicadGroups: Map<string, NicadGroupMember[]>;
   /** Nombre de features indexées. */
   count: number;
+  /** Parcelles sans section rattachée (numero_section absent ou « 000 »). */
+  sansSectionCount: number;
   /** Empreinte de fraîcheur (updatedAt) pour invalider après corrections. */
   stamp: number;
 }
@@ -59,6 +61,25 @@ const KEEP_PROPS = [
 
 function extractNicad(p: Record<string, unknown>): string {
   return String(p.NICAD ?? p.nicad ?? p.NIC ?? p.Nicad ?? "");
+}
+
+// Valeurs de NICAD considérées « manquantes » (alignées sur geo-engine +
+// MapLibreMap). Sert à classer chaque parcelle côté serveur.
+const MISSING_NICAD_VALUES = new Set([
+  "", "null", "undefined", "na", "n/a", "néant", "neant", "aucun", "sans nicad", "0", "-",
+]);
+
+/**
+ * Statut NICAD d'une parcelle (même règle que le moteur : `isMissingNicadValue`
+ * puis longueur < 8). Exposé sur les tuiles (`_nstat`) pour colorer TOUTES les
+ * parcelles sans NICAD / à NICAD trop court directement depuis le vecteur, sans
+ * dépendre de la liste d'erreurs embarquée (plafonnée dans le payload de la page).
+ */
+function nicadStatus(nicad: string): "missing" | "short" | "ok" {
+  const v = nicad.trim().toLowerCase();
+  if (MISSING_NICAD_VALUES.has(v)) return "missing";
+  if (nicad.trim().length < 8) return "short";
+  return "ok";
 }
 
 /** Étend un accumulateur bbox avec les coordonnées d'une géométrie (récursif). */
@@ -107,16 +128,26 @@ async function buildEntry(analysisId: number, stamp: number): Promise<CacheEntry
   const overall: BBox = [Infinity, Infinity, -Infinity, -Infinity];
 
   const features: GeoJSON.Feature[] = [];
+  let sansSectionCount = 0;
   for (const feat of parsed.features ?? []) {
     if (!feat?.geometry) continue;
     const p = (feat.properties ?? {}) as Record<string, unknown>;
     const nicad = extractNicad(p);
 
-    // Propriétés slim (scalaires) + _nicad pour les filtres de surlignage.
-    const props: Record<string, unknown> = { _nicad: nicad };
+    // Propriétés slim (scalaires) + _nicad pour les filtres de surlignage, et
+    // _nstat (statut NICAD) pour colorer les parcelles sans/mauvais NICAD sur toute
+    // l'analyse (chaîne non vide → encodage MVT fiable, contrairement à `_nicad=""`).
+    const props: Record<string, unknown> = { _nicad: nicad, _nstat: nicadStatus(nicad) };
     for (const k of KEEP_PROPS) {
       const v = p[k];
       if (v != null && typeof v !== "object") props[k] = v;
+    }
+    // Parcelle sans section (numero_section absent ou « 000 ») : la composante
+    // section du NICAD est indéterminée → signalée sur la carte (`_ssec`).
+    const sec = String(p.numero_section ?? p.num_section ?? "").trim();
+    if (!sec || sec === "000") {
+      props._ssec = 1;
+      sansSectionCount++;
     }
 
     const b = geometryBBox(feat.geometry);
@@ -147,7 +178,7 @@ async function buildEntry(analysisId: number, stamp: number): Promise<CacheEntry
   const index = geojsonvt({ type: "FeatureCollection", features }, VT_OPTIONS);
   const bbox: BBox | null = Number.isFinite(overall[0]) ? overall : null;
 
-  return { index, bbox, nicadBounds, nicadGroups, count: features.length, stamp };
+  return { index, bbox, nicadBounds, nicadGroups, count: features.length, sansSectionCount, stamp };
 }
 
 /**

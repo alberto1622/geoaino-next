@@ -7,7 +7,9 @@ import type { LayerMapping } from "@/lib/cadastral-filter";
 
 export type SourceType = "DXF" | "DGN";
 export type JobStatus = "pending" | "running" | "completed" | "failed";
-export type JobPhase = "read" | "build" | "nicad" | "analyze" | "done";
+export type JobPhase = "read" | "build" | "nicad" | "analyze" | "sections" | "done";
+/** Cible du job : parcelles (Analysis) ou limite_section (contrôle chevauchements). */
+export type JobKind = "parcelles" | "sections";
 
 export async function createImportJob(input: {
   fileName: string;
@@ -16,6 +18,8 @@ export async function createImportJob(input: {
   userId?: string | null;
   /** Mappage calque → classe DGID validé par l'utilisateur (variante « simple »). */
   layerMapping?: LayerMapping | null;
+  /** Cible du traitement (défaut "parcelles"). */
+  kind?: JobKind;
 }) {
   return prisma.importJob.create({
     data: {
@@ -26,6 +30,7 @@ export async function createImportJob(input: {
       progress: 0,
       userId: input.userId ?? null,
       layerMapping: input.layerMapping ?? undefined,
+      kind: input.kind ?? "parcelles",
     },
   });
 }

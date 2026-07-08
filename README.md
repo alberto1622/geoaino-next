@@ -65,3 +65,12 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 
 - Mettre un code les non-correspondance en couleur différents
 - Ajouter les syscol pour la formation des nicad des fichiers .dxf
+
+- ✅Corriger les codes couleurs sur les types d'erreurs sur les parcelles (erreurs colorées par type dès le chargement + parcelles intactes en vert)
+- ✅Ajouter une mode édition sur les doublures
+- revoir la génération
+
+- Migration de masse de 2013 à 2026
+  Ex: charger un fichier de 2013 et générer la correspondance de 2026
+
+- Vérifier si un numero de nicad (charger un fichier) est conforme au découpage administrative

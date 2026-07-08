@@ -34,6 +34,8 @@ async function main() {
   console.log(`Doublons recouvrement      : ${report.nbDoublonsRecouvrement}`);
   console.log(`Enveloppes supprimées      : ${report.nbEnveloppesSupprimees}`);
   console.log(`Chevauchements             : ${report.nbChevauchements}`);
+  console.log(`  → parcelles retaillées   : ${report.nbChevauchementsCorriges}`);
+  console.log(`  → parcelles vidées       : ${report.nbParcellesVideesParChevauchement}`);
   console.log(`Textes hors parcelle       : ${report.nbTextesHorsParcelle}`);
   console.log(`Surface totale (m²)        : ${report.surfaceTotaleM2.toFixed(0)}`);
 
@@ -49,6 +51,16 @@ async function main() {
     if (p.numeroSection) secSet.add(p.numeroSection);
     if (p.nomCommune2026) commSet.add(p.nomCommune2026);
   }
+  if (report.reconciliation) {
+    const c = report.reconciliation;
+    const sum = (r: Record<string, number>) => Object.values(r).reduce((a, b) => a + b, 0);
+    console.log(`\n--- Réconciliation lecteur DXF (anti-perte) ---`);
+    console.log(`Entités lues               : ${sum(c.seen)}`);
+    console.log(`Entités émises             : ${sum(c.emitted)}`);
+    console.log(`Entités écartées           : ${sum(c.skipped)} ${JSON.stringify(c.skipped)}`);
+    console.log(`Nouveaux types courbes émis : ARC=${c.emitted.ARC ?? 0} CIRCLE=${c.emitted.CIRCLE ?? 0} ELLIPSE=${c.emitted.ELLIPSE ?? 0} SPLINE=${c.emitted.SPLINE ?? 0} SOLID=${c.emitted.SOLID ?? 0}`);
+  }
+
   console.log(`\n--- Complétude ---`);
   console.log(`Avec NICAD                 : ${avecNicad}`);
   console.log(`Avec numéro                : ${avecNumero}`);

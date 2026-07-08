@@ -29,5 +29,9 @@ export async function GET(req: NextRequest, { params }: { params: Params }) {
     return Response.json({ bounds: entry.nicadBounds.get(nicad) ?? null });
   }
 
-  return Response.json({ bbox: entry.bbox, count: entry.count });
+  return Response.json({
+    bbox: entry.bbox,
+    count: entry.count,
+    sansSection: entry.sansSectionCount,
+  });
 }

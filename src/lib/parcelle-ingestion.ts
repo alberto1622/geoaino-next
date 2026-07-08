@@ -25,8 +25,9 @@
  *    normalisé à 5 chiffres pour construire le NICAD (16 caractères, cf. nicad.ts).
  * 4. Validation géométrique (anneaux fermés, aire planaire > 0, validité
  *    topologique, plausibilité de l'emprise UTM28N) et reprojection
- *    EPSG:32628 → EPSG:4326. Détection de doublons et chevauchements
- *    (étape 10 : erreurs de topologie).
+ *    EPSG:32628 → EPSG:4326. Détection des doublons et CORRECTION des
+ *    chevauchements erronés par retaille de la parcelle non prioritaire
+ *    (étape 10 : `resolveParcelleOverlaps`).
  */
 
 import { execFile } from "child_process";
@@ -47,7 +48,7 @@ import {
   type LayerMapping,
 } from "./cadastral-filter";
 import { normalizeNumeroParcelle, normalizeSection } from "./nicad";
-import { readDxfWorldFeatures, decodeMText } from "./dxf-native";
+import { readDxfWorldFeatures, decodeMText, type Census } from "./dxf-native";
 import { polygonizeLines } from "./polygonize";
 
 const execFileAsync = promisify(execFile);
@@ -102,6 +103,8 @@ export interface DxfIngestionReport {
   nbHorsEmprise: number;
   nbPolylignesOuvertesIgnorees: number;
   nbTextesHorsParcelle: number;
+  /** Parcelles contenant plusieurs numéros distincts (fusion probable de voisines). */
+  nbParcellesMultiNumeros: number;
   nbPolygonesInvalidesRejetes: number;
   nbAutresCouchesIgnorees: number;
   nbDoublonsGeometrie: number;
@@ -109,14 +112,42 @@ export interface DxfIngestionReport {
   nbDoublonsRecouvrement: number;
   /** Grandes parcelles/enveloppes supprimées car contenant des parcelles numérotées. */
   nbEnveloppesSupprimees: number;
+  /** Chevauchements erronés (intersection > DXF_OVERLAP_FIX_MIN_M2) détectés entre parcelles. */
   nbChevauchements: number;
+  /** Parcelles retaillées (soustraction de la parcelle prioritaire) pour résorber ces chevauchements. */
+  nbChevauchementsCorriges: number;
+  /** Parcelles retirées car entièrement absorbées par des parcelles prioritaires lors de la retaille. */
+  nbParcellesVideesParChevauchement: number;
   surfaceTotaleM2: number;
   surfacePiscinesM2: number;
   warnings: string[];
+  /**
+   * Réconciliation du lecteur DXF natif : par type d'entité, lues vs émises vs
+   * écartées (avec motif). Garantit qu'aucune entité n'est perdue en silence —
+   * `seen = emitted + skipped (+ INSERT, conteneur)`. Absent si repli ogr2ogr.
+   */
+  reconciliation?: Census;
+}
+
+/**
+ * Section cadastrale extraite de la couche `limites_sections` d'un DXF, avec son
+ * numéro (libellé `numero_section` contenu) — brique de la table `limite_section`.
+ * La commune/région/département sont résolues ensuite par jointure spatiale
+ * (cf. build-sections.ts). Géométrie déjà reprojetée en EPSG:4326.
+ */
+export interface SectionCandidate {
+  numSection: string | null;
+  geomGeoJson4326: GeoJSON.Polygon | GeoJSON.MultiPolygon;
+  /** Point représentatif intérieur (4326, [lng, lat]) pour la jointure commune. */
+  repPoint4326: [number, number];
+  surfaceM2: number;
+  geomHash: string;
 }
 
 export interface DxfIngestionResult {
   parcelles: ParcelleCandidate[];
+  /** Sections cadastrales (couche `limites_sections` + `numero_section`). */
+  sections: SectionCandidate[];
   report: DxfIngestionReport;
 }
 
@@ -137,6 +168,14 @@ const CLOSE_SNAP_TOLERANCE_M = Number(process.env.DXF_CLOSE_SNAP_TOLERANCE_M || 
 // global produit par la polygonisation (la zone entière du lotissement).
 const POLYGONIZE_MIN_AREA_M2 = Number(process.env.DXF_POLYGONIZE_MIN_AREA_M2 || 5);
 const POLYGONIZE_MAX_AREA_M2 = Number(process.env.DXF_POLYGONIZE_MAX_AREA_M2 || 50000);
+
+// Tolérance de raccord des micro-trous (cf. polygonize.ts · healUndershoots)
+// SPÉCIFIQUE aux limites de sections : les tracés de sections (numérisés à plus
+// petite échelle que les parcelles) portent des trous d'accrochage métriques —
+// la tolérance parcelles (25 cm) laisse alors l'anneau ouvert (section perdue)
+// ou la limite mitoyenne pendante (sections fusionnées). 1 m reste sans risque :
+// deux sommets légitimes d'une section sont à des centaines de mètres.
+const SECTION_SNAP_TOLERANCE_M = Number(process.env.DXF_SECTION_SNAP_TOLERANCE_M || 1);
 
 // ───────────────────────────── Conversion DXF ─────────────────────────────
 
@@ -509,6 +548,162 @@ function dedupParcellesByOverlap(
   return { kept, removedDuplicates, removedContained };
 }
 
+// Aire d'intersection (m²) au-delà de laquelle un chevauchement entre deux
+// parcelles conservées est un CHEVAUCHEMENT ERRONÉ à corriger (étape 10).
+// En-dessous : recouvrement de mitoyenneté (bavure de numérisation de quelques
+// cm le long d'une limite partagée) — le retailler n'apporte rien visuellement
+// et multiplierait les micro-différences de géométrie.
+const OVERLAP_FIX_MIN_M2 = Number(process.env.DXF_OVERLAP_FIX_MIN_M2 || 0.5);
+
+/**
+ * Supprime les anneaux/parties d'aire ≤ `minPartAreaM2` d'un (Multi)Polygon —
+ * confettis résiduels d'une soustraction géométrique. Retourne `null` si plus
+ * rien ne dépasse le plancher (la parcelle a été entièrement absorbée).
+ */
+function dropTinyParts(geom: PolygonGeom, minPartAreaM2: number): PolygonGeom | null {
+  const parts = geom.type === "Polygon" ? [geom.coordinates] : geom.coordinates;
+  const kept = parts.filter(
+    (rings) =>
+      rings.length > 0 &&
+      geometryAreaM2({ type: "Polygon", coordinates: rings }) > minPartAreaM2
+  );
+  if (kept.length === 0) return null;
+  if (kept.length === 1) return { type: "Polygon", coordinates: kept[0] };
+  return { type: "MultiPolygon", coordinates: kept };
+}
+
+/**
+ * Corrige les chevauchements partiels erronés restant APRÈS le dédoublonnage
+ * par recouvrement (qui ne traite que la coïncidence et la contenance > 90 %).
+ * Deux parcelles qui se chevauchent de plus de `OVERLAP_FIX_MIN_M2` ne peuvent
+ * pas être toutes deux correctes : le cadastre est une partition planaire.
+ *
+ * Résolution : la parcelle la moins prioritaire est RETAILLÉE (soustraction de
+ * la géométrie de la gagnante), pas supprimée — sa partie non contestée reste
+ * une parcelle réelle. Priorité (même philosophie que `dedupParcellesByOverlap`) :
+ * numérotée > plus petite aire (l'élémentaire l'emporte sur l'englobante) >
+ * source `polygonized` (réseau planaire propre) > index.
+ *
+ * Les perdantes sont traitées de la meilleure à la moins bonne et se
+ * soustraient la géométrie COURANTE de leurs gagnantes (déjà finalisées grâce
+ * à cet ordre) : pas de trous fantômes là où une gagnante a elle-même été
+ * retaillée. Une perdante réduite à des confettis (< POLYGONIZE_MIN_AREA_M2)
+ * est retirée et comptabilisée (`nbParcellesVidees`).
+ */
+function resolveParcelleOverlaps(
+  polygons: ValidPolygon[],
+  hasNumero: boolean[],
+  index: BBoxGridIndex
+): {
+  kept: ValidPolygon[];
+  nbChevauchements: number;
+  nbParcellesRetaillees: number;
+  nbParcellesVidees: number;
+} {
+  const n = polygons.length;
+  const noop = { kept: polygons, nbChevauchements: 0, nbParcellesRetaillees: 0, nbParcellesVidees: 0 };
+  if (n < 2) return noop;
+
+  const beats = (a: number, b: number): boolean => {
+    if (hasNumero[a] !== hasNumero[b]) return hasNumero[a];
+    const pa = polygons[a];
+    const pb = polygons[b];
+    if (pa.surfaceM2 !== pb.surfaceM2) return pa.surfaceM2 < pb.surfaceM2;
+    if (pa.source !== pb.source) return pa.source === "polygonized";
+    return a < b;
+  };
+
+  // 1) Détection des paires en conflit sur les géométries D'ORIGINE (l'ensemble
+  // des conflits ne dépend donc pas de l'ordre de correction).
+  const winnersOf = new Map<number, number[]>();
+  let nbChevauchements = 0;
+  for (let i = 0; i < n; i++) {
+    const pi = polygons[i];
+    const fi = turf.feature(pi.geom);
+    for (const j of index.queryRange(pi.bbox)) {
+      if (j <= i) continue;
+      const pj = polygons[j];
+      if (!bboxIntersects(pi.bbox, pj.bbox)) continue;
+      // L'aire d'intersection réelle est majorée par celle des bbox : pré-filtre
+      // bon marché qui élimine les simples voisins mitoyens.
+      if (bboxOverlapArea(pi.bbox, pj.bbox) <= OVERLAP_FIX_MIN_M2) continue;
+      let inter: GeoJSON.Feature | null = null;
+      try {
+        inter = turf.intersect(turf.featureCollection([fi, turf.feature(pj.geom)]));
+      } catch {
+        continue;
+      }
+      if (!inter?.geometry) continue;
+      if (geometryAreaM2(inter.geometry as PolygonGeom) <= OVERLAP_FIX_MIN_M2) continue;
+      nbChevauchements++;
+      const winner = beats(i, j) ? i : j;
+      const loser = winner === i ? j : i;
+      const arr = winnersOf.get(loser);
+      if (arr) arr.push(winner);
+      else winnersOf.set(loser, [winner]);
+    }
+  }
+  if (winnersOf.size === 0) return { ...noop, nbChevauchements };
+
+  // 2) Retaille, meilleure priorité d'abord. `current[i] === null` = parcelle vidée.
+  const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => (beats(a, b) ? -1 : 1));
+  const current: (PolygonGeom | null)[] = polygons.map((p) => p.geom);
+  let nbParcellesRetaillees = 0;
+  let nbParcellesVidees = 0;
+  for (const idx of order) {
+    const winners = winnersOf.get(idx);
+    if (!winners) continue;
+    let geom: PolygonGeom | null = polygons[idx].geom;
+    let changed = false;
+    for (const w of winners) {
+      if (!geom) break;
+      const wGeom = current[w];
+      if (!wGeom) continue; // gagnante elle-même vidée entre-temps : plus de conflit
+      try {
+        const diff = turf.difference(
+          turf.featureCollection([turf.feature(geom), turf.feature(wGeom)])
+        );
+        const dGeom = diff?.geometry;
+        geom =
+          dGeom && (dGeom.type === "Polygon" || dGeom.type === "MultiPolygon")
+            ? (dGeom as PolygonGeom)
+            : null;
+        changed = true;
+      } catch {
+        // Soustraction impossible (géométries dégénérées) : on conserve la
+        // géométrie telle quelle plutôt que de perdre la parcelle.
+      }
+    }
+    if (!changed) continue;
+    const cleaned = geom ? dropTinyParts(geom, POLYGONIZE_MIN_AREA_M2) : null;
+    if (!cleaned) {
+      current[idx] = null;
+      nbParcellesVidees++;
+    } else {
+      current[idx] = cleaned;
+      nbParcellesRetaillees++;
+    }
+  }
+
+  const kept: ValidPolygon[] = [];
+  for (let i = 0; i < n; i++) {
+    const geom = current[i];
+    if (!geom) continue;
+    if (geom === polygons[i].geom) {
+      kept.push(polygons[i]);
+      continue;
+    }
+    kept.push({
+      geom,
+      surfaceM2: geometryAreaM2(geom),
+      bbox: geometryBBox(geom),
+      geomHash: hashGeometry(geom),
+      source: polygons[i].source,
+    });
+  }
+  return { kept, nbChevauchements, nbParcellesRetaillees, nbParcellesVidees };
+}
+
 // ───────────────────────────── Nomenclature des calques (DGID) ─────────────────────────────
 //
 // `filterDxfCadastralFeatures` (cadastral-filter.ts) classe déjà chaque
@@ -767,9 +962,19 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
 }
 
 /**
- * Polygonise les limites ouvertes (segments séparés) regroupées par classe et
- * ajoute les surfaces reconstruites aux couches correspondantes.
+ * Polygonise les limites ouvertes (segments séparés) et ajoute les surfaces
+ * reconstruites aux couches correspondantes.
  * Retourne le nombre de polygones reconstruits et ignorés (hors plage d'aire).
+ *
+ * Les classes de limites de PARCELLE (limites_parcelles, limites_tf, repli)
+ * forment UN SEUL réseau de polygonisation : polygonisées classe par classe,
+ * une limite mitoyenne dessinée sur un autre calque que ses voisines (niveau
+ * Microstation différent, limite TF adjacente) manquait au réseau de sa classe
+ * → les deux parcelles sortaient FUSIONNÉES sous un seul numéro. Les limites de
+ * sections y sont ajoutées comme ARÊTES DE DÉCOUPE (une limite de section est
+ * par définition aussi une limite de parcelle) tout en restant polygonisées à
+ * part pour la table des sections. Les piscines restent un réseau séparé (une
+ * piscine est DANS une parcelle : ses contours ne doivent pas la découper).
  */
 function polygonizeBoundaries(
   boundaryLinesByClass: Record<string, number[][][]>,
@@ -780,24 +985,67 @@ function polygonizeBoundaries(
   let reconstructed = 0;
   let oversized = 0;
 
+  // Arêtes des polygones de section « authored » (polylignes fermées/3DFACE du
+  // calque sections, routés en polygones AVANT cet appel) : une limite mitoyenne
+  // OUVERTE ne peut refermer une face que si le contour fermé sur lequel elle
+  // s'appuie fait partie du réseau nodé. Sans ces arêtes, les faces
+  // polygonisées débordaient les contours fermés (sections fusionnées, libellés
+  // orphelins). Les anneaux de sections se comptent en dizaines : coût marginal.
+  const authoredSectionEdges: number[][][] = [];
+  for (const sp of sectionPolygons) {
+    const polys = sp.geom.type === "Polygon" ? [sp.geom.coordinates] : sp.geom.coordinates;
+    for (const rings of polys) {
+      for (const ring of rings) authoredSectionEdges.push(ring as number[][]);
+    }
+  }
+
+  // NB : pas de `push(...gros_tableau)` ici — le spread passe chaque ligne en
+  // argument d'appel et fait déborder la pile au-delà de ~100k éléments
+  // (RangeError sur les calques départementaux type limites_parcelles).
+  const sectionLines: number[][][] = [];
+  for (const l of boundaryLinesByClass[SECTION_BOUNDARY_CLASS] ?? []) sectionLines.push(l);
+  for (const l of authoredSectionEdges) sectionLines.push(l);
+  const piscineLines = boundaryLinesByClass[PISCINE_CLASS] ?? [];
+  const parcelLines: number[][][] = [];
   for (const [layerClass, lines] of Object.entries(boundaryLinesByClass)) {
-    if (!lines.length) continue;
+    if (layerClass === SECTION_BOUNDARY_CLASS || layerClass === PISCINE_CLASS) continue;
+    for (const l of lines) parcelLines.push(l);
+  }
+  for (const l of sectionLines) parcelLines.push(l);
+
+  const networks: Array<{
+    label: string;
+    lines: number[][][];
+    target: RawPolygon[];
+    isSection: boolean;
+    snapTol?: number;
+  }> = [
+    { label: "limites de parcelles (réseau unifié)", lines: parcelLines, target: parcelPolygons, isSection: false },
+    {
+      label: SECTION_BOUNDARY_CLASS,
+      lines: sectionLines,
+      target: sectionPolygons,
+      isSection: true,
+      // Tolérance élargie : trous d'accrochage métriques sur les tracés de sections.
+      snapTol: SECTION_SNAP_TOLERANCE_M,
+    },
+    { label: PISCINE_CLASS, lines: piscineLines, target: piscinePolygons, isSection: false },
+  ];
+
+  for (const net of networks) {
+    if (!net.lines.length) continue;
     let polygons: GeoJSON.Polygon[];
     try {
       // Filtre uniquement l'aire mini ici ; l'aire maxi est appliquée ensuite
       // pour pouvoir compter l'anneau enveloppe global écarté.
-      polygons = polygonizeLines(lines, { minAreaM2: POLYGONIZE_MIN_AREA_M2 });
+      polygons = polygonizeLines(net.lines, {
+        minAreaM2: POLYGONIZE_MIN_AREA_M2,
+        ...(net.snapTol != null ? { snapToleranceM: net.snapTol } : {}),
+      });
     } catch (err) {
-      console.warn(`[parcelle-ingestion] polygonisation échouée pour ${layerClass}:`, err);
+      console.warn(`[parcelle-ingestion] polygonisation échouée pour ${net.label}:`, err);
       continue;
     }
-
-    const isSection = layerClass === SECTION_BOUNDARY_CLASS;
-    const target = isSection
-      ? sectionPolygons
-      : layerClass === PISCINE_CLASS
-      ? piscinePolygons
-      : parcelPolygons;
 
     for (const geom of polygons) {
       // Le plafond d'aire écarte l'anneau enveloppe global / les emprises de zone
@@ -806,11 +1054,11 @@ function polygonizeBoundaries(
       // cette exemption, tous les polygones de section reconstruits étaient jetés
       // → aucune section rattachée → numero_section absent → NICAD sans section
       // (000) → collisions massives de NICAD (faux doublons).
-      if (!isSection && geometryAreaM2(geom) > POLYGONIZE_MAX_AREA_M2) {
+      if (!net.isSection && geometryAreaM2(geom) > POLYGONIZE_MAX_AREA_M2) {
         oversized++;
         continue;
       }
-      target.push({ geom, source: "polygonized" });
+      net.target.push({ geom, source: "polygonized" });
       reconstructed++;
     }
   }
@@ -900,9 +1148,14 @@ function repairPolygonGeometry(geom: PolygonGeom): PolygonGeom | null {
 
 function validatePolygons(
   polygons: RawPolygon[],
-  opts: { requireValid?: boolean } = {}
+  opts: { requireValid?: boolean; minAreaM2?: number } = {}
 ): { valid: ValidPolygon[]; rejected: number; repaired: number } {
   const requireValid = opts.requireValid !== false;
+  // Plancher d'aire : écarte les micro-anneaux (symboles CIRCLE, slivers de
+  // triangulation 3DFACE) qui, sinon, deviennent des « parcelles » à ~0 m². 0 =
+  // pas de plancher (sections/piscines). Une vraie parcelle cadastrale dépasse
+  // largement ce seuil ; le rejet est comptabilisé (`rejected`), donc visible.
+  const minArea = Math.max(0, opts.minAreaM2 ?? 0);
   const valid: ValidPolygon[] = [];
   let rejected = 0;
   let repaired = 0;
@@ -911,7 +1164,7 @@ function validatePolygons(
 
   for (const { geom, source } of polygons) {
     const surfaceM2 = geometryAreaM2(geom);
-    if (surfaceM2 <= 0) {
+    if (surfaceM2 <= minArea) {
       rejected++;
       continue;
     }
@@ -929,7 +1182,7 @@ function validatePolygons(
         // déjà closes. On ne rejette donc que si la réparation échoue.
         const fixed = repairPolygonGeometry(geom);
         const fixedArea = fixed ? geometryAreaM2(fixed) : 0;
-        if (fixed && fixedArea > 0) {
+        if (fixed && fixedArea > minArea) {
           push(fixed, fixedArea, source);
           repaired++;
         } else {
@@ -986,6 +1239,41 @@ function findSmallestContainingPolygon(
   return best;
 }
 
+/**
+ * Numéro de section d'un point : PLUS PETITE section NUMÉROTÉE le contenant.
+ * Alimente la composante section du NICAD (jointure parcelle ∈ section).
+ *
+ * Même logique que la jointure des libellés de section (§4 bis) : un point
+ * tombe à la fois dans sa vraie section ET dans tout anneau d'ensemble /
+ * face sans numéro qui l'englobe. Au « premier contenant » (ordre de grille
+ * arbitraire), une enveloppe ou une face non numérotée raflait la jointure →
+ * numero_section absent (« 000 ») ou faux → NICAD erronés et collisions
+ * (faux doublons). Seule la plus fine section PORTEUSE d'un numéro compte ;
+ * s'il n'y en a aucune, la parcelle est « sans section » (comptabilisée).
+ */
+function findSectionNumero(
+  point: [number, number],
+  sections: ValidPolygon[],
+  index: BBoxGridIndex,
+  numeros: (string | null)[]
+): string | null {
+  const pt = turf.point(point);
+  let best = -1;
+  let bestArea = Infinity;
+  for (const idx of index.query(point)) {
+    if (numeros[idx] === null) continue;
+    const s = sections[idx];
+    if (s.surfaceM2 >= bestArea) continue;
+    const [bx0, by0, bx1, by1] = s.bbox;
+    if (point[0] < bx0 || point[0] > bx1 || point[1] < by0 || point[1] > by1) continue;
+    if (turf.booleanPointInPolygon(pt, turf.feature(s.geom))) {
+      best = idx;
+      bestArea = s.surfaceM2;
+    }
+  }
+  return best >= 0 ? numeros[best] : null;
+}
+
 // Profilage par phase (activé via DXF_PROFILE=1) — aucun effet sur le résultat.
 const PROFILE = !!process.env.DXF_PROFILE;
 function phase(label: string, t0: number): number {
@@ -996,6 +1284,27 @@ function phase(label: string, t0: number): number {
 export interface IngestOptions {
   /** Mappage calque → classe DGID validé par l'utilisateur (variante « simple »). */
   layerMapping?: LayerMapping;
+  /**
+   * N'extraire QUE les sections (couche `limites_sections`) : court-circuite la
+   * composition des parcelles (jointures, dédoublonnage, chevauchements) une fois
+   * les sections + numéros résolus. Réutilisé par l'import de `limite_section`.
+   */
+  sectionsOnly?: boolean;
+}
+
+/** Construit un rapport d'ingestion vide (parcours `sectionsOnly`). */
+function blankIngestionReport(warnings: string[] = []): DxfIngestionReport {
+  return {
+    nbParcelles: 0, nbSansNumero: 0, nbSansDenomination: 0, nbSansProprietaire: 0,
+    nbSansSection: 0, nbSansCommune2026: 0, nbCommune2026Approx: 0, nbNumeroNonConforme: 0,
+    nbPiscines: 0, nbParcellesPolygonisees: 0, nbPolygonesEnveloppeIgnores: 0, nbHorsEmprise: 0,
+    nbPolylignesOuvertesIgnorees: 0, nbTextesHorsParcelle: 0, nbParcellesMultiNumeros: 0,
+    nbPolygonesInvalidesRejetes: 0,
+    nbAutresCouchesIgnorees: 0, nbDoublonsGeometrie: 0, nbDoublonsRecouvrement: 0,
+    nbEnveloppesSupprimees: 0, nbChevauchements: 0, nbChevauchementsCorriges: 0,
+    nbParcellesVideesParChevauchement: 0, surfaceTotaleM2: 0, surfacePiscinesM2: 0,
+    warnings,
+  };
 }
 
 export function buildParcellesFromFc32628(
@@ -1034,14 +1343,76 @@ export function buildParcellesFromFc32628(
     polygonizeBoundaries(boundaryLinesByClass, parcelPolygons, sectionPolygons, piscinePolygons);
   _t = phase(`polygonize (+${nbParcellesPolygonisees})`, _t);
 
-  // Validation géométrique : anneaux fermés, aire > 0, validité topologique.
+  // Validation géométrique : anneaux fermés, aire > plancher, validité topologique.
+  // Plancher = seuil de polygonisation (5 m²) pour homogénéiser parcelles
+  // reconstruites et parcelles « authored » (3DFACE/polylignes/CIRCLE) : sans lui,
+  // les micro-symboles (cercles de puits, slivers) devenaient des parcelles ~0 m².
   const { valid: validParcelsAll, rejected: nbPolygonesInvalidesRejetes, repaired: nbPolygonesRepares } =
-    validatePolygons(parcelPolygons);
+    validatePolygons(parcelPolygons, { minAreaM2: POLYGONIZE_MIN_AREA_M2 });
   // Sections : support de jointure uniquement → on tolère les anneaux invalides
   // (tracés Microstation auto-intersectants) plutôt que de les rejeter.
   const { valid: validSections } = validatePolygons(sectionPolygons, { requireValid: false });
   const { valid: validPiscines } = validatePolygons(piscinePolygons);
   _t = phase(`validate (valid=${validParcelsAll.length})`, _t);
+
+  // ── Sections cadastrales : numéro (libellé numero_section contenu) + géométrie
+  // 4326. Calculé ici car indépendant des parcelles : réutilisé plus bas pour la
+  // jointure parcelle ∈ section, et permet le parcours rapide `sectionsOnly`
+  // (construction de la table limite_section sans composer les parcelles).
+  const sectionIndex = new BBoxGridIndex(validSections.map((s) => s.bbox));
+  const sectionNumeros: (string | null)[] = validSections.map(() => null);
+  // Numéros DISTINCTS vus par polygone de section : > 1 ⇒ fusion probable
+  // (limite mitoyenne absente du réseau ou trou > tolérance de raccord).
+  const sectionNumerosVus: Array<Set<string>> = validSections.map(() => new Set());
+  for (const lbl of sectionLabels) {
+    // PLUS PETIT contenant (et non premier trouvé) : un libellé tombe à la fois
+    // dans sa section ET dans tout anneau enveloppe/îlot qui l'englobe — au
+    // premier trouvé, l'enveloppe raflait les numéros et les vraies sections
+    // restaient sans numéro (puis étaient dissoutes/écrasées à tort).
+    const idx = findSmallestContainingPolygon(lbl.point, validSections, sectionIndex);
+    if (idx >= 0) {
+      const num = normalizeSection(lbl.text);
+      if (num) {
+        sectionNumerosVus[idx].add(num);
+        if (sectionNumeros[idx] === null) sectionNumeros[idx] = num;
+      }
+    }
+  }
+  const nbSectionsMultiNumeros = sectionNumerosVus.filter((s) => s.size > 1).length;
+  const sectionsWarnings: string[] = [];
+  if (nbSectionsMultiNumeros > 0) {
+    sectionsWarnings.push(
+      `${nbSectionsMultiNumeros} section(s) contenant PLUSIEURS numéros de section distincts (` +
+        sectionNumerosVus
+          .filter((s) => s.size > 1)
+          .slice(0, 10)
+          .map((s) => [...s].sort().join("+"))
+          .join(" ; ") +
+        ") : fusion probable de sections voisines — limite mitoyenne absente ou trou > tolérance " +
+        "(DXF_SECTION_SNAP_TOLERANCE_M)."
+    );
+  }
+  const sections: SectionCandidate[] = validSections.map((s, i) => {
+    const geom4326 = reprojectTo4326(s.geom);
+    return {
+      numSection: sectionNumeros[i],
+      geomGeoJson4326: geom4326,
+      repPoint4326: representativePoint(geom4326),
+      surfaceM2: s.surfaceM2,
+      geomHash: s.geomHash,
+    };
+  });
+  if (options.sectionsOnly) {
+    return {
+      parcelles: [],
+      sections,
+      report: blankIngestionReport([
+        `${sections.length} section(s) extraite(s) de la couche limites_sections.`,
+        ...sectionsWarnings,
+      ]),
+    };
+  }
+  warnings.push(...sectionsWarnings);
 
   // Plafond d'aire : un polygone de parcelle plus grand que POLYGONIZE_MAX_AREA_M2
   // est une emprise de zone/anneau enveloppe (pas une parcelle de lotissement).
@@ -1075,12 +1446,32 @@ export function buildParcellesFromFc32628(
   //  - contenance : une grande parcelle contenant des parcelles NUMÉROTÉES est une
   //    enveloppe/îlot → supprimée au profit des parcelles numérotées (numéro prioritaire).
   const {
-    kept: validPolygons,
+    kept: dedupedPolygons,
     removedDuplicates: nbDoublonsRecouvrement,
     removedContained: nbEnveloppesSupprimees,
   } = dedupParcellesByOverlap(validPolygonsPreDedup, hasNumero);
   _t = phase(
-    `dedup-overlap (doublons=-${nbDoublonsRecouvrement}, enveloppes=-${nbEnveloppesSupprimees}, kept=${validPolygons.length})`,
+    `dedup-overlap (doublons=-${nbDoublonsRecouvrement}, enveloppes=-${nbEnveloppesSupprimees}, kept=${dedupedPolygons.length})`,
+    _t
+  );
+
+  // Étape 10 : CORRECTION des chevauchements partiels erronés restants (ni
+  // coïncidence ni contenance > 90 %, donc hors du champ du dédoublonnage).
+  // Le marquage `hasNumero` est recalculé : les indices ont changé au dédoublonnage.
+  const dedupIndex = new BBoxGridIndex(dedupedPolygons.map((p) => p.bbox));
+  const dedupHasNumero = new Array<boolean>(dedupedPolygons.length).fill(false);
+  for (const lbl of numeroLabels) {
+    const idx = findSmallestContainingPolygon(lbl.point, dedupedPolygons, dedupIndex);
+    if (idx >= 0) dedupHasNumero[idx] = true;
+  }
+  const {
+    kept: validPolygons,
+    nbChevauchements,
+    nbParcellesRetaillees: nbChevauchementsCorriges,
+    nbParcellesVidees: nbParcellesVideesParChevauchement,
+  } = resolveParcelleOverlaps(dedupedPolygons, dedupHasNumero, dedupIndex);
+  _t = phase(
+    `overlap-fix (chevauchements=${nbChevauchements}, retaillées=${nbChevauchementsCorriges}, vidées=${nbParcellesVideesParChevauchement}, kept=${validPolygons.length})`,
     _t
   );
 
@@ -1117,24 +1508,7 @@ export function buildParcellesFromFc32628(
   }
   _t = phase("dedup", _t);
 
-  // Étape 10 : chevauchements entre polygones valides (paires non comptées deux fois).
-  const overlapIndex = new BBoxGridIndex(validPolygons.map((p) => p.bbox));
-  let nbChevauchements = 0;
-  validPolygons.forEach((poly, i) => {
-    for (const j of overlapIndex.queryRange(poly.bbox)) {
-      if (j <= i) continue;
-      const other = validPolygons[j];
-      if (!bboxIntersects(poly.bbox, other.bbox)) continue;
-      try {
-        if (turf.booleanOverlap(turf.feature(poly.geom), turf.feature(other.geom))) {
-          nbChevauchements++;
-        }
-      } catch {
-        // géométries non comparables (ex. multipolygones disjoints) : ignorer
-      }
-    }
-  });
-  _t = phase(`overlap (${nbChevauchements})`, _t);
+  // (Chevauchements : détectés ET corrigés plus haut par `resolveParcelleOverlaps`.)
 
   // Jointure spatiale point-dans-polygone via index en grille.
   const index = new BBoxGridIndex(validPolygons.map((p) => p.bbox));
@@ -1147,16 +1521,8 @@ export function buildParcellesFromFc32628(
     else nbTextesHorsParcelle++;
   }
 
-  // Numéro de section : rattacher chaque libellé numero_section au polygone de
-  // section qui le contient (le texte est placé dans la section).
-  const sectionIndex = new BBoxGridIndex(validSections.map((s) => s.bbox));
-  const sectionNumeros: (string | null)[] = validSections.map(() => null);
-  for (const lbl of sectionLabels) {
-    const idx = findContainingPolygon(lbl.point, validSections, sectionIndex);
-    if (idx >= 0 && sectionNumeros[idx] === null) {
-      sectionNumeros[idx] = normalizeSection(lbl.text);
-    }
-  }
+  // (Numéros de section déjà rattachés plus haut : `sectionNumeros`/`sectionIndex`
+  // sont calculés avant le parcours `sectionsOnly` et réutilisés ici.)
 
   // Piscines : rattacher chaque emprise de piscine à la parcelle qui la contient
   // (point représentatif de la piscine dans la parcelle).
@@ -1183,6 +1549,7 @@ export function buildParcellesFromFc32628(
   let nbSansProprietaire = 0;
   let nbSansSection = 0;
   let nbNumeroNonConforme = 0;
+  let nbParcellesMultiNumeros = 0;
   let surfaceTotaleM2 = 0;
 
   validPolygons.forEach((poly, idx) => {
@@ -1191,20 +1558,27 @@ export function buildParcellesFromFc32628(
     let proprietaire: string | null = null;
     let denomination: string | null = null;
     const autresTextes: string[] = [];
+    // Numéros DISTINCTS contenus : > 1 ⇒ fusion probable de parcelles voisines
+    // (limite mitoyenne absente du réseau ou trou > tolérance de raccord).
+    const numerosVus = new Set<string>();
 
     for (const label of labelsByPolygon[idx]) {
       const cls = label.cls ?? classifyLabelText(label.text);
+      if (cls === "numero") numerosVus.add(label.text.trim());
       if (cls === "numero" && numero === null) numero = label.text;
       else if (cls === "lot" && numeroLot === null) numeroLot = label.text;
       else if (cls === "proprietaire" && proprietaire === null) proprietaire = label.text;
       else if (cls === "denomination" && denomination === null) denomination = label.text;
       else autresTextes.push(label.text);
     }
+    if (numerosVus.size > 1) nbParcellesMultiNumeros++;
 
-    // Section : par jointure spatiale parcelle ∈ limites_sections.
+    // Section : par jointure spatiale parcelle ∈ limites_sections — plus petite
+    // section NUMÉROTÉE contenante (cf. findSectionNumero : au premier-contenant,
+    // un anneau d'ensemble/une face sans numéro pouvait rafler la jointure →
+    // section « 000 » ou fausse → NICAD erronés).
     const repPoint = representativePoint(poly.geom);
-    const sectionIdx = findContainingPolygon(repPoint, validSections, sectionIndex);
-    const numeroSection = sectionIdx >= 0 ? sectionNumeros[sectionIdx] : null;
+    const numeroSection = findSectionNumero(repPoint, validSections, sectionIndex, sectionNumeros);
 
     // Numéro de parcelle normalisé à 5 chiffres (composante parcelle du NICAD).
     // Le NICAD complet est assemblé après coup, une fois le Syscol résolu par
@@ -1304,7 +1678,21 @@ export function buildParcellesFromFc32628(
     );
   }
   if (nbChevauchements > 0) {
-    warnings.push(`${nbChevauchements} chevauchement(s) entre parcelles détecté(s) (étape 10).`);
+    warnings.push(
+      `${nbChevauchements} chevauchement(s) erroné(s) entre parcelles détecté(s) et corrigé(s) (étape 10) : ` +
+        `${nbChevauchementsCorriges} parcelle(s) retaillée(s) au profit de la parcelle prioritaire` +
+        (nbParcellesVideesParChevauchement > 0
+          ? `, ${nbParcellesVideesParChevauchement} parcelle(s) entièrement absorbée(s) retirée(s)`
+          : "") +
+        "."
+    );
+  }
+  if (nbParcellesMultiNumeros > 0) {
+    warnings.push(
+      `${nbParcellesMultiNumeros} parcelle(s) contenant PLUSIEURS numéros de parcelle distincts : fusion probable ` +
+        "de parcelles voisines (limite mitoyenne absente du dessin ou trou > tolérance de raccord). " +
+        "Vérifier le calque de la limite manquante ou augmenter DXF_POLYGONIZE_SNAP_TOLERANCE_M."
+    );
   }
   if (nbTextesHorsParcelle > 0) {
     warnings.push(`${nbTextesHorsParcelle} texte(s)/annotation(s) ne se trouvant à l'intérieur d'aucune parcelle.`);
@@ -1331,6 +1719,7 @@ export function buildParcellesFromFc32628(
 
   return {
     parcelles,
+    sections,
     report: {
       nbParcelles: parcelles.length,
       nbSansNumero,
@@ -1347,10 +1736,13 @@ export function buildParcellesFromFc32628(
       nbHorsEmprise,
       nbPolylignesOuvertesIgnorees,
       nbTextesHorsParcelle,
+      nbParcellesMultiNumeros,
       nbPolygonesInvalidesRejetes,
       nbAutresCouchesIgnorees,
       nbDoublonsGeometrie,
       nbDoublonsRecouvrement,
+      nbChevauchementsCorriges,
+      nbParcellesVideesParChevauchement,
       nbEnveloppesSupprimees,
       nbChevauchements,
       surfaceTotaleM2,
@@ -1379,7 +1771,11 @@ export async function ingestDxfToParcelles(
     const nativeFc = readDxfWorldFeatures(buffer);
     if (nativeFc.features.length > 0) {
       const nativeResult = buildParcellesFromFc32628(nativeFc, options);
-      if (nativeResult.parcelles.length > 0) return nativeResult;
+      if (nativeResult.parcelles.length > 0) {
+        // Remonte la réconciliation du lecteur natif dans le rapport.
+        if (nativeFc._census) nativeResult.report.reconciliation = nativeFc._census;
+        return nativeResult;
+      }
     }
   } catch (err) {
     console.warn("[parcelle-ingestion] lecteur DXF natif échoué, repli ogr2ogr:", err);

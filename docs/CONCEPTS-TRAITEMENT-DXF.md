@@ -15,13 +15,19 @@ est vu, il doit être ajouté ici (cf. règle dans `CLAUDE.md`).
 ## Table des matières
 
 1. [Diagnostic : « je devrais avoir bien plus de parcelles »](#1-diagnostic--je-devrais-avoir-bien-plus-de-parcelles)
-2. [Lire toutes les surfaces : le cas `3DFACE`](#2-lire-toutes-les-surfaces--le-cas-3dface)
+2. [Lire TOUTE géométrie porteuse (3DFACE, arcs, faces pleines) + réconciliation](#2-lire-toute-géométrie-porteuse-3dface-arcs-faces-pleines--réconciliation)
 3. [Réparer plutôt que rejeter : polygones invalides](#3-réparer-plutôt-que-rejeter--polygones-invalides)
 4. [Noding robuste : des segments aux parcelles sans planter](#4-noding-robuste--des-segments-aux-parcelles-sans-planter)
-5. [Dédoublonnage & enveloppes : coïncidence vs contenance](#5-dédoublonnage--enveloppes--coïncidence-vs-contenance)
-6. [Nettoyage des libellés : codes de formatage MTEXT](#6-nettoyage-des-libellés--codes-de-formatage-mtext)
-7. [Suppression manuelle de parcelles (table attributaire)](#7-suppression-manuelle-de-parcelles-table-attributaire)
-8. [Annexe — compteurs du rapport & variables d'environnement](#8-annexe--compteurs-du-rapport--variables-denvironnement)
+    - [4 bis. Raccord des micro-trous : parcelles voisines fusionnées (dangles)](#4-bis-raccord-des-micro-trous--parcelles-voisines-fusionnées-dangles)
+5. [Tuilage adaptatif : récupérer les cœurs urbains denses](#5-tuilage-adaptatif--récupérer-les-cœurs-urbains-denses)
+6. [Dédoublonnage & enveloppes : coïncidence vs contenance](#6-dédoublonnage--enveloppes--coïncidence-vs-contenance)
+    - [6 bis. Correction des chevauchements partiels (retaille par priorité)](#6-bis-correction-des-chevauchements-partiels-retaille-par-priorité)
+7. [Nettoyage des libellés : codes de formatage MTEXT](#7-nettoyage-des-libellés--codes-de-formatage-mtext)
+8. [Suppression manuelle de parcelles (table attributaire)](#8-suppression-manuelle-de-parcelles-table-attributaire)
+9. [Doublures NICAD : zoom sur les occurrences, annotation & mode édition](#9-doublures-nicad--zoom-sur-les-occurrences-annotation--mode-édition)
+10. [Colorer les NICAD manquants/courts sur toute l'analyse (hors plafond d'erreurs)](#10-colorer-les-nicad-manquantscourts-sur-toute-lanalyse-hors-plafond-derreurs)
+11. [Table `limite_section` : extraction des sections + contrôle des chevauchements](#11-table-limite_section--extraction-des-sections--contrôle-des-chevauchements)
+12. [Annexe — compteurs du rapport & variables d'environnement](#12-annexe--compteurs-du-rapport--variables-denvironnement)
 
 ---
 
@@ -42,7 +48,7 @@ des entités sans planter.
    overlap / joins) et **le rapport `DxfIngestionReport`**.
 3. **Lecture des compteurs** — chaque compteur du rapport localise une fuite
    (`nbPolygonesInvalidesRejetes`, `nbHorsEmprise`, `nbPolygonesEnveloppeIgnores`,
-   `nbTextesHorsParcelle`…). Voir [§8](#8-annexe--compteurs-du-rapport--variables-denvironnement).
+   `nbTextesHorsParcelle`…). Voir [§12](#12-annexe--compteurs-du-rapport--variables-denvironnement).
 
 **Signal fort à surveiller — `nbTextesHorsParcelle`.** Si des dizaines de milliers
 de numéros « ne tombent dans aucune parcelle », c'est que les parcelles censées les
@@ -65,24 +71,49 @@ réelles.
 
 ---
 
-## 2. Lire toutes les surfaces : le cas `3DFACE`
+## 2. Lire TOUTE géométrie porteuse (3DFACE, arcs, faces pleines) + réconciliation
 
-**Problème.** Des parcelles dessinées comme **faces pleines** `3DFACE`
-n'arrivaient jamais dans le GeoJSON.
+**Problème.** Le lecteur natif ne gérait que `LINE`, `LWPOLYLINE`, `POLYLINE`,
+`TEXT`, `POINT`, `INSERT`. Toute parcelle dessinée autrement disparaissait
+**silencieusement** : `3DFACE` (faces pleines), **arcs** (`ARC`, renflement/bulge
+de polyligne), `CIRCLE`/`ELLIPSE`/`SPLINE`, `SOLID` (quadrilatères pleins), et les
+valeurs d'attributs de bloc `ATTRIB`. Sur les 3 fichiers audités (Kaolack, Thiès,
+Keur Massar), les calques `limites_parcelles`/`limite_tf` portaient à eux seuls
+**> 1 100 arcs** : un bord de parcelle courbe laisse l'anneau **ouvert** → la
+polygonisation ne referme pas → parcelle perdue.
 
-**Cause.** Le lecteur natif (`src/lib/dxf-native.ts`) ne gérait que `LINE`,
-`LWPOLYLINE`, `POLYLINE`, `TEXT`, `POINT`, `INSERT`. Une `3DFACE` est une face de
-3 ou 4 coins portés par les **codes de groupe** `10/20`, `11/21`, `12/22`, `13/23`
-(le 4ᵉ coin répète souvent le 3ᵉ pour un triangle).
+**Solution** — `src/lib/dxf-native.ts` (`parseEntities`, `emitGeometryFeatures`) :
 
-**Solution.** Parsing des 4 coins puis émission d'un `Polygon` (anneau fermé,
-sommets consécutifs dédupliqués) — `dxf-native.ts` (`parseEntities`,
-`emitGeometryFeatures`).
+1. **Faces pleines** `3DFACE`/`SOLID` → `Polygon`. Coins aux codes `10/20`,
+   `11/21`, `12/22`, `13/23` ; ⚠️ `SOLID` stocke ses coins dans l'ordre **1-2-4-3**
+   (3ᵉ et 4ᵉ permutés) : réordonner avant de fermer l'anneau.
+2. **Courbes densifiées en polylignes** (pas ≈ 3°, borné à 64 segments) pour se
+   refermer avec les segments droits voisins : `ARC` (centre/rayon/angles),
+   **bulge** de `LWPOLYLINE`/`POLYLINE` (`bulge = tan(θ/4)`, arc entre 2 sommets),
+   `CIRCLE`/`ELLIPSE` (anneau fermé), `SPLINE` (approx. par points de contrôle).
+3. **`ATTRIB`** (valeur d'attribut d'un bloc inséré = souvent un numéro/libellé
+   réel) → émis comme point-texte. `ATTDEF` (gabarit dans la *définition* de bloc)
+   reste écarté : c'est une invite, pas une donnée.
+
+**Réconciliation anti-perte silencieuse (le principe généralisé).** Le lecteur
+tient un **recensement** (`Census`) : par type d'entité, combien **lues / émises /
+écartées** (avec motif). L'invariant `seen = emitted + skipped (+ INSERT,
+conteneur)` est journalisé et remonté dans `report.reconciliation`. Toute entité
+non émise est ainsi **visible** (ex. `HATCH` = surfaces déjà bordées par des
+segments ⇒ redondantes ; `DIMENSION`, `LEADER`, `IMAGE`, `REGION` = habillage),
+jamais perdue en silence. C'est le garde-fou : une future régression de lecture se
+voit immédiatement dans les compteurs, au lieu de rogner discrètement le total.
+
+> ⚠️ **Micro-anneaux.** Émettre `CIRCLE` crée des « parcelles » à ~0 m² là où le
+> cercle est un **symbole** (puits, arbre). Parade : un **plancher d'aire** (=
+> seuil de polygonisation, 5 m²) appliqué aussi aux polygones *authored*
+> (`validatePolygons · minAreaM2`), rejet comptabilisé. Une vraie parcelle
+> cadastrale dépasse toujours ce seuil.
 
 **Pourquoi c'est piégeux.** Une `3DFACE` est limitée à 4 coins : une parcelle à
 plus de 4 sommets dessinée « en surface » est parfois **triangulée** en plusieurs
 `3DFACE`. Ces triangles partiels sont ensuite nettoyés par le dédoublonnage par
-contenance (sliver sans numéro → retiré, cf. [§5](#5-dédoublonnage--enveloppes--coïncidence-vs-contenance)).
+contenance (sliver sans numéro → retiré, cf. [§6](#6-dédoublonnage--enveloppes--coïncidence-vs-contenance)).
 
 ---
 
@@ -128,7 +159,9 @@ calque.
    `jsts.precision.GeometryPrecisionReducer` **avant** l'union, jusqu'à obtenir un
    noding cohérent.
 2. **Isolation par tuile** (`polygonizeTiled`) : chaque tuile est enveloppée dans
-   un `try/catch` — une tuile pathologique est ignorée, pas tout le calque.
+   un `try/catch` — une tuile pathologique n'avorte pas tout le calque. Depuis le
+   cas Kaolack, l'échec ne **jette** plus la tuile mais la **subdivise** d'abord
+   (cf. [§5](#5-tuilage-adaptatif--récupérer-les-cœurs-urbains-denses)).
 
 > ⚠️ **Piège subtil.** Poser un `PrecisionModel` sur la `GeometryFactory` **ne
 > suffit pas** : `createLineString` n'arrondit pas les coordonnées. Seul
@@ -138,7 +171,151 @@ Voir aussi le tuilage (pourquoi partitionner) : [support §6.3](./SUPPORT-COURS-
 
 ---
 
-## 5. Dédoublonnage & enveloppes : coïncidence vs contenance
+## 4 bis. Raccord des micro-trous : parcelles voisines fusionnées (dangles)
+
+**Problème métier.** Après polygonisation, certaines parcelles **voisines sortent
+FUSIONNÉES** en un seul polygone : deux (ou plusieurs) lots distincts, chacun avec
+son numéro, ne forment qu'une seule face sur la carte.
+
+**Cause technique.** Le snap-rounding du §4 traite les micro-**croisements**, mais
+pas les micro-**trous**. Deux défauts de numérisation classiques :
+
+- **undershoot** : la limite mitoyenne s'arrête à quelques cm du contour qu'elle
+  devrait toucher. Pour JSTS, c'est une ligne **pendante** (*dangle*) : le
+  `Polygonizer` l'ignore et reconstruit **une seule face** couvrant les deux
+  parcelles ;
+- **coin ouvert** : deux limites censées se rejoindre en un coin s'arrêtent à
+  quelques cm l'une de l'autre → l'anneau ne se referme pas du tout (parcelle
+  perdue, ou fusionnée avec la voisine par le même mécanisme).
+
+**Solution** — `src/lib/polygonize.ts · healUndershoots` (appelée par
+`polygonizeChunk` AVANT le noding, tolérance `DXF_POLYGONIZE_SNAP_TOLERANCE_M`,
+25 cm par défaut) :
+
+1. **Regroupement des extrémités** : toute paire d'extrémités à ≤ tol est
+   accrochée sur une position canonique (la première vue — les représentants ne
+   bougent jamais, donc pas d'effet de cascade). Referme les coins ouverts.
+2. **Raccord au segment** : chaque extrémité encore pendante est projetée sur le
+   segment le plus proche (≤ tol) ET ce point projeté est **inséré comme sommet
+   du segment cible**. Referme les undershoots en T.
+
+> ⚠️ **Piège d'exactitude flottante.** Déplacer l'extrémité « sur » le segment ne
+> suffit pas : la projection calculée peut rester à ~1e-13 m de la ligne, et le
+> test d'intersection robuste du noding peut ne PAS voir le contact → dangle
+> conservé, parcelles toujours fusionnées. C'est l'**insertion du point comme
+> sommet du segment cible** qui garantit le partage de coordonnée **exact**,
+> donc le noding.
+
+> ⚠️ **Piège de mutation partagée.** En mode tuilé, les tableaux de coordonnées
+> sont **partagés entre tuiles** (fenêtres à marge) : le raccord travaille en
+> copie-à-l'écriture, sinon une tuile « répare » les lignes vues par la suivante
+> de façon incohérente.
+
+**Choix de la tolérance.** 25 cm referme les trous de numérisation (typiquement
+< 10 cm) sans fusionner de sommets légitimes : deux sommets cadastraux distincts
+sont à plusieurs mètres l'un de l'autre. Un trou > tolérance n'est **pas**
+raccordé (pas de sur-correction silencieuse) ; `0` désactive le raccord. Le
+nombre de raccords effectués est journalisé (`[polygonize] micro-trous
+raccordés…`).
+
+**Test** : `npx tsx scripts/test-polygonize-heal.ts` (fusion par undershoot,
+coin ouvert, trou > tolérance non corrigé, mitoyenneté saine inchangée).
+
+> ⚠️ **Piège — fusion malgré le raccord : la limite est sur un AUTRE calque.**
+> Cas terrain : parcelles 00017 et 00020 côte à côte, fusionnées sous 00017
+> alors que la mitoyenne est bien dessinée… sur `limites_tf` (ou en limite de
+> section). La polygonisation se faisait **classe par classe** : la mitoyenne
+> manquait au réseau de `limites_parcelles` → face fusionnée. Les classes de
+> limites de parcelle (`limites_parcelles`, `limites_tf`, repli) forment
+> désormais **UN SEUL réseau**, auquel s'ajoutent les limites de sections comme
+> **arêtes de découpe** (une limite de section est toujours aussi une limite de
+> parcelle) — `parcelle-ingestion.ts · polygonizeBoundaries`. Les piscines
+> restent un réseau séparé (une piscine est DANS une parcelle : ses contours ne
+> doivent pas la découper).
+>
+> **Diagnostic embarqué** : une parcelle reconstruite contenant **plusieurs
+> numéros distincts** est presque sûrement une fusion → compteur
+> `nbParcellesMultiNumeros` + warning dans le rapport (« fusion probable …
+> vérifier le calque ou augmenter `DXF_POLYGONIZE_SNAP_TOLERANCE_M` »).
+> Test : `npx tsx scripts/test-fusion-parcelles.ts`.
+
+> ⚠️ **Piège — le doublon masque le raccord.** Cas réel (sections 017/020,
+> commune DYA, fichier Kaolack) : certaines limites sont dessinées **en double**
+> (copies Microstation superposées). Le jumeau d'une ligne pendante se trouve à
+> distance 0 de son extrémité → le raccord la croyait « déjà connectée » et ne
+> refermait jamais le trou. Les lignes sont désormais **dédoublonnées**
+> (orientation neutralisée, `polygonize.ts · canonicalLineKey`) avant raccord et
+> noding.
+
+> ⚠️ **Piège — un « contact » à 1 µm n'est PAS une intersection.** La même
+> mitoyenne s'arrêtait à **0,7 µm** du segment de limite : sous l'ancien seuil
+> de contact (1 µm), le raccord supposait que le noding s'en chargerait. Faux :
+> le noding robuste ne node que les intersections **exactes** — un point à
+> 0,7 µm d'un segment n'en est pas une. Seule une **coordonnée exactement
+> partagée avec un sommet** court-circuite désormais le raccord ; toute distance
+> > 0 à un segment est raccordée par **insertion de sommet** (partage exact
+> garanti).
+
+---
+
+## 5. Tuilage adaptatif : récupérer les cœurs urbains denses
+
+**Problème métier.** Sur `PLAN-CADASTRAL_KAOLACK_FINAL_-11-12-2025.dxf` (181 Mo,
+département entier, 39 communes), l'import ne sortait que **33 870 parcelles** alors
+que le calque `numero_parcelle` compte **140 542 libellés** : Kaolack-ville, le cœur
+dense, disparaissait presque entièrement.
+
+**Cause technique.** `polygonizeTiled` calcule une grille **uniforme** dimensionnée
+sur la densité **moyenne** (`tilesPerAxis ≈ √(nSegments / 4000)`). Or les parcelles
+d'un fichier départemental sont **très concentrées** : le centre-ville dense est
+noyé dans des communes rurales éparses. L'emprise réelle (141 × 94 km) donne des
+tuiles de ~17,7 × 11,8 km ; deux d'entre elles absorbaient l'essentiel des
+segments :
+
+| tuile | segments | libellés `numero_parcelle` |
+|------:|---------:|---------------------------:|
+| 3_5 (Kaolack-ville) | **120 594** | **67 355** |
+| 2_5 (adjacente)     | **54 860**  | **23 806** |
+
+Ces deux blocs dépassaient largement la capacité de noding : le snap-rounding
+échouait, le `try/catch` par tuile (cf. §4) **abandonnait la tuile entière** →
+~91 000 parcelles perdues d'un coup (le centre-ville). Le tuilage protégeait donc
+contre le *crash*, mais **masquait** une perte massive.
+
+> ⚠️ **Piège de diagnostic.** L'emprise BRUTE des segments montrait 2347 × 2969 km
+> (à cause de **11 segments** aux coordonnées aberrantes, 25 sommets sur 516 441).
+> Cela FAIT croire à un problème d'emprise, mais le pipeline filtre déjà ces
+> parasites (`addOpenLine · ringInSenegalUtm`) : l'emprise **réelle** utilisée est
+> 141 × 94 km. Le vrai coupable est la **densité**, pas l'emprise. Toujours mesurer
+> l'emprise APRÈS le filtre d'emprise Sénégal.
+
+**Solution** — `src/lib/polygonize.ts · polygonizeTiled` :
+
+1. **Subdivision récursive (quadtree)** : toute région dépassant
+   `TILE_MAX_SEGMENTS` (8 000) — **ou dont le noding échoue** — est redécoupée en
+   2×2 et retraitée, jusqu'à `TILE_MAX_DEPTH` (8) ou la taille minimale
+   `TILE_MIN_SIZE_M` (500 m). On ne **jette** une région qu'en tout dernier
+   recours, en journalisant segments + profondeur.
+2. **Attribution par centroïde dans le CŒUR** (bornes demi-ouvertes) à **chaque
+   profondeur** : les cœurs des sous-tuiles partitionnent exactement le cœur
+   parent → chaque parcelle reste comptée **une seule fois**, la marge (400 m)
+   ne servant qu'à *collecter* les segments (invariant : marge > diamètre parcelle).
+3. **Échelles de snap-rounding grossières en repli** (`10, 5` = 10/20 cm) ajoutées
+   après `1000, 100, 20` : atteintes uniquement quand le snap fin échoue sur une
+   erreur topologique franche (sommet manquant sur la ligne croisée).
+
+**Résultat.** Polygonisation `limites_parcelles` : **28 298 → 93 399** polygones
+reconstruits (×3,3). Résidu : **1 région** (~2 157 segments) au défaut CAO
+irréductible (lignes qui se croisent sans sommet commun), journalisée.
+
+> **Pourquoi ne pas juste augmenter le nombre de tuiles ?** Une grille uniforme
+> plus fine multiplierait les tuiles **vides** (communes rurales) sans réduire la
+> densité **locale** du centre-ville : c'est la concentration qu'il faut suivre,
+> d'où le quadtree qui n'affine QUE là où c'est dense.
+
+---
+
+## 6. Dédoublonnage & enveloppes : coïncidence vs contenance
 
 **Problème.** La même parcelle est souvent présente **plusieurs fois** :
 - dessinée en `3DFACE`/polyligne fermée **ET** reconstruite depuis les segments ;
@@ -181,13 +358,64 @@ Un numéro placé dans un îlot est géométriquement à l'intérieur de l'envel
 > enveloppes. Bien distinguer *coïncidence* (garder 1) de *contenance* (retirer la
 > grande englobante).
 
-Les recouvrements **partiels** (< 90 %) ne sont pas fusionnés : ils restent
-signalés comme **erreurs de topologie** (chevauchements) par le contrôle qualité —
-ne pas masquer une vraie superposition.
+Les recouvrements **partiels** (< 90 %) ne sont ni des coïncidences ni des
+contenances : ils sont traités séparément — voir §6 bis (retaille par priorité).
 
 ---
 
-## 6. Nettoyage des libellés : codes de formatage MTEXT
+## 6 bis. Correction des chevauchements partiels (retaille par priorité)
+
+**Problème métier.** Après dédoublonnage, des parcelles **se chevauchent encore
+visiblement** sur la carte. Or le cadastre est une **partition planaire** : deux
+parcelles qui se recouvrent de plusieurs m² ne peuvent pas être toutes deux
+correctes. Ces chevauchements étaient **détectés et signalés** (warning « N
+chevauchement(s) détecté(s) ») mais **jamais corrigés**.
+
+**Cause technique.** Le dédoublonnage (§6) ne traite que deux relations :
+*coïncidence* (> 90 % de la plus grande aire) et *contenance* (> 90 % de la plus
+petite). Tout recouvrement **entre ~0 et 90 %** passait au travers : parcelle
+redessinée avec un léger décalage, îlot recouvrant partiellement ses voisins,
+bavure de numérisation le long d'une limite.
+
+**Solution.** `parcelle-ingestion.ts · resolveParcelleOverlaps` (étape 10, juste
+après le dédoublonnage) :
+
+1. **Détection** sur les géométries **d'origine** (l'ensemble des conflits ne
+   dépend pas de l'ordre de correction) : paires dont l'aire d'intersection
+   dépasse `DXF_OVERLAP_FIX_MIN_M2` (0.5 m² par défaut). Pré-filtre bbox : l'aire
+   d'intersection réelle est majorée par celle des bbox → les simples voisins
+   mitoyens ne coûtent jamais un `intersect`.
+2. **Priorité** (qui garde sa géométrie) — même philosophie que §6 :
+   **numérotée** > **plus petite aire** (l'élémentaire l'emporte sur
+   l'englobante) > source `polygonized` > index. Le marquage `hasNumero` est
+   **recalculé après dédoublonnage** (les indices ont changé — piège classique).
+3. **Retaille, pas suppression** : la perdante se voit **soustraire** la
+   géométrie de la gagnante (`turf.difference`) — sa partie non contestée reste
+   une parcelle réelle. Les perdantes sont traitées de la **meilleure à la moins
+   bonne** et se soustraient la géométrie **courante** de leurs gagnantes (déjà
+   finalisées grâce à cet ordre) : pas de trous fantômes là où une gagnante a
+   elle-même été retaillée.
+4. **Nettoyage** : les confettis résiduels (< `DXF_POLYGONIZE_MIN_AREA_M2`) sont
+   jetés ; une parcelle réduite à néant est retirée et comptée
+   (`nbParcellesVideesParChevauchement`).
+
+**Pourquoi ces choix / pièges :**
+
+- **Seuil d'aire absolu (0.5 m²), pas un ratio** : une bavure de 2 cm le long
+  d'une limite de 100 m fait ~2 m² → corrigée ; un micro-recouvrement d'angle ne
+  l'est pas (retailler du bruit numérique multiplie les micro-différences de
+  géométrie sans effet visuel).
+- **La plus petite gagne** entre deux non-numérotées : cohérent avec la règle
+  « enveloppe/îlot » du §6 — l'englobante est presque toujours la fautive.
+- **Soustraction impossible** (géométries dégénérées) : on **garde** la parcelle
+  telle quelle plutôt que de la perdre — le chevauchement résiduel reste visible,
+  jamais de perte silencieuse.
+- Test de non-régression : `scripts/test-overlap-fix.ts` (chevauchement simple,
+  priorité au numéro, mitoyenneté intacte, double retaille).
+
+---
+
+## 7. Nettoyage des libellés : codes de formatage MTEXT
 
 **Problème.** Les libellés sortaient formatés : `\fArial Black|b0|i0|c00|p39;ZAR/948`
 au lieu de `ZAR/948` ; `\fTahoma|b0|i0|c00|p39;00435` au lieu de `00435`.
@@ -217,7 +445,7 @@ l'émission des textes **et** (par sécurité) à la lecture des libellés dans
 
 ---
 
-## 7. Suppression manuelle de parcelles (table attributaire)
+## 8. Suppression manuelle de parcelles (table attributaire)
 
 **Besoin.** Retirer des parcelles directement depuis la table attributaire de la
 carte (ex. une enveloppe résiduelle, une parcelle erronée).
@@ -245,7 +473,212 @@ point (`MapLibreMap`).
 
 ---
 
-## 8. Annexe — compteurs du rapport & variables d'environnement
+## 9. Doublures NICAD : zoom sur les occurrences, annotation & mode édition
+
+**Problème métier.** Un même NICAD porté par plusieurs parcelles (une « doublure »)
+peut avoir ses occurrences dispersées géographiquement. Zoomer sur la seule
+parcelle cliquée empêche de les comparer, et résoudre le doublon (garder la bonne,
+supprimer les autres) demandait de cocher/supprimer à la main.
+
+**Cause technique.** L'emprise servie par `map-meta?nicad=` (`tile-index.nicadBounds`)
+ne retient que la **première** occurrence d'un NICAD — insuffisant pour cadrer un
+groupe. Le zoom passait par `selectedError → fitToNicad(nicad1)`, donc une seule
+occurrence.
+
+**Solution.**
+
+- **Emprise par occurrence.** Chaque membre d'un groupe porte son `_bbox` :
+  côté serveur via `nicad-group` (`tile-index.nicadGroups`), et côté client (petits
+  jeux) en dérivant l'emprise de la géométrie du GeoJSON chargé
+  (`MapAnalysisClient · nicadToAllFeatures`, `geomBbox`).
+- **Zoom groupé + annotation.** `occurrencesFromMembers` calcule les centroïdes
+  numérotés et l'**emprise englobante** ; `MapLibreMap` cadre sur cette union et
+  pose un `<Marker>` numéroté par occurrence (couleur doublon `#3b82f6`, alignée sur
+  la page d'accueil). Le fit mono-occurrence de `selectedError` est **court-circuité
+  pour les DUPLICATE** (le clignotement intense reste actif).
+- **Mode édition.** Un bouton *Éditer* (onglet Doublons) rend les marqueurs
+  cliquables et ajoute, par occurrence dans la table, **deux** actions :
+  - **Conserver** (`handleKeepOnlyOccurrence`) supprime **les autres** occurrences
+    via l'endpoint de suppression (§8) ;
+  - **Renommer** (`handleRenameOccurrence`) **réassigne un NICAD distinct** à
+    l'occurrence sélectionnée sans la supprimer — l'autre voie de résolution d'un
+    doublon. Endpoint `POST /api/analyses/[id]/features/update-nicad`.
+
+  Les deux voies partagent la **résolution de localisateur** (`src/lib/analyses/feature-locator.ts` :
+  `resolveLocator`, `setFeatureNicad`, `Locator`) avec la suppression, pour éviter
+  toute divergence. La désambiguïsation repose sur le localisateur **`bbox`**
+  (appariement L1 < 1e-5) : le repli NICAD **ne** distinguerait pas des occurrences
+  de même NICAD. La réécriture du NICAD touche **toutes** les clés porteuses
+  (`NICAD_KEYS` + `nicad`) pour que l'index de tuiles (`extractNicad`) et la table
+  restent cohérents.
+
+**Pourquoi / pièges.**
+
+- Les emprises côté client et serveur doivent être dans le **même repère (WGS84)**
+  que le GeoJSON persité, sinon l'appariement `bbox` échoue et la suppression
+  retombe sur le NICAD → mauvaise occurrence supprimée.
+- Occurrence sans géométrie → `_bbox = [0,0,0,0]` : ignorée (pas de marqueur à
+  l'origine, pas de zoom parasite).
+
+**Fichiers · fonctions.** `src/components/MapAnalysisClient.tsx`
+(`occurrencesFromMembers`, `applyOccurrenceMarkers`, `handleKeepOnlyOccurrence`,
+`handleRenameOccurrence`, `deleteRows`, `withRowNicad`),
+`src/components/MapLibreMap.tsx` (marqueurs + fit `occurrencesBounds`),
+`src/lib/analyses/feature-locator.ts` (`resolveLocator`, `setFeatureNicad` — partagés),
+`src/app/api/analyses/[id]/nicad-group/route.ts` (`_bbox` par occurrence),
+`src/app/api/analyses/[id]/features/update-nicad/route.ts` (réassignation NICAD),
+`src/app/api/analyses/[id]/features/delete/route.ts` (suppression, localisateur `bbox`, §8).
+
+---
+
+## 10. Colorer les NICAD manquants/courts sur toute l'analyse (hors plafond d'erreurs)
+
+**Problème métier.** Sur la carte, **certaines** parcelles à NICAD manquant
+n'apparaissaient pas en couleur (indigo), alors que d'autres oui — de façon
+apparemment aléatoire.
+
+**Cause technique.** Deux voies colorent une parcelle en erreur :
+
+1. **Par `_nicad`** (filtre sur les tuiles) — fonctionne pour les erreurs qui
+   portent un NICAD réel (doublons, NICAD trop courts…) ;
+2. **Par géométrie propre de l'erreur** (overlay `error-geoms`) — seule voie pour
+   un **NICAD manquant** (`nicad1: null`, aucune valeur à filtrer).
+
+Or la page carte ne sérialise que les **`ERROR_RENDER_LIMIT = 2000`** premières
+erreurs (`src/app/map/[analysisId]/page.tsx` — un gros DXF peut en porter 100k+, tout
+embarquer fige le navigateur). Au-delà du plafond, les NICAD manquants n'avaient
+donc **aucune** couleur : ni `_nicad` (vide), ni géométrie embarquée.
+
+**Solution.** Colorer les parcelles sans/mauvais NICAD **directement depuis le
+vecteur**, indépendamment de la liste d'erreurs :
+
+- Côté serveur, chaque parcelle porte un statut NICAD `_nstat` ∈
+  `missing | short | ok` sur les tuiles (`tile-index.ts · nicadStatus`, même règle
+  que le moteur : `isMissingNicadValue` puis longueur < 8).
+- Côté carte, deux couches vecteur colorent `_nstat = "missing"` (indigo
+  `#6366f1`) et `_nstat = "short"` (turquoise `#14b8a6`) — couleurs de la page
+  d'accueil (`MapLibreMap.tsx`).
+
+**Pas de superposition de parcelle.** Une erreur peut porter sa **propre
+géométrie** (overlay `error-geoms`). Quand cette géométrie **est** une parcelle
+déjà rendue par les tuiles (doublon, NICAD manquant/court), la dessiner en overlay
+superpose une **seconde copie** (légèrement décalée : géométrie exacte vs tuile
+quantifiée) → doublons visuels. Règle : les tuiles sont la **source unique** de
+coloration des parcelles ; l'overlay `error-geoms` ne garde que les géométries
+**région/résidu** sans équivalent sur les tuiles (chevauchement, espace vide,
+sliver, géométrie invalide). Cf. `MapLibreMap.tsx · TILE_COLORED_ERROR_TYPES`
+(`DUPLICATE`, `MISSING_NICAD`, `SHORT_NICAD` exclus de l'overlay).
+
+**Pourquoi / pièges.**
+
+- On expose une **chaîne non vide** (`"missing"`/`"short"`/`"ok"`) plutôt que de
+  filtrer sur `_nicad = ""` : un encodeur MVT peut **abandonner** une propriété
+  chaîne vide, rendant le filtre inopérant.
+- Ces couches sont **disjointes** du surlignage vert « conforme » (qui exige
+  NICAD ≥ 8 & non manquant) : aucune parcelle n'est colorée deux fois.
+- L'index de tuiles est **mis en cache** : la nouvelle propriété apparaît après
+  invalidation (`updatedAt`/redémarrage), pas de migration.
+
+**Fichiers · fonctions.** `src/lib/analyses/tile-index.ts` (`nicadStatus`, `_nstat`),
+`src/components/MapLibreMap.tsx` (couches `missing-nicad-fill` / `short-nicad-fill`),
+`src/lib/utils.ts` (`errorTypeColor`), `src/app/map/[analysisId]/page.tsx`
+(`ERROR_RENDER_LIMIT`).
+
+---
+
+## 11. Table `limite_section` : extraction des sections + contrôle des chevauchements
+
+**Besoin métier.** Construire une table de référence des **limites de section**
+(`region, departement, commune, num_section, geometry`) à partir d'un DXF, avec
+**contrôle des chevauchements** entre sections et **corrections** appliquées par
+l'utilisateur.
+
+**Concept — les sections sont déjà calculées, juste jetées.** Le pipeline
+d'ingestion polygonise la couche `limites_sections` (`validSections`) et rattache
+les libellés `numero_section` (`sectionNumeros`) — mais uniquement comme support
+de la jointure parcelle ∈ section, puis les abandonne. On les **expose** désormais
+(`DxfIngestionResult.sections`, option `sectionsOnly` pour court-circuiter la
+composition des parcelles).
+
+**Chaîne de construction** (`src/lib/cadastre/build-sections.ts`, calquée sur
+`assign-nicad-2026.ts`) :
+
+1. **Rattacher la commune de CHAQUE fragment** : jointure spatiale du point
+   représentatif sur `cad_communes_2026` → `region/departement/commune/syscol`
+   (`getCommuneInfo2026ForPoints`, `ST_Contains` + repli proximité 50 m).
+2. **Dissoudre** les fragments d'une même section par clé **(commune, numéro)**
+   (`turf.union`, repli concaténation d'anneaux si l'union échoue — aucun
+   fragment perdu). Sans numéro OU sans commune résolue : pas de fusion.
+3. **Persister** (`sections-data.insertLimiteSections`) : INSERT + `geom` PostGIS
+   via `ST_Multi(ST_CollectionExtract(ST_MakeValid(ST_GeomFromGeoJSON(...)),3))`
+   (répare les anneaux Microstation auto-intersectants).
+4. **Contrôle des chevauchements** (`refreshOverlaps`) : self-join PostGIS
+   `ST_Intersects` + aire d'intersection `ST_Area(ST_Transform(...,32628))` au-delà
+   d'un seuil (`SECTION_OVERLAP_MIN_AREA_M2`, défaut 1 m²) → `limite_section_overlap`
+   en `PENDING`. Une frontière mitoyenne partagée donne une aire ~0 → **exclue**
+   (on ne veut que les chevauchements *surfaciques*).
+
+**Corrections utilisateur** (`/api/cadastre/sections/correct`, mirroir des OVERLAP
+parcelles) : `clip_a`/`clip_b` (`turf.difference`), `merge` (`turf.union`),
+`delete_a`/`delete_b`, `ignore`. Après chaque modification géométrique, on
+**re-contrôle** (`refreshOverlaps`), en **préservant** les paires `IGNORED`
+(non ré-insérées).
+
+**Réaffichage sans réimport.** Les données étant persistées, la page charge au
+montage les **lots stockés** (`listSectionBatches` → `/api/cadastre/sections/batches`,
+regroupés par `sourceFichier`) et réaffiche automatiquement le plus récent
+(sections + chevauchements) — un sélecteur permet de basculer entre lots.
+
+**Pourquoi / pièges.**
+
+- La géométrie est stockée en **4326** (comme `cad_communes_2026`) pour que la
+  jointure commune et l'intersection PostGIS partagent le même repère ; les aires
+  sont mesurées en `ST_Transform(...,32628)` (mètres).
+- `ST_MakeValid` est indispensable : les tracés de section Microstation sont
+  fréquemment auto-intersectants (cf. §3), sinon `ST_Intersection` échoue.
+- Le job réutilise l'infra d'import asynchrone (`ImportJob { kind:"sections" }`,
+  `run-job.ts`) : lecture DXF lourde hors requête HTTP, sondage de l'avancement.
+
+> ⚠️ **Piège — sections fusionnées / disparues (corrigé).** Deux mécanismes
+> distincts produisaient le même symptôme :
+>
+> 1. **Dissolution par numéro seul.** Un numéro de section n'est unique que
+>    **dans sa commune** : sur un fichier multi-communes, toutes les sections
+>    « 001 » étaient unies en une seule ligne (MultiPolygon enjambant les
+>    communes) et les sections « absorbées » disparaissaient de la leur. La clé
+>    de dissolution est désormais **(syscol commune, numéro)**, la commune étant
+>    résolue AVANT la dissolution. De plus, un échec de `turf.union` jetait
+>    silencieusement le fragment (« on garde l'accumulateur ») → repli en
+>    concaténation d'anneaux, aucun fragment perdu.
+> 2. **Tolérance de raccord trop fine.** Les tracés de sections portent des
+>    trous d'accrochage **métriques** (numérisation à plus petite échelle que
+>    les parcelles) : à 25 cm (`DXF_POLYGONIZE_SNAP_TOLERANCE_M`, cf. §4 bis),
+>    l'anneau restait ouvert (section **perdue**) ou la limite mitoyenne restait
+>    pendante (sections **fusionnées**). La polygonisation de `limites_sections`
+>    utilise sa propre tolérance `DXF_SECTION_SNAP_TOLERANCE_M` (défaut **1 m**,
+>    sans risque : deux sommets légitimes d'une section sont à des centaines de
+>    mètres) — `parcelle-ingestion.ts · polygonizeBoundaries`.
+> 3. **Jointures « premier contenant » (libellés ET NICAD).** Un point tombe à
+>    la fois dans sa vraie section et dans tout anneau d'ensemble/face sans
+>    numéro qui l'englobe : au « premier contenant » (ordre de grille
+>    arbitraire), l'enveloppe raflait la jointure. Les libellés `numero_section`
+>    sont rattachés au **plus petit polygone contenant** ; la composante section
+>    du **NICAD** (jointure parcelle ∈ section) prend la **plus petite section
+>    NUMÉROTÉE contenante** (`parcelle-ingestion.ts · findSectionNumero`) —
+>    sinon `numero_section` absent (« 000 ») ou faux → collisions de NICAD
+>    (faux doublons).
+
+**Fichiers · fonctions.** `src/lib/parcelle-ingestion.ts`
+(`SectionCandidate`, `sections`, option `sectionsOnly`),
+`src/lib/cadastre/build-sections.ts`, `src/lib/cadastre/sections-data.ts`
+(persistance + overlaps SQL brut + `listSectionBatches`), `src/lib/cadastre/data.ts`
+(`getCommuneInfo2026ForPoints`), `src/lib/import/run-job.ts` (branche `sections`),
+`src/app/api/cadastre/sections/{import,overlaps,correct,batches}/route.ts`,
+`src/app/cadastre/sections/page.tsx` + `src/components/cadastre/SectionsClient.tsx`.
+
+---
+
+## 12. Annexe — compteurs du rapport & variables d'environnement
 
 **Compteurs `DxfIngestionReport`** (localiser une fuite de parcelles) :
 
@@ -260,7 +693,11 @@ point (`MapLibreMap`).
 | `nbPolygonesEnveloppeIgnores` | polygones > plafond d'aire (emprise de zone) |
 | `nbHorsEmprise` | entités hors de la plage UTM28N plausible |
 | `nbTextesHorsParcelle` | libellés ne tombant dans aucune parcelle |
-| `nbChevauchements` | superpositions partielles (erreurs de topologie) |
+| `nbParcellesMultiNumeros` | parcelles portant plusieurs numéros distincts — fusion probable (§4 bis) |
+| `nbChevauchements` | chevauchements erronés détectés (intersection > seuil, §6 bis) |
+| `nbChevauchementsCorriges` | parcelles retaillées pour résorber ces chevauchements (§6 bis) |
+| `nbParcellesVideesParChevauchement` | parcelles retirées car entièrement absorbées à la retaille (§6 bis) |
+| `reconciliation` | recensement lecteur DXF : `seen`/`emitted`/`skipped` par type (anti-perte silencieuse, §2) |
 
 \* exposé comme `warning` dans le rapport.
 
@@ -268,14 +705,20 @@ point (`MapLibreMap`).
 
 | Variable | Défaut | Rôle |
 |---|---:|---|
-| `DXF_POLYGONIZE_PRECISION_SCALES` | `1000,100,20` | grilles de snap-rounding (§4) |
+| `DXF_POLYGONIZE_PRECISION_SCALES` | `1000,100,20,10,5` | grilles de snap-rounding, fin → grossier (§4-5) |
+| `DXF_POLYGONIZE_SNAP_TOLERANCE_M` | `0.25` | raccord des extrémités pendantes avant noding, 0 = désactivé (§4 bis) |
+| `DXF_SECTION_SNAP_TOLERANCE_M` | `1` | idem, spécifique à la couche `limites_sections` (trous métriques, §11) |
 | `DXF_POLYGONIZE_TILE_THRESHOLD` | `20000` | seuil de bascule vers le tuilage |
-| `DXF_POLYGONIZE_TILE_TARGET` | `4000` | segments visés par tuile |
+| `DXF_POLYGONIZE_TILE_TARGET` | `4000` | segments visés par tuile (grille initiale) |
 | `DXF_POLYGONIZE_TILE_MARGIN_M` | `400` | marge de collecte des segments par tuile |
+| `DXF_POLYGONIZE_TILE_MAX_SEGMENTS` | `8000` | au-delà, la tuile est subdivisée (§5) |
+| `DXF_POLYGONIZE_TILE_MAX_DEPTH` | `8` | profondeur max de subdivision quadtree (§5) |
+| `DXF_POLYGONIZE_TILE_MIN_SIZE_M` | `500` | taille mini d'une région subdivisable (§5) |
 | `DXF_POLYGONIZE_MIN_AREA_M2` | `5` | aire mini (élimine les slivers) |
 | `DXF_POLYGONIZE_MAX_AREA_M2` | `50000` | aire maxi (élimine l'anneau enveloppe) |
-| `DXF_OVERLAP_COINCIDE_RATIO` | `0.9` | seuil de coïncidence (doublon, §5) |
-| `DXF_OVERLAP_CONTAIN_RATIO` | `0.9` | seuil de contenance (enveloppe, §5) |
+| `DXF_OVERLAP_COINCIDE_RATIO` | `0.9` | seuil de coïncidence (doublon, §6) |
+| `DXF_OVERLAP_CONTAIN_RATIO` | `0.9` | seuil de contenance (enveloppe, §6) |
+| `DXF_OVERLAP_FIX_MIN_M2` | `0.5` | aire d'intersection (m²) à partir de laquelle un chevauchement est corrigé (§6 bis) |
 | `DXF_CLOSE_SNAP_TOLERANCE_M` | `0.05` | fermeture des polylignes quasi fermées |
 
 **Fichiers clés :** `src/lib/dxf-native.ts` (lecture + `decodeMText`),

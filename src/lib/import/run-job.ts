@@ -24,6 +24,7 @@ import {
   parcellesToFeatureCollection,
 } from "@/lib/parcelle-ingestion";
 import { assignNicad2026FromCommunes } from "@/lib/cadastre/assign-nicad-2026";
+import { buildLimiteSections } from "@/lib/cadastre/build-sections";
 import { analyzeGeoJSON, generateAIReport } from "@/lib/geo-engine";
 import { saveGeoJsonLocally } from "@/lib/geo-storage";
 import { filterOutOfSenegal } from "@/lib/senegal-bounds";
@@ -49,8 +50,40 @@ export async function runImportJob(jobId: number): Promise<void> {
     const sourceBuf = await loadImportUpload(job.fileKey);
     const dxfBuf = await toDxfBuffer(sourceBuf, job.sourceType as SourceType);
 
-    await setJobPhase(jobId, "build", 10);
     const layerMapping = (job.layerMapping as LayerMapping | null) ?? undefined;
+
+    // ── Cible « sections » : construit la table limite_section + contrôle des
+    // chevauchements, sans composer les parcelles ni produire d'Analysis. ──
+    if (job.kind === "sections") {
+      await setJobPhase(jobId, "build", 20);
+      const ingestion = await ingestDxfToParcelles(dxfBuf, job.fileName, {
+        layerMapping,
+        sectionsOnly: true,
+      });
+
+      await setJobPhase(jobId, "sections", 65);
+      const built = await buildLimiteSections(ingestion, job.fileName);
+
+      await prisma.importJob.update({
+        where: { id: jobId },
+        data: {
+          status: "completed",
+          phase: "done",
+          progress: 100,
+          totalBuilt: built.nbSections,
+          report: {
+            kind: "sections",
+            sourceFichier: built.sourceFichier,
+            nbSections: built.nbSections,
+            nbSansCommune: built.nbSansCommune,
+            nbOverlaps: built.nbOverlaps,
+          },
+        },
+      });
+      return;
+    }
+
+    await setJobPhase(jobId, "build", 10);
     const ingestion = await ingestDxfToParcelles(dxfBuf, job.fileName, { layerMapping });
 
     await setJobPhase(jobId, "nicad", 60);

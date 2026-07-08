@@ -1,6 +1,6 @@
 "use client";
 import RMap, {
-  Source, Layer, NavigationControl, ScaleControl, Popup,
+  Source, Layer, NavigationControl, ScaleControl, Popup, Marker,
 } from "react-map-gl/maplibre";
 import type { MapRef, MapLayerMouseEvent } from "react-map-gl/maplibre";
 import type { StyleSpecification } from "maplibre-gl";
@@ -34,6 +34,13 @@ const MISSING_NICAD_VALUES = [
   "", "null", "undefined", "na", "n/a", "néant", "neant", "aucun", "sans nicad", "0", "-",
 ];
 
+// Types d'erreur dont la géométrie EST une parcelle déjà colorée par les tuiles
+// vecteur (`_nicad` pour les doublons, `_nstat` pour les NICAD manquants/courts).
+// Exclus de l'overlay `error-geoms` pour éviter de superposer une seconde copie de
+// la parcelle. Les autres types (OVERLAP/GAP/SLIVER/INVALID_GEOM) sont des
+// géométries « région/résidu » sans équivalent sur les tuiles → gardées en overlay.
+const TILE_COLORED_ERROR_TYPES = new Set(["DUPLICATE", "MISSING_NICAD", "SHORT_NICAD"]);
+
 interface GeoError {
   id: number;
   errorType: string;
@@ -64,7 +71,30 @@ interface Props {
   focusTarget?: { nicad: string; key: number } | null;
   conformeHighlight?: boolean;
   nonConformeNicads?: string[];
+  /** Occurrences d'un NICAD dupliqué à annoter sur la carte (centroïdes numérotés). */
+  occurrences?: { lng: number; lat: number; label: string }[];
+  /** Emprise englobant toutes les occurrences → fit au clic sur une doublure. */
+  occurrencesBounds?: [number, number, number, number] | null;
+  /** Mode édition doublons : les marqueurs deviennent cliquables (« conserver celle-ci »). */
+  occurrenceEditMode?: boolean;
+  /** Clic sur un marqueur d'occurrence en mode édition (index dans `occurrences`). */
+  onOccurrenceKeep?: (index: number) => void;
+  /** Affiche les limites de sections (table `limite_section`) + numéros de section. */
+  showSections?: boolean;
+  /** Colore les parcelles SANS section rattachée (`_ssec`, numero_section absent/« 000 »). */
+  sansSectionHighlight?: boolean;
 }
+
+/** Couleur des parcelles sans section (orange, distinct des types d'erreur). */
+const SANS_SECTION_COLOR = "#f97316";
+
+/** Couleur des limites/étiquettes de sections (violet, distinct des parcelles grises). */
+const SECTION_COLOR = "#7c3aed";
+/** Zoom minimal d'affichage des étiquettes de numéros de section (marqueurs DOM). */
+const SECTION_LABEL_MIN_ZOOM = 10;
+
+interface SectionLabel { lng: number; lat: number; numSection: string | null; commune: string | null }
+interface SectionsData { boundaries: GeoJSON.FeatureCollection; labels: SectionLabel[] }
 
 interface PopupState { lng: number; lat: number; html: string }
 
@@ -93,7 +123,7 @@ function computeBbox(features: unknown[]): [[number, number], [number, number]] 
   return found ? [[w, s], [e, n]] : null;
 }
 
-export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, errors, selectedErrorId, blinkIntense = false, onFeatureClick, selectedNicads = [], searchedNicads = [], focusTarget, conformeHighlight = false, nonConformeNicads = [] }: Props) {
+export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, errors, selectedErrorId, blinkIntense = false, onFeatureClick, selectedNicads = [], searchedNicads = [], focusTarget, conformeHighlight = false, nonConformeNicads = [], occurrences = [], occurrencesBounds = null, occurrenceEditMode = false, onOccurrenceKeep, showSections = false, sansSectionHighlight = false }: Props) {
   const mapRef = useRef<MapRef>(null);
   const blinkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const onClickRef = useRef(onFeatureClick);
@@ -106,13 +136,43 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
   const [blinkOpacity, setBlinkOpacity] = useState(0);
   const [blinkColor, setBlinkColor] = useState("#ffffff");
   const [cursor, setCursor] = useState("grab");
+  // Limites de sections (chargées une fois, à la première activation).
+  const [sectionsData, setSectionsData] = useState<SectionsData | null>(null);
+  // Zoom courant : les étiquettes de sections (marqueurs DOM) ne sont rendues
+  // qu'à partir de SECTION_LABEL_MIN_ZOOM pour éviter l'encombrement en vue large.
+  const [zoom, setZoom] = useState(INITIAL_VIEW.zoom);
+
+  // ── Chargement des limites de sections (table limite_section, tous lots) ───
+  useEffect(() => {
+    if (!showSections || sectionsData) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/cadastre/sections/geojson");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Chargement des sections échoué");
+        if (!cancelled) {
+          setSectionsData({
+            boundaries: data.boundaries ?? { type: "FeatureCollection", features: [] },
+            labels: data.labels ?? [],
+          });
+        }
+      } catch (err) {
+        console.warn("[MapLibreMap] sections:", err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showSections, sectionsData]);
 
   // ── URL des tuiles vectorielles ───────────────────────────────────────────
   // Composant client-only (ssr:false) → `window` disponible. `tilesVersion`
   // (updatedAt) invalide le cache navigateur après une correction.
   const tilesUrl = useMemo(() => {
     const origin = typeof window !== "undefined" ? window.location.origin : "";
-    const v = tilesVersion != null ? `?v=${encodeURIComponent(String(tilesVersion))}` : "";
+    // `sv` = version du SCHÉMA des propriétés de tuiles (incrémenter à chaque
+    // ajout de propriété, ex. _ssec) : invalide le cache navigateur même quand
+    // `tilesVersion` (updatedAt) n'a pas bougé.
+    const v = tilesVersion != null ? `?v=${encodeURIComponent(String(tilesVersion))}&sv=2` : "?sv=2";
     return `${origin}/api/analyses/${analysisId}/tiles/{z}/{x}/{y}${v}`;
   }, [analysisId, tilesVersion]);
 
@@ -139,10 +199,16 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
   }, [analysisId]);
 
   // ── Error geometries GeoJSON ──────────────────────────────────────────────
+  // On NE dessine PAS la géométrie propre des erreurs dont la géométrie EST une
+  // parcelle déjà rendue (et colorée) par les tuiles vecteur : la redessiner en
+  // overlay superposerait une seconde copie (légèrement décalée) de la même
+  // parcelle. Ces types sont colorés via les tuiles (`_nicad` / `_nstat`). On ne
+  // garde en overlay que les géométries « région/résidu » absentes des tuiles :
+  // chevauchement (intersection), espace vide, sliver, géométrie invalide.
   const errorGeomsFc = useMemo<GeoJSON.FeatureCollection>(() => ({
     type: "FeatureCollection",
     features: errors
-      .filter((e) => e.geometry)
+      .filter((e) => e.geometry && !TILE_COLORED_ERROR_TYPES.has((e.errorType ?? "").toUpperCase()))
       .map((e) => ({
         type: "Feature" as const,
         id: e.id,
@@ -233,6 +299,9 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
     if (!map) return;
     const err = errors.find((e) => e.id === selectedErrorId);
     if (!err) return;
+    // Doublons : le zoom englobe TOUTES les occurrences (via `occurrencesBounds`),
+    // pas la seule géométrie de cette occurrence → géré par l'effet dédié ci-dessous.
+    if (err.errorType?.toUpperCase() === "DUPLICATE") return;
     // L'erreur porte sa propre géométrie (gap/sliver/overlap) → fit direct ;
     // sinon on résout l'emprise de la parcelle nicad1 côté serveur.
     if (err.geometry) {
@@ -249,6 +318,19 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
     void fitToNicad(focusTarget.nicad);
   }, [mapReady, focusTarget, fitToNicad]);
 
+  // ── Fit bounds sur TOUTES les occurrences d'un doublon ────────────────────
+  // Au clic sur une doublure, on zoome sur l'emprise englobant chaque occurrence
+  // (et non la seule parcelle cliquée) pour les comparer visuellement d'un coup.
+  useEffect(() => {
+    if (!mapReady || !occurrencesBounds) return;
+    const map = mapRef.current;
+    if (!map) return;
+    map.fitBounds(
+      [[occurrencesBounds[0], occurrencesBounds[1]], [occurrencesBounds[2], occurrencesBounds[3]]],
+      { padding: 120, maxZoom: 18, duration: 700 }
+    );
+  }, [mapReady, occurrencesBounds]);
+
   // ── Click handler ─────────────────────────────────────────────────────────
   const handleClick = useCallback((e: MapLayerMouseEvent) => {
     const feat = e.features?.[0];
@@ -257,15 +339,30 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
     // Le point cliqué (WGS84) est garanti intérieur à la parcelle : sert de
     // localisateur fiable pour la suppression depuis la table attributaire.
     onClickRef.current?.(props, { lng: e.lngLat.lng, lat: e.lngLat.lat });
+    // Code section : propriété directe si renseignée, sinon dérivé du NICAD
+    // (16 caractères = préfixe 8 + section 3 + parcelle 5, cf. nicad.ts).
+    const directSection = String(props.numero_section ?? props.num_section ?? props.NUM_SECTION ?? "").trim();
+    const nicad = String(props.nicad ?? props.NICAD ?? "").trim();
+    const sectionCode =
+      directSection && directSection !== "000"
+        ? directSection
+        : nicad.length === 16
+          ? nicad.slice(8, 11)
+          : directSection;
+    const sectionRow = sectionCode
+      ? `<div style="display:flex;gap:6px;padding:1px 0;border-bottom:1px solid #e5e7eb;margin-bottom:2px">` +
+        `<span style="color:#6b7280;width:80px;flex-shrink:0;font-size:10px">Code section</span>` +
+        `<span style="color:#111827;font-weight:600">${escHtml(sectionCode)}</span></div>`
+      : "";
     const rows = Object.entries(props)
-      .filter(([k]) => !k.startsWith("_"))
+      .filter(([k]) => !k.startsWith("_") && k !== "numero_section" && k !== "num_section" && k !== "NUM_SECTION")
       .slice(0, 10)
       .map(([k, v]) =>
         `<div style="display:flex;gap:6px;padding:1px 0">` +
         `<span style="color:#6b7280;width:80px;flex-shrink:0;font-size:10px">${escHtml(k)}</span>` +
         `<span style="color:#111827;word-break:break-all;font-weight:500">${escHtml(String(v ?? ""))}</span></div>`
       ).join("");
-    setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, html: rows });
+    setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, html: sectionRow + rows });
   }, []);
 
   return (
@@ -281,6 +378,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
         onMouseLeave={() => setCursor("grab")}
         cursor={cursor}
         onLoad={() => setMapReady(true)}
+        onMoveEnd={(e) => setZoom(e.viewState.zoom)}
         attributionControl={false}
       >
         <NavigationControl position="top-right" showCompass={false} />
@@ -291,6 +389,17 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
           <Layer id="parcelles-fill" source-layer="parcelles" type="fill" paint={{ "fill-color": "#6b7280", "fill-opacity": 0.22 }} />
           <Layer id="parcelles-line" source-layer="parcelles" type="line" paint={{ "line-color": "#9ca3af", "line-width": 0.8, "line-opacity": 0.6 }} />
         </Source>
+
+        {/* ── Limites de sections (table limite_section) — contours violets ── */}
+        {showSections && sectionsData && (
+          <Source id="sections-limites" type="geojson" data={sectionsData.boundaries}>
+            <Layer
+              id="sections-line"
+              type="line"
+              paint={{ "line-color": SECTION_COLOR, "line-width": 2, "line-opacity": 0.9 }}
+            />
+          </Source>
+        )}
 
         {/* ── Error geometry overlays ── */}
         <Source id="error-geoms" type="geojson" data={errorGeomsFc}>
@@ -367,6 +476,55 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
           </>
         )}
 
+        {/* ── Parcelles à NICAD manquant / trop court (couleurs de l'accueil) ──
+            Colorées directement depuis le vecteur (`_nstat`), indépendamment de la
+            liste d'erreurs embarquée (plafonnée) : sinon seules les ~2000 premières
+            erreurs seraient visibles alors qu'un gros DXF peut en porter 100k+. ── */}
+        <Layer
+          id="missing-nicad-fill"
+          source="parcelles"
+          source-layer="parcelles"
+          type="fill"
+          beforeId="error-type-top"
+          paint={{ "fill-color": errorTypeColor("missing_nicad"), "fill-opacity": 0.5 }}
+          filter={["==", ["get", "_nstat"], "missing"] as any}
+        />
+        <Layer
+          id="short-nicad-fill"
+          source="parcelles"
+          source-layer="parcelles"
+          type="fill"
+          beforeId="error-type-top"
+          paint={{ "fill-color": errorTypeColor("short_nicad"), "fill-opacity": 0.5 }}
+          filter={["==", ["get", "_nstat"], "short"] as any}
+        />
+
+        {/* ── Parcelles SANS section rattachée (numero_section absent/« 000 ») ──
+            La composante section de leur NICAD est indéterminée : signalées en
+            orange directement depuis le vecteur (`_ssec`), sur toute l'analyse. ── */}
+        {sansSectionHighlight && (
+          <>
+            <Layer
+              id="sans-section-fill"
+              source="parcelles"
+              source-layer="parcelles"
+              type="fill"
+              beforeId="error-type-top"
+              paint={{ "fill-color": SANS_SECTION_COLOR, "fill-opacity": 0.45 }}
+              filter={["==", ["get", "_ssec"], 1] as any}
+            />
+            <Layer
+              id="sans-section-line"
+              source="parcelles"
+              source-layer="parcelles"
+              type="line"
+              beforeId="error-type-top"
+              paint={{ "line-color": SANS_SECTION_COLOR, "line-width": 1.2, "line-opacity": 0.9 }}
+              filter={["==", ["get", "_ssec"], 1] as any}
+            />
+          </>
+        )}
+
         {/* ── Error type fill overlays (below anchor) ── */}
         {errorTypes.map((type) => (
           <Layer
@@ -420,6 +578,68 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
           paint={{ "line-color": "#eab308", "line-width": 3, "line-opacity": 1 }}
           filter={["in", ["get", "_nicad"], ["literal", searchedNicads]] as any}
         />
+
+        {/* ── Annotations des occurrences d'un doublon (centroïdes numérotés) ──
+            En mode édition, chaque marqueur est cliquable : « conserver celle-ci »
+            supprime les autres occurrences du même NICAD. ── */}
+        {occurrences.map((o, i) => (
+          <Marker key={`occ-${i}`} longitude={o.lng} latitude={o.lat} anchor="center">
+            <div
+              onClick={occurrenceEditMode ? () => onOccurrenceKeep?.(i) : undefined}
+              title={
+                occurrenceEditMode
+                  ? `Conserver l'occurrence ${o.label} et supprimer les autres`
+                  : `Occurrence ${o.label}`
+              }
+              style={{
+                width: occurrenceEditMode ? 26 : 22,
+                height: occurrenceEditMode ? 26 : 22,
+                borderRadius: "50%",
+                background: errorTypeColor("duplicate"),
+                color: "#fff",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 12,
+                fontWeight: 700,
+                border: `2px solid ${occurrenceEditMode ? "#fde047" : "#fff"}`,
+                boxShadow: "0 1px 5px rgba(0,0,0,.45)",
+                cursor: occurrenceEditMode ? "pointer" : "default",
+                userSelect: "none",
+              }}
+            >
+              {o.label}
+            </div>
+          </Marker>
+        ))}
+
+        {/* ── Étiquettes des numéros de section (marqueurs DOM : le style raster
+            n'a pas de serveur de glyphes, une couche symbole ne rendrait rien).
+            Masquées en vue large pour ne pas encombrer la carte. ── */}
+        {showSections && sectionsData && zoom >= SECTION_LABEL_MIN_ZOOM &&
+          sectionsData.labels.map((s, i) =>
+            s.numSection ? (
+              <Marker key={`sec-${i}`} longitude={s.lng} latitude={s.lat} anchor="center">
+                <div
+                  style={{
+                    padding: "1px 7px",
+                    borderRadius: 9999,
+                    background: SECTION_COLOR,
+                    color: "#fff",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    border: "1.5px solid #fff",
+                    boxShadow: "0 1px 4px rgba(0,0,0,.4)",
+                    whiteSpace: "nowrap",
+                    userSelect: "none",
+                    pointerEvents: "none",
+                  }}
+                >
+                  {s.numSection}
+                </div>
+              </Marker>
+            ) : null
+          )}
 
         {popup && (
           <Popup

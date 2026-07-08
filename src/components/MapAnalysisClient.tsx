@@ -1,12 +1,12 @@
 "use client";
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle, CheckCircle, Brain, FileText,
   Download, Wrench, ChevronRight, MapPin, X, Trash2, Table2,
-  ChevronDown, ChevronUp, RefreshCw, Copy, Search,
+  ChevronDown, ChevronUp, RefreshCw, Copy, Search, Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -72,15 +72,126 @@ function isNicadProblematic(nicad: string): boolean {
   return nicad.trim().length < 8;
 }
 
+type BBox = [number, number, number, number];
+
+// Clés de propriété portant le NICAD (alignées sur geo-engine.extractNicad et
+// feature-locator.NICAD_KEYS côté serveur).
+const NICAD_KEYS = ["nicad", "NICAD", "Nicad", "NIC", "NUM_NICAD", "num_nicad", "CODE_NICAD", "code_nicad", "CODIF", "codif"];
+
+/** NICAD affiché d'une ligne de la table (ordre de repli des variantes usuelles). */
+function rowNicad(r: Record<string, unknown>): string {
+  return String(r.NICAD ?? r.nicad ?? r.NIC ?? r.Nicad ?? "").trim();
+}
+
+/** Réécrit le NICAD d'une ligne sur toutes ses clés porteuses (+ `nicad`). */
+function withRowNicad(r: Record<string, unknown>, nicad: string): Record<string, unknown> {
+  const next = { ...r };
+  for (const k of NICAD_KEYS) if (k in next) next[k] = nicad;
+  next.nicad = nicad;
+  return next;
+}
+
+// Emprise [w,s,e,n] d'une géométrie GeoJSON (WGS84). Sert à annoter/zoomer les
+// occurrences d'un doublon quand le GeoJSON complet est chargé côté client.
+function geomBbox(geom: unknown): BBox | null {
+  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  let found = false;
+  const walk = (c: unknown): void => {
+    if (!Array.isArray(c)) return;
+    if (typeof c[0] === "number" && typeof c[1] === "number") {
+      const lng = c[0] as number, lat = c[1] as number;
+      if (Number.isFinite(lng) && Number.isFinite(lat)) {
+        found = true;
+        if (lng < w) w = lng; if (lat < s) s = lat;
+        if (lng > e) e = lng; if (lat > n) n = lat;
+      }
+    } else { for (const i of c) walk(i); }
+  };
+  const g = geom as { coordinates?: unknown } | null;
+  if (g?.coordinates) walk(g.coordinates);
+  return found ? [w, s, e, n] : null;
+}
+
+// Dérive les centroïdes numérotés + l'emprise englobante des occurrences d'un
+// doublon à partir de leurs `_bbox`. Ignore les occurrences sans géométrie
+// ([0,0,0,0], marqueur « absent » posé côté serveur).
+function occurrencesFromMembers(
+  members: Record<string, unknown>[]
+): { occ: { lng: number; lat: number; label: string }[]; bounds: BBox | null } {
+  const occ: { lng: number; lat: number; label: string }[] = [];
+  let bounds: BBox | null = null;
+  members.forEach((m, i) => {
+    const b = m._bbox as BBox | undefined;
+    if (!Array.isArray(b) || b.length !== 4 || !b.every((x) => Number.isFinite(x))) return;
+    const [w, s, e, n] = b;
+    if (w === 0 && s === 0 && e === 0 && n === 0) return;
+    occ.push({ lng: (w + e) / 2, lat: (s + n) / 2, label: String(i + 1) });
+    bounds = bounds
+      ? [Math.min(bounds[0], w), Math.min(bounds[1], s), Math.max(bounds[2], e), Math.max(bounds[3], n)]
+      : [w, s, e, n];
+  });
+  return { occ, bounds };
+}
+
 const SEVERITY_LABELS: Record<string, string> = {
   CRITICAL: "Critique", HIGH: "Élevé", MEDIUM: "Moyen", LOW: "Faible",
 };
+
+// Cellule d'action « mode édition doublon » : réassigner le NICAD de cette
+// occurrence (input local) ou la conserver en supprimant les autres. L'input est
+// pré-rempli au NICAD courant et remis à jour quand celui-ci change (rename/suppr.).
+function OccurrenceEditActions({
+  index,
+  current,
+  onRename,
+  onKeepOnly,
+}: {
+  index: number;
+  current: string;
+  onRename?: (index: number, nicad: string) => void;
+  onKeepOnly?: (index: number) => void;
+}) {
+  // `current` change (rename/ré-indexation) → la clé au point d'appel remonte le
+  // composant, ré-initialisant l'input ; pas de setState en effet.
+  const [value, setValue] = useState(current);
+  const trimmed = value.trim();
+  return (
+    <div className="flex items-center gap-1 justify-center">
+      <input
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && trimmed && trimmed !== current) onRename?.(index, trimmed); }}
+        placeholder="Nouveau NICAD"
+        className="w-28 h-6 rounded border border-border bg-background px-1.5 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-ring"
+        title="Nouveau NICAD pour cette occurrence"
+      />
+      <button
+        onClick={() => onRename?.(index, trimmed)}
+        disabled={!trimmed || trimmed === current}
+        className="cursor-pointer px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/15 text-blue-400 hover:bg-blue-500/25 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+        title="Réassigner ce NICAD à l'occurrence sélectionnée"
+      >
+        Renommer
+      </button>
+      <button
+        onClick={() => onKeepOnly?.(index)}
+        className="cursor-pointer px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-500/15 text-green-400 hover:bg-green-500/25 transition-colors whitespace-nowrap"
+        title="Conserver cette occurrence et supprimer les autres du même NICAD"
+      >
+        Conserver
+      </button>
+    </div>
+  );
+}
 
 function AttributeTable({
   rows,
   selectable = false,
   selectedKeys,
   onToggle,
+  editMode = false,
+  onKeepOnly,
+  onRename,
 }: {
   rows: Record<string, unknown>[];
   /** Affiche une colonne de cases à cocher (parcelles supprimables, clé = index de ligne). */
@@ -88,6 +199,12 @@ function AttributeTable({
   /** Index (dans `rows`) des lignes cochées. */
   selectedKeys?: Set<number>;
   onToggle?: (index: number) => void;
+  /** Mode édition doublons : ajoute une colonne d'actions (renommer / conserver) par occurrence. */
+  editMode?: boolean;
+  /** Conserve l'occurrence `index` et supprime les autres du même NICAD. */
+  onKeepOnly?: (index: number) => void;
+  /** Réassigne le NICAD `nicad` à l'occurrence `index`. */
+  onRename?: (index: number, nicad: string) => void;
 }) {
   const allKeys = Array.from(new Set(rows.flatMap((r) => Object.keys(r))));
   const cols = [
@@ -103,6 +220,11 @@ function AttributeTable({
         <tr>
           {selectable && (
             <th className="px-2 py-1.5 border-b border-border bg-card w-8" />
+          )}
+          {editMode && (
+            <th className="px-2 py-1.5 border-b border-border bg-card text-center font-medium text-muted-foreground whitespace-nowrap">
+              Action
+            </th>
           )}
           {cols.map((col) => (
             <th
@@ -126,6 +248,17 @@ function AttributeTable({
                     checked={selectedKeys?.has(i) ?? false}
                     onChange={() => onToggle?.(i)}
                     title="Sélectionner pour suppression"
+                  />
+                </td>
+              )}
+              {editMode && (
+                <td className="px-2 py-1 border-b border-border/40">
+                  <OccurrenceEditActions
+                    key={`occ-edit-${i}-${rowNicad(row)}`}
+                    index={i}
+                    current={rowNicad(row)}
+                    onRename={onRename}
+                    onKeepOnly={onKeepOnly}
                   />
                 </td>
               )}
@@ -153,6 +286,15 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   const router = useRouter();
   const [selectedError, setSelectedError] = useState<GeoError | null>(null);
   const [selectedDupNicad, setSelectedDupNicad] = useState<string | null>(null);
+  // Mode édition des doublures : marqueurs cliquables + action « Conserver » par
+  // occurrence dans la table attributaire (résout un doublon en un clic).
+  const [dupEditMode, setDupEditMode] = useState(false);
+  // Annotations d'occurrences (centroïdes numérotés) + emprise englobante pour le
+  // zoom, alimentées au clic sur une doublure.
+  const [dupOccurrences, setDupOccurrences] = useState<{ lng: number; lat: number; label: string }[]>([]);
+  const [dupBounds, setDupBounds] = useState<BBox | null>(null);
+  // Garde anti double-soumission d'une réassignation de NICAD en cours.
+  const renamingRef = useRef(false);
   // Lignes cochées (index dans `tableRows`) pour suppression de parcelles.
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const [deletingRows, setDeletingRows] = useState(false);
@@ -167,7 +309,15 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   const [displayFc, setDisplayFc] = useState<GeoJSON.FeatureCollection | null>(null);
   // Jeu volumineux : pas de chargement du FC complet → pas d'état « en cours ».
   const [geoLoading, setGeoLoading] = useState(() => (analysis.totalFeatures ?? 0) <= 20000);
-  const [showConforme, setShowConforme] = useState(false);
+  // Parcelles intactes (conformes) affichées en vert dès le chargement de la
+  // carte : erreurs colorées par type (couleurs de l'accueil) + intactes en vert.
+  const [showConforme, setShowConforme] = useState(true);
+  // Limites de sections (table limite_section) + numéros affichées sur la carte.
+  const [showSections, setShowSections] = useState(true);
+  // Parcelles SANS section rattachée (numero_section absent/« 000 ») colorées
+  // en orange : leur NICAD porte une section indéterminée.
+  const [showSansSection, setShowSansSection] = useState(true);
+  const [sansSectionCount, setSansSectionCount] = useState<number | null>(null);
   const [isSavingReport, setIsSavingReport] = useState(false);
   const [isRegeneratingReport, setIsRegeneratingReport] = useState(false);
   const [aiReport, setAiReport] = useState<string | null>(analysis.aiReport);
@@ -240,8 +390,14 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       try {
         const res = await fetch(`/api/analyses/${analysis.id}/map-meta`);
         if (!res.ok) return;
-        const meta = (await res.json()) as { bbox: [number, number, number, number] | null };
-        if (!cancelled) setInitialBounds(meta.bbox);
+        const meta = (await res.json()) as {
+          bbox: [number, number, number, number] | null;
+          sansSection?: number;
+        };
+        if (!cancelled) {
+          setInitialBounds(meta.bbox);
+          setSansSectionCount(typeof meta.sansSection === "number" ? meta.sansSection : null);
+        }
       } catch {
         /* le fit initial est optionnel */
       }
@@ -306,7 +462,10 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     return m;
   }, [displayFc]);
 
-  // Lookup map: NICAD → ALL features (needed for duplicate group comparison)
+  // Lookup map: NICAD → ALL features (needed for duplicate group comparison).
+  // On attache `_bbox` (emprise WGS84 dérivée de la géométrie) pour permettre le
+  // zoom/annotation des occurrences et leur localisation précise à la suppression,
+  // de la même façon que les membres servis par l'endpoint `nicad-group`.
   const nicadToAllFeatures = useMemo<Map<string, Record<string, unknown>[]>>(() => {
     const m = new Map<string, Record<string, unknown>[]>();
     for (const feat of displayFc?.features ?? []) {
@@ -314,7 +473,8 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       const nicad = String(p.NICAD ?? p.nicad ?? p.NIC ?? p.Nicad ?? "");
       if (nicad) {
         if (!m.has(nicad)) m.set(nicad, []);
-        m.get(nicad)!.push(p);
+        const b = feat.geometry ? geomBbox(feat.geometry) : null;
+        m.get(nicad)!.push(b ? { ...p, _bbox: b } : p);
       }
     }
     return m;
@@ -362,6 +522,22 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     [analysis.id, nicadToAllFeatures]
   );
 
+  // Pose les annotations d'occurrences + l'emprise de zoom à partir des membres
+  // d'un doublon (chacun porte `_bbox`). Les labels suivent l'ordre des lignes de
+  // la table (« Occurrence N »).
+  const applyOccurrenceMarkers = useCallback((members: Record<string, unknown>[]) => {
+    const { occ, bounds } = occurrencesFromMembers(members);
+    setDupOccurrences(occ);
+    setDupBounds(bounds);
+  }, []);
+
+  // Sort du contexte « doublon » : efface la sélection de groupe et ses annotations.
+  const clearDuplicateFocus = useCallback(() => {
+    setSelectedDupNicad(null);
+    setDupOccurrences([]);
+    setDupBounds(null);
+  }, []);
+
   const handleFeatureClick = useCallback((props: Record<string, unknown>, point?: { lng: number; lat: number }) => {
     setSelectedParcel(props);
     setSearchedNicad(null);
@@ -384,17 +560,20 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       if (duplicateNicadSet.has(nicad)) {
         setSelectedDupNicad(nicad);
         setSelectedRows(new Set());
+        setDupOccurrences([]);
+        setDupBounds(null);
         setTableOpen(true);
         void fetchNicadGroup(nicad).then((members) => {
           if (members.length > 1) {
             setTableRows(members.map((p, i) => ({ _role: `Occurrence ${i + 1}`, ...p })));
+            applyOccurrenceMarkers(members);
           }
         });
         return;
       }
     }
 
-    setSelectedDupNicad(null);
+    clearDuplicateFocus();
     setTableRows((prev) => {
       const idx = prev.findIndex(
         (r) => String(r.NICAD ?? r.nicad ?? r.NIC ?? r.Nicad ?? "") === nicad && nicad !== ""
@@ -403,23 +582,27 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       return next.map((r, i) => ({ ...r, _role: next.length === 1 ? "Sélectionné" : `P${i + 1}` }));
     });
     setTableOpen(true);
-  }, [analysis.errors, correctedErrorIds, duplicateNicadSet, fetchNicadGroup]);
+  }, [analysis.errors, correctedErrorIds, duplicateNicadSet, fetchNicadGroup, applyOccurrenceMarkers, clearDuplicateFocus]);
 
-  // Select a duplicate group → highlight all occurrences + populate comparison table
+  // Select a duplicate group → zoom sur toutes les occurrences + annotations +
+  // table de comparaison. Le blink intense reste piloté par `selectedError`.
   const selectDuplicateGroup = useCallback(
     (group: { nicad: string; errors: GeoError[]; objectIds: string[] }) => {
       setSearchedNicad(null);
       setSelectedDupNicad(group.nicad);
-      setSelectedError(group.errors[0] ?? null); // fit map to first occurrence + blink intense
+      setSelectedError(group.errors[0] ?? null); // blink intense (le zoom = emprise des occurrences)
       setTableOpen(true);
       setSelectedRows(new Set());
+      setDupOccurrences([]);
+      setDupBounds(null);
       void fetchNicadGroup(group.nicad).then((members) => {
         if (members.length > 0) {
           setTableRows(members.map((p, i) => ({ _role: `Occurrence ${i + 1}`, ...p })));
+          applyOccurrenceMarkers(members);
         }
       });
     },
-    [fetchNicadGroup]
+    [fetchNicadGroup, applyOccurrenceMarkers]
   );
 
   const toggleRow = useCallback((index: number) => {
@@ -431,19 +614,20 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     });
   }, []);
 
-  // Supprime les parcelles cochées de la table attributaire. Chaque ligne est
+  // Supprime les lignes `indices` de la table attributaire. Chaque ligne est
   // localisée de façon fiable : point intérieur (clic carte), emprise
   // (occurrence d'un groupe NICAD) ou NICAD (repli). L'édition est écrite dans
   // `correctedData` côté serveur ; les erreurs de topologie rattachées
   // (`_errorId`) sont marquées corrigées. Action irréversible → confirmation.
-  const handleDeleteSelectedParcels = useCallback(async () => {
-    const indices = Array.from(selectedRows).sort((a, b) => a - b);
-    const rows = indices.map((i) => tableRows[i]).filter(Boolean);
+  const deleteRows = useCallback(async (indices: number[], confirmMsg?: string) => {
+    const sorted = [...indices].sort((a, b) => a - b);
+    const rows = sorted.map((i) => tableRows[i]).filter(Boolean);
     if (rows.length === 0) return;
     if (
       !window.confirm(
-        `Supprimer ${rows.length} parcelle${rows.length > 1 ? "s" : ""} ? ` +
-          "Cette action modifie les données de l'analyse et est irréversible."
+        confirmMsg ??
+          `Supprimer ${rows.length} parcelle${rows.length > 1 ? "s" : ""} ? ` +
+            "Cette action modifie les données de l'analyse et est irréversible."
       )
     ) {
       return;
@@ -473,19 +657,22 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       if (data.correctedGeoJson) setCorrectedData(data.correctedGeoJson);
       setTileVersion((v) => v + 1); // rafraîchit les tuiles (parcelles retirées)
       for (const eid of errorIds) setCorrectedErrorIds((prev) => new Set(prev).add(eid));
-      const removeSet = new Set(indices);
-      setTableRows((prev) => {
-        const next = prev.filter((_, i) => !removeSet.has(i));
-        return next.map((r, i) => ({
+      const removeSet = new Set(sorted);
+      const remainingCount = tableRows.length - removeSet.size;
+      const remaining = tableRows
+        .filter((_, i) => !removeSet.has(i))
+        .map((r, i) => ({
           ...r,
           _role: String(r._role ?? "").startsWith("Occurrence")
             ? `Occurrence ${i + 1}`
-            : next.length === 1
+            : remainingCount === 1
               ? "Sélectionné"
               : `P${i + 1}`,
         }));
-      });
+      setTableRows(remaining);
       setSelectedRows(new Set());
+      // Réaligne les annotations d'occurrences sur ce qui reste du doublon.
+      if (selectedDupNicad) applyOccurrenceMarkers(remaining);
       toast.success(`${data.deleted} parcelle(s) supprimée(s)`);
       if (data.notFound > 0) toast.warning(`${data.notFound} parcelle(s) non localisée(s) — ignorée(s)`);
     } catch (err) {
@@ -493,7 +680,79 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     } finally {
       setDeletingRows(false);
     }
-  }, [selectedRows, tableRows, analysis.id]);
+  }, [tableRows, analysis.id, selectedDupNicad, applyOccurrenceMarkers]);
+
+  const handleDeleteSelectedParcels = useCallback(
+    () => deleteRows(Array.from(selectedRows)),
+    [deleteRows, selectedRows]
+  );
+
+  // Mode édition doublons : conserve l'occurrence `keepIndex` et supprime toutes
+  // les autres occurrences du même NICAD (résolution du doublon en un clic).
+  const handleKeepOnlyOccurrence = useCallback(
+    (keepIndex: number) => {
+      const others = tableRows.map((_, i) => i).filter((i) => i !== keepIndex);
+      if (others.length === 0) {
+        toast.info("Une seule occurrence — rien à supprimer.");
+        return;
+      }
+      const keptRole = String(tableRows[keepIndex]?._role ?? `Occurrence ${keepIndex + 1}`);
+      void deleteRows(
+        others,
+        `Conserver « ${keptRole} » et supprimer les ${others.length} autre(s) occurrence(s) de ce NICAD ? ` +
+          "Action irréversible."
+      );
+    },
+    [tableRows, deleteRows]
+  );
+
+  // Mode édition doublons : réassigne un NICAD distinct à l'occurrence `index`
+  // (résout la doublure sans supprimer). Localisée par emprise (précise), point ou
+  // NICAD ; l'erreur DUPLICATE rattachée (`_errorId`) est marquée corrigée.
+  const handleRenameOccurrence = useCallback(
+    async (index: number, newNicad: string) => {
+      const row = tableRows[index];
+      const target = newNicad.trim();
+      if (!row || !target) return;
+      const current = rowNicad(row);
+      if (target === current) return;
+      if (renamingRef.current) return;
+      if (
+        !window.confirm(
+          `Réassigner le NICAD de l'occurrence ${index + 1} : « ${current || "—"} » → « ${target} » ?`
+        )
+      ) {
+        return;
+      }
+      const locator = {
+        point: Array.isArray(row._point) ? (row._point as [number, number]) : undefined,
+        bbox: Array.isArray(row._bbox) && row._bbox.length === 4 ? (row._bbox as BBox) : undefined,
+        nicad: current || undefined,
+      };
+      const errorId = typeof row._errorId === "number" ? row._errorId : undefined;
+      renamingRef.current = true;
+      try {
+        const res = await fetch(`/api/analyses/${analysis.id}/features/update-nicad`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ locator, nicad: target, errorId }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Réassignation échouée");
+        if (data.correctedGeoJson) setCorrectedData(data.correctedGeoJson);
+        setTileVersion((v) => v + 1); // rafraîchit les tuiles (nouveau NICAD)
+        if (errorId != null) setCorrectedErrorIds((prev) => new Set(prev).add(errorId));
+        // Reflète le nouveau NICAD dans la table (l'occurrence sort du doublon).
+        setTableRows((prev) => prev.map((r, i) => (i === index ? withRowNicad(r, target) : r)));
+        toast.success(`NICAD réassigné : ${target}`);
+      } catch (err) {
+        toast.error(String(err));
+      } finally {
+        renamingRef.current = false;
+      }
+    },
+    [tableRows, analysis.id]
+  );
 
   // NiCADs of all selected table rows (drives map highlight)
   const selectedNicads = useMemo(
@@ -535,7 +794,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       // la table détaillée n'est pas peuplée faute de données locales.
       if (LARGE_DATASET) {
         setSelectedError(null);
-        setSelectedDupNicad(null);
+        clearDuplicateFocus();
         setFocusTarget({ nicad: query, key: Date.now() });
         setSearchedNicad(query);
         return;
@@ -544,7 +803,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       return;
     }
     setSelectedError(null);
-    setSelectedDupNicad(null);
+    clearDuplicateFocus();
     setSelectedParcel(feats[0]);
     setTableRows(
       feats.map((p, i) => ({
@@ -555,17 +814,17 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     setTableOpen(true);
     setFocusTarget({ nicad: query, key: Date.now() });
     setSearchedNicad(query);
-  }, [nicadSearch, nicadToAllFeatures, LARGE_DATASET]);
+  }, [nicadSearch, nicadToAllFeatures, LARGE_DATASET, clearDuplicateFocus]);
 
   const handleResetSearch = useCallback(() => {
     setNicadSearch("");
     setSelectedParcel(null);
     setSelectedError(null);
-    setSelectedDupNicad(null);
+    clearDuplicateFocus();
     setTableRows([]);
     setFocusTarget(null);
     setSearchedNicad(null);
-  }, []);
+  }, [clearDuplicateFocus]);
 
   const toggleFilter = (type: string) => {
     const next = new Set(activeFilters);
@@ -768,6 +1027,26 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 <CheckCircle className="w-3 h-3" />
                 {showConforme ? "Conformes affichées" : "Conformes"}
               </Button>
+              <Button
+                size="sm"
+                variant={showSections ? "default" : "outline"}
+                className="gap-1.5 flex-1 h-8 text-xs"
+                onClick={() => setShowSections((v) => !v)}
+                title="Afficher les limites de sections et leurs numéros sur la carte"
+              >
+                <Layers className="w-3 h-3" />
+                Sections
+              </Button>
+              <Button
+                size="sm"
+                variant={showSansSection ? "default" : "outline"}
+                className="gap-1.5 flex-1 h-8 text-xs"
+                onClick={() => setShowSansSection((v) => !v)}
+                title="Colorer en orange les parcelles sans section rattachée (composante section du NICAD indéterminée)"
+              >
+                <AlertTriangle className="w-3 h-3" style={{ color: showSansSection ? undefined : "#f97316" }} />
+                Sans section{sansSectionCount != null ? ` (${sansSectionCount.toLocaleString("fr-FR")})` : ""}
+              </Button>
               {correctedData && (
                 <Button size="sm" variant="outline" className="gap-1.5 flex-1 h-8 text-xs" onClick={handleDownloadCorrected}>
                   <Download className="w-3 h-3" /> Télécharger
@@ -897,11 +1176,30 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 </div>
               ) : (
                 <>
-                  <p className="text-[11px] text-muted-foreground mb-3 shrink-0">
-                    <span className="font-semibold text-purple-400">{duplicateGroups.length}</span> NICAD
-                    {duplicateGroups.length > 1 ? "s" : ""} dupliqué{duplicateGroups.length > 1 ? "s" : ""}
-                    {" · "}cliquer un groupe pour le mettre en évidence sur la carte
-                  </p>
+                  <div className="flex items-start justify-between gap-2 mb-3 shrink-0">
+                    <p className="text-[11px] text-muted-foreground flex-1">
+                      <span className="font-semibold text-purple-400">{duplicateGroups.length}</span> NICAD
+                      {duplicateGroups.length > 1 ? "s" : ""} dupliqué{duplicateGroups.length > 1 ? "s" : ""}
+                      {" · "}cliquer un groupe zoome sur ses occurrences et les annote
+                      {dupEditMode && (
+                        <span className="block text-green-400/80 mt-0.5">
+                          Mode édition (table) : <strong>Renommer</strong> réassigne un NICAD distinct à
+                          l&apos;occurrence, <strong>Conserver</strong> (ou un clic sur son marqueur) la
+                          garde et supprime les autres.
+                        </span>
+                      )}
+                    </p>
+                    <Button
+                      size="sm"
+                      variant={dupEditMode ? "default" : "outline"}
+                      className="h-6 px-2 text-[10px] gap-1 shrink-0"
+                      onClick={() => setDupEditMode((v) => !v)}
+                      title="Activer l'édition des doublures : conserver une occurrence et supprimer les autres"
+                    >
+                      <Wrench className="w-3 h-3" />
+                      {dupEditMode ? "Édition ON" : "Éditer"}
+                    </Button>
+                  </div>
                   <ScrollArea className="flex-1">
                     <div className="space-y-2 pb-4">
                       {duplicateGroups.map((group) => {
@@ -1229,6 +1527,12 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
               searchedNicads={searchedNicad ? [searchedNicad] : []}
               conformeHighlight={showConforme}
               nonConformeNicads={nonConformeNicads}
+              occurrences={dupOccurrences}
+              occurrencesBounds={dupBounds}
+              occurrenceEditMode={dupEditMode && !!selectedDupNicad}
+              onOccurrenceKeep={handleKeepOnlyOccurrence}
+              showSections={showSections}
+              sansSectionHighlight={showSansSection}
             />
             {geoLoading && (
               <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-3 py-1.5 text-[11px] rounded-full bg-card/90 backdrop-blur-sm border border-border shadow-lg">
@@ -1267,7 +1571,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                         <span className="text-yellow-400">· différences surlignées</span>
                       )}
                       <button
-                        onClick={() => { setTableRows([]); setSelectedParcel(null); setSelectedRows(new Set()); }}
+                        onClick={() => { setTableRows([]); setSelectedParcel(null); setSelectedRows(new Set()); clearDuplicateFocus(); }}
                         className="cursor-pointer underline hover:text-foreground transition-colors"
                       >
                         Tout effacer
@@ -1287,7 +1591,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                     </button>
                   )}
                   <button
-                    onClick={() => { setTableOpen(false); setTableRows([]); setSelectedRows(new Set()); }}
+                    onClick={() => { setTableOpen(false); setTableRows([]); setSelectedRows(new Set()); clearDuplicateFocus(); }}
                     className="cursor-pointer text-muted-foreground hover:text-foreground"
                   >
                     <X className="w-3.5 h-3.5" />
@@ -1307,6 +1611,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                     selectable={tableDeletable}
                     selectedKeys={selectedRows}
                     onToggle={toggleRow}
+                    editMode={dupEditMode && !!selectedDupNicad}
+                    onKeepOnly={handleKeepOnlyOccurrence}
+                    onRename={handleRenameOccurrence}
                   />
                 )}
               </div>

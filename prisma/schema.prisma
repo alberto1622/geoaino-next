@@ -416,6 +416,9 @@ model ImportJob {
   analysisId Int? // Analysis produite (navigation /map/[analysisId])
   report     Json? // rapport d'ingestion + stats d'analyse (errorCount, score…)
   layerMapping Json? // mappage calque → classe DGID validé par l'utilisateur (variante « simple »)
+  // Cible du job : "parcelles" (défaut, produit une Analysis) ou "sections"
+  // (produit les lignes limite_section + contrôle des chevauchements).
+  kind       String   @default("parcelles")
   error      String?  @db.Text
   userId     String?
   createdAt  DateTime @default(now())
@@ -423,6 +426,50 @@ model ImportJob {
 
   @@index([status])
   @@map("import_jobs")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// LIMITES DE SECTION (issues des DXF) — table de référence + contrôle topologie
+//
+// Construite à partir de la couche `limites_sections` d'un DXF (polygones) et des
+// libellés `numero_section` (cf. src/lib/parcelle-ingestion.ts + build-sections.ts).
+// La commune / région / département sont résolues par jointure spatiale sur
+// `cad_communes_2026`. La colonne `geom` PostGIS est `Unsupported` (lecture/écriture
+// SQL brut, comme `Parcelle`/`Cad*`).
+// ───────────────────────────────────────────────────────────────────────────
+model LimiteSection {
+  id            Int      @id @default(autoincrement())
+  region        String?
+  departement   String?
+  commune       String?
+  syscolCommune String? // syscolPadded 2026 de la commune contenante (jointure spatiale)
+  numSection    String?
+  surfaceM2     Decimal? @db.Decimal(20, 4)
+  geomGeoJson   Json // géométrie 4326 (rendu client sans PostGIS)
+  geom          Unsupported("geometry(MultiPolygon, 4326)")?
+  sourceFichier String // regroupe un lot d'import
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([sourceFichier])
+  @@index([syscolCommune, numSection])
+  @@map("limite_section")
+}
+
+// Chevauchements détectés entre deux limite_section (contrôle topologique).
+// Calqué sur OverlapGeometry ; `status` suit la résolution par l'utilisateur.
+model LimiteSectionOverlap {
+  id                Int      @id @default(autoincrement())
+  sourceFichier     String
+  sectionAId        Int
+  sectionBId        Int
+  intersectionGeoJson Json
+  overlapAreaM2     Decimal? @db.Decimal(20, 4)
+  status            String   @default("PENDING") // PENDING | RESOLVED | IGNORED
+  createdAt         DateTime @default(now())
+
+  @@index([sourceFichier, status])
+  @@map("limite_section_overlap")
 }
 
 // Registre principal des NICAD
