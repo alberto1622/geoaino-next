@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { NicadDisplay } from "@/components/cadastre/NicadDisplay";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Historique Cadastre" };
 
 export default async function HistoriquePage() {
   const [historique, operations] = await Promise.all([

@@ -1,7 +1,7 @@
 "use server";
 
 import { z } from "zod";
-import { requireUserId } from "./_auth";
+import { requireUserId, requireAdmin } from "./_auth";
 import {
   previewMigrationCommune,
   previewMigrationToutes,
@@ -28,7 +28,7 @@ const executerCommuneSchema = z.object({
 });
 
 export async function executerCommune(input: z.infer<typeof executerCommuneSchema>) {
-  const userId = await requireUserId();
+  const userId = await requireAdmin();
   const data = executerCommuneSchema.parse(input);
 
   const opId = await insertOperation({
@@ -58,7 +58,7 @@ export async function executerCommune(input: z.infer<typeof executerCommuneSchem
 }
 
 export async function executerToutes() {
-  const userId = await requireUserId();
+  const userId = await requireAdmin();
 
   const opId = await insertOperation({
     typeOperation: "basculement",

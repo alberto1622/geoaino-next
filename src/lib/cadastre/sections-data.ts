@@ -123,6 +123,21 @@ export async function getSection(
   return rows[0] ?? null;
 }
 
+/** Sections par ids (fusion manuelle) — renvoyées dans l'ordre demandé. */
+export async function getSectionsByIds(
+  ids: number[],
+): Promise<Array<{ id: number; geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon; sourceFichier: string; numSection: string | null }>> {
+  if (ids.length === 0) return [];
+  const rows = await prisma.$queryRaw<
+    Array<{ id: number | bigint; geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon; sourceFichier: string; numSection: string | null }>
+  >`
+    SELECT id, "geomGeoJson", "sourceFichier", "numSection"
+    FROM "limite_section" WHERE id IN (${Prisma.join(ids)})
+  `;
+  const byId = new Map(rows.map((r) => [Number(r.id), { ...r, id: Number(r.id) }]));
+  return ids.map((id) => byId.get(id)).filter((r): r is NonNullable<typeof r> => r != null);
+}
+
 /** Met à jour la géométrie (GeoJSON + geom PostGIS) et la surface d'une section. */
 export async function updateSectionGeometry(
   id: number,

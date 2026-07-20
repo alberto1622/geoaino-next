@@ -4,9 +4,9 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   Upload, MapPin, Brain, Shield, FileText, Activity,
-  Layers, AlertTriangle, CheckCircle, Globe, Database,
+  Layers, CheckCircle, Globe, Database,
   ArrowRight, BarChart2, History, ChevronRight, Cpu,
-  Lock, TrendingUp, Wrench, Zap
+  TrendingUp, Wrench
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { NavBar } from "@/components/NavBar";
@@ -23,7 +23,7 @@ interface LayerInventory {
 const FORMATS = ["SHP", "GeoJSON", "DGN v7", "DXF", "KML", "CSV"];
 
 const FEATURES = [
-  { icon: Brain, title: "Agent IA Expert", desc: "GPT-4o analyse chaque parcelle et génère des rapports d'expertise sans hallucinations", color: "oklch(0.65 0.18 220)" },
+  { icon: Brain, title: "Analyse assistée par IA", desc: "Rapports d'analyse structurés, générés à partir des résultats des contrôles topologiques", color: "oklch(0.65 0.18 220)" },
   { icon: Layers, title: "Détection Topologique", desc: "Chevauchements, slivers, gaps, doublons NICAD — détectés avec précision mathématique", color: "oklch(0.60 0.22 25)" },
   { icon: MapPin, title: "Carte Interactive", desc: "Visualisation en temps réel des erreurs sur carte avec couches dynamiques", color: "oklch(0.70 0.18 140)" },
   { icon: Shield, title: "Limites Administratives", desc: "Validation automatique contre les 14 régions du Sénégal", color: "oklch(0.65 0.20 300)" },
@@ -68,12 +68,12 @@ interface AnalysisResult {
 /** Libellé lisible de la phase courante d'un job de traitement Microstation. */
 function caoPhaseLabel(phase: string | null): string {
   switch (phase) {
-    case "read": return "📂 Lecture du fichier…";
-    case "build": return "🧩 Reconstruction des parcelles (polygonisation)…";
-    case "nicad": return "🛰️ Résolution des NICAD (jointure communes)…";
-    case "persist": return "💾 Enregistrement en base…";
-    case "done": return "✅ Terminé";
-    default: return "⏳ Démarrage…";
+    case "read": return "Lecture du fichier…";
+    case "build": return "Reconstruction des parcelles (polygonisation)…";
+    case "nicad": return "Résolution des NICAD (jointure communes)…";
+    case "persist": return "Enregistrement en base…";
+    case "done": return "Terminé";
+    default: return "Démarrage…";
   }
 }
 
@@ -376,19 +376,19 @@ export default function HomeClient({ user, stats }: Props) {
         <div className="relative max-w-7xl mx-auto px-6 pt-24 pb-20">
           <div className="text-center max-w-5xl mx-auto">
             <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-primary/30 bg-primary/5 text-primary text-xs font-medium mb-8">
-              <Activity className="w-3.5 h-3.5 animate-pulse" />
-              Plateforme IA de Fiabilisation Cadastrale — Sénégal 2025
+              <Activity className="w-3.5 h-3.5" />
+              Fiabilisation des données cadastrales — Sénégal
             </div>
 
-            <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-6 leading-tight">
-              L&apos;Intelligence Géospatiale
+            <h1 className="text-5xl md:text-6xl font-bold tracking-tight mb-6 leading-tight">
+              Fiabiliser les données cadastrales
               <br />
-              <span className="text-primary">orientée fiabilisation des données cadastrales</span>
+              <span className="text-primary">détection, correction et traçabilité</span>
             </h1>
 
             <p className="text-xl text-muted-foreground mb-10 max-w-3xl mx-auto leading-relaxed">
-              Détection automatique des erreurs topologiques, correction intelligente et rapport d&apos;expertise.
-              Remplace la chaîne de traitement <strong className="text-foreground">Microstation en 5 minutes</strong>.
+              Détection des erreurs topologiques, corrections proposées et rapports d&apos;analyse
+              sur vos fichiers SHP, GeoJSON, DGN et DXF.
             </p>
 
             {stats.totalAnalyses > 0 && (
@@ -534,9 +534,9 @@ export default function HomeClient({ user, stats }: Props) {
                         </div>
                       ) : (
                         <div className="text-sm text-primary font-medium">
-                          {uploadStep === "reading" && "📂 Lecture du fichier..."}
-                          {uploadStep === "analyzing" && "🔍 Analyse topologique en cours..."}
-                          {uploadStep === "ai" && "🤖 Génération du rapport IA..."}
+                          {uploadStep === "reading" && "Lecture du fichier..."}
+                          {uploadStep === "analyzing" && "Analyse topologique en cours..."}
+                          {uploadStep === "ai" && "Génération du rapport d'analyse..."}
                         </div>
                       )}
                     </>
@@ -555,7 +555,7 @@ export default function HomeClient({ user, stats }: Props) {
                       ou <span className="text-primary underline">parcourez vos fichiers</span> — SHP, GeoJSON, DGN, DXF, KML, CSV
                     </p>
                     <p className="text-xs text-muted-foreground/70 mt-1">
-                      ⚠️ Pour les Shapefiles : sélectionnez <strong>.shp + .dbf + .prj</strong> ensemble
+                      Pour les Shapefiles : sélectionnez <strong>.shp + .dbf + .prj</strong> ensemble
                     </p>
                   </div>
                   <div className="flex items-center gap-6 text-xs text-muted-foreground border-t border-border pt-4 w-full justify-center">
@@ -625,8 +625,8 @@ export default function HomeClient({ user, stats }: Props) {
       {/* Features */}
       <section className="max-w-7xl mx-auto px-6 py-16">
         <div className="text-center mb-12">
-          <h2 className="text-3xl font-bold mb-3">Fonctionnalités Avancées</h2>
-          <p className="text-muted-foreground max-w-xl mx-auto">Une suite complète d&apos;outils IA pour remplacer votre chaîne de traitement Microstation</p>
+          <h2 className="text-3xl font-bold mb-3">Fonctionnalités</h2>
+          <p className="text-muted-foreground max-w-xl mx-auto">Contrôles topologiques, cartographie et rapports pour les données cadastrales du Sénégal</p>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {FEATURES.map((feat) => (
@@ -639,31 +639,6 @@ export default function HomeClient({ user, stats }: Props) {
               <p className="text-sm text-muted-foreground leading-relaxed">{feat.desc}</p>
             </div>
           ))}
-        </div>
-      </section>
-
-      {/* Stats comparison */}
-      <section className="max-w-7xl mx-auto px-6 py-16">
-        <div className="rounded-2xl border border-border bg-card overflow-hidden">
-          <div className="p-8 border-b border-border text-center">
-            <h2 className="text-2xl font-bold mb-2">GEO-AINO SUPREME™ vs Microstation</h2>
-            <p className="text-muted-foreground text-sm">Comparaison sur un cadastre de 2962 parcelles</p>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-0">
-            {[
-              { value: "5 min", label: "Temps de traitement", sub: "vs 2-3 jours", icon: Zap, color: "text-primary" },
-              { value: "99%", label: "Automatisation", sub: "vs 0% manuel", icon: Brain, color: "text-blue-400" },
-              { value: "6+", label: "Types d'erreurs", sub: "détectés automatiquement", icon: AlertTriangle, color: "text-red-400" },
-              { value: "100%", label: "Traçabilité", sub: "historique complet", icon: Lock, color: "text-green-400" },
-            ].map((stat, i) => (
-              <div key={stat.label} className={`p-8 text-center ${i < 3 ? "border-r border-border" : ""}`}>
-                <stat.icon className={`w-7 h-7 ${stat.color} mx-auto mb-3`} />
-                <div className={`text-4xl font-bold ${stat.color} mb-1`}>{stat.value}</div>
-                <div className="text-sm font-medium mb-1">{stat.label}</div>
-                <div className="text-xs text-muted-foreground">{stat.sub}</div>
-              </div>
-            ))}
-          </div>
         </div>
       </section>
 
@@ -683,7 +658,7 @@ export default function HomeClient({ user, stats }: Props) {
               <MapPin className="w-5 h-5" /> Explorer la carte <ArrowRight className="w-4 h-4" />
             </Button>
             <Button size="lg" variant="ghost" onClick={() => router.push("/dashboard")} className="gap-2 px-8 text-muted-foreground">
-              <BarChart2 className="w-5 h-5" /> Dashboard
+              <BarChart2 className="w-5 h-5" /> Tableau de bord
             </Button>
           </div>
         </div>
@@ -694,11 +669,11 @@ export default function HomeClient({ user, stats }: Props) {
         <div className="max-w-7xl mx-auto px-6 flex items-center justify-between flex-wrap gap-4">
           <div className="flex items-center gap-2">
             <Globe className="w-4 h-4 text-primary" />
-            <span className="font-semibold text-foreground">GEO-AINO SUPREME™</span>
-            <span>v5.0 — Plateforme IA de Fiabilisation Cadastrale</span>
+            <span className="font-semibold text-foreground">GéoAino</span>
+            <span>Fiabilisation des données cadastrales</span>
           </div>
           <div className="flex items-center gap-4">
-            <a href="/dashboard" className="hover:text-foreground transition-colors">Dashboard</a>
+            <a href="/dashboard" className="hover:text-foreground transition-colors">Tableau de bord</a>
             <a href="/history" className="hover:text-foreground transition-colors">Historique</a>
             <a href="/reports" className="hover:text-foreground transition-colors">Rapports</a>
           </div>

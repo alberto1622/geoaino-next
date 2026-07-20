@@ -1,15 +1,23 @@
 import { auth } from "@/lib/auth";
 import { NavBar } from "@/components/NavBar";
-import { CadastreSidebar } from "@/components/cadastre/CadastreSidebar";
+import {
+  CadastreSidebar,
+  CadastreMobileNav,
+} from "@/components/cadastre/CadastreSidebar";
 
-export default async function CadastreLayout({ children }: { children: React.ReactNode }) {
+export default async function CadastreLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const session = await auth();
   return (
     <div className="min-h-screen flex flex-col">
       <NavBar user={session?.user ?? null} />
+      <CadastreMobileNav />
       <div className="flex flex-1">
         <CadastreSidebar />
-        <main className="flex-1 min-w-0 p-6">{children}</main>
+        <main className="flex-1 min-w-0 py-2 px-6">{children}</main>
       </div>
     </div>
   );

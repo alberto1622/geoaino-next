@@ -1,36 +1,50 @@
 /**
- * Génération d'un shapefile ZIP (.shp/.dbf/.shx/.prj) pour les parcelles cadastrales.
+ * Génération d'un shapefile ZIP (.shp/.dbf/.shx/.prj) pour les parcelles cadastrales
+ * et les limites de sections.
  * Porté depuis vericad/server/exportShapefile.ts (streaming Express → buffer).
  * Le ZIP est construit en mémoire puis renvoyé par un Route Handler.
  */
-import archiver from "archiver";
+// `archiver` v8 est ESM pur SANS export par défaut ni fonction-fabrique
+// `archiver("zip")` : on instancie la classe `ZipArchive` (rupture vs v7).
+// Types locaux : src/types/archiver.d.ts.
+import { type Archiver, ZipArchive } from "archiver";
 import { getParcellesForExport, getParcellesMultiSyscols } from "./data";
+import { listSections } from "./sections-data";
 
 const PRJ_WGS84 = `GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]`;
 
 // ─── DBF ─────────────────────────────────────────────────────────────────────
-function buildDbf(rows: Array<Record<string, string | null | undefined>>): Buffer {
-  const fields: Array<{ name: string; type: "C" | "N"; length: number }> = [
-    { name: "NICAD", type: "C", length: 16 },
-    { name: "SYSCOL", type: "C", length: 8 },
-    { name: "SECTION", type: "C", length: 3 },
-    { name: "PARCELLE", type: "C", length: 5 },
-    { name: "COMMUNE", type: "C", length: 50 },
-    { name: "REGION", type: "C", length: 40 },
-    { name: "DEPT", type: "C", length: 40 },
-    { name: "STATUT", type: "C", length: 12 },
-    { name: "VERSION", type: "C", length: 4 },
-    { name: "SUPERFICIE", type: "C", length: 16 },
-    { name: "QUARTIER", type: "C", length: 50 },
-    { name: "LOT", type: "C", length: 30 },
-    { name: "TITRE", type: "C", length: 40 },
-    { name: "NAT_JURI", type: "C", length: 30 },
-    { name: "TYPE_DEST", type: "C", length: 30 },
-    { name: "CAT_OCUP", type: "C", length: 30 },
-    { name: "LON", type: "C", length: 20 },
-    { name: "LAT", type: "C", length: 20 },
-  ];
+interface DbfField {
+  name: string;
+  type: "C" | "N";
+  length: number;
+}
 
+const PARCELLE_FIELDS: DbfField[] = [
+  { name: "NICAD", type: "C", length: 16 },
+  { name: "SYSCOL", type: "C", length: 8 },
+  { name: "SECTION", type: "C", length: 3 },
+  { name: "PARCELLE", type: "C", length: 5 },
+  { name: "COMMUNE", type: "C", length: 50 },
+  { name: "REGION", type: "C", length: 40 },
+  { name: "DEPT", type: "C", length: 40 },
+  { name: "STATUT", type: "C", length: 12 },
+  { name: "VERSION", type: "C", length: 4 },
+  { name: "SUPERFICIE", type: "C", length: 16 },
+  { name: "QUARTIER", type: "C", length: 50 },
+  { name: "LOT", type: "C", length: 30 },
+  { name: "TITRE", type: "C", length: 40 },
+  { name: "NAT_JURI", type: "C", length: 30 },
+  { name: "TYPE_DEST", type: "C", length: 30 },
+  { name: "CAT_OCUP", type: "C", length: 30 },
+  { name: "LON", type: "C", length: 20 },
+  { name: "LAT", type: "C", length: 20 },
+];
+
+function buildDbf(
+  fields: DbfField[],
+  rows: Array<Record<string, string | null | undefined>>,
+): Buffer {
   const headerSize = 32 + fields.length * 32 + 1;
   const recordSize = 1 + fields.reduce((s, f) => s + f.length, 0);
   const totalSize = headerSize + rows.length * recordSize + 1;
@@ -74,10 +88,11 @@ interface Ring {
   points: [number, number][];
 }
 
-function parseGeojsonRings(geojson: string | null | undefined): Ring[] {
+function parseGeojsonRings(geojson: string | object | null | undefined): Ring[] {
   if (!geojson) return [];
   try {
-    const g = JSON.parse(geojson);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g: any = typeof geojson === "string" ? JSON.parse(geojson) : geojson;
     const geom = g.geometry ?? g;
     if (!geom || !geom.type) return [];
     if (geom.type === "Polygon") {
@@ -229,9 +244,9 @@ function toDbfRow(p: any): Record<string, string> {
   };
 }
 
-function archiveToBuffer(appendFn: (archive: archiver.Archiver) => void): Promise<Buffer> {
+function archiveToBuffer(appendFn: (archive: Archiver) => void): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const archive = archiver("zip", { zlib: { level: 6 } });
+    const archive = new ZipArchive({ zlib: { level: 6 } });
     const chunks: Buffer[] = [];
     archive.on("data", (d: Buffer) => chunks.push(d));
     archive.on("warning", (err) => {
@@ -260,7 +275,7 @@ export async function buildShapefileZip(syscol: string): Promise<ZipResult | nul
   const dbfRows = rows.map(toDbfRow);
   const geometries = rows.map((p) => parseGeojsonRings(p.geojson));
 
-  const dbfBuf = buildDbf(dbfRows);
+  const dbfBuf = buildDbf(PARCELLE_FIELDS, dbfRows);
   const { shp, shx } = buildShpShx(geometries);
   const prjBuf = Buffer.from(PRJ_WGS84, "ascii");
 
@@ -296,7 +311,7 @@ export async function buildShapefileMultiZip(syscols: string[]): Promise<ZipResu
     for (const [syscol, rows] of Array.from(bySyscol.entries())) {
       const dbfRows = rows.map(toDbfRow);
       const geometries = rows.map((p) => parseGeojsonRings(p.geojson));
-      const dbfBuf = buildDbf(dbfRows);
+      const dbfBuf = buildDbf(PARCELLE_FIELDS, dbfRows);
       const { shp, shx } = buildShpShx(geometries);
       const prjBuf = Buffer.from(PRJ_WGS84, "ascii");
       const nomCommune = (rows[0].nomCommune ?? syscol).replace(/[^a-zA-Z0-9_\-]/g, "_").toUpperCase();
@@ -309,4 +324,57 @@ export async function buildShapefileMultiZip(syscols: string[]): Promise<ZipResu
   });
 
   return { filename: `PARCELLES_MULTI_${dateStr}.zip`, buffer };
+}
+
+// ─── Limites de sections ─────────────────────────────────────────────────────
+
+const SECTION_FIELDS: DbfField[] = [
+  { name: "SECTION", type: "C", length: 10 },
+  { name: "COMMUNE", type: "C", length: 50 },
+  { name: "SYSCOL", type: "C", length: 8 },
+  { name: "REGION", type: "C", length: 40 },
+  { name: "DEPT", type: "C", length: 40 },
+  { name: "SURF_M2", type: "C", length: 16 },
+];
+
+function sanitizeName(s: string): string {
+  return s.replace(/\.[^.]+$/, "").replace(/[^a-zA-Z0-9_\-]/g, "_").toUpperCase().slice(0, 60);
+}
+
+/**
+ * Construit le shapefile ZIP des limites de sections stockées (`limite_section`),
+ * telles qu'en base — donc avec les corrections de chevauchements déjà appliquées.
+ * `sourceFichier` restreint à un lot ; null = tous les lots. Retourne null si vide.
+ */
+export async function buildSectionsShapefileZip(sourceFichier: string | null): Promise<ZipResult | null> {
+  const rows = await listSections(sourceFichier);
+  if (!rows.length) return null;
+
+  const dbfRows = rows.map((s) => ({
+    SECTION: s.numSection ?? "",
+    COMMUNE: s.commune ?? "",
+    SYSCOL: s.syscolCommune ?? "",
+    REGION: s.region ?? "",
+    DEPT: s.departement ?? "",
+    SURF_M2: s.surfaceM2 != null ? String(Math.round(s.surfaceM2)) : "",
+  }));
+  const geometries = rows.map((s) => parseGeojsonRings(s.geomGeoJson));
+
+  const dbfBuf = buildDbf(SECTION_FIELDS, dbfRows);
+  const { shp, shx } = buildShpShx(geometries);
+  const prjBuf = Buffer.from(PRJ_WGS84, "ascii");
+
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const baseName = sourceFichier
+    ? `SECTIONS_${sanitizeName(sourceFichier)}_${dateStr}`
+    : `SECTIONS_TOUS_LOTS_${dateStr}`;
+
+  const buffer = await archiveToBuffer((archive) => {
+    archive.append(shp, { name: `${baseName}.shp` });
+    archive.append(shx, { name: `${baseName}.shx` });
+    archive.append(dbfBuf, { name: `${baseName}.dbf` });
+    archive.append(prjBuf, { name: `${baseName}.prj` });
+  });
+
+  return { filename: `${baseName}.zip`, buffer };
 }

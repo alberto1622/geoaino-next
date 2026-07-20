@@ -2,7 +2,15 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Button } from "@/components/ui/button";
 import {
+  Sheet,
+  SheetTrigger,
+  SheetClose,
+  SheetContent,
+} from "@/components/ui/sheet";
+import {
+  Menu,
   LayoutDashboard,
   ShieldCheck,
   Sparkles,
@@ -19,15 +27,41 @@ import {
 import { cn } from "@/lib/utils";
 
 export const CADASTRE_NAV = [
-  { label: "Tableau de bord", href: "/cadastre/dashboard", icon: LayoutDashboard },
-  { label: "Vérification NICAD", href: "/cadastre/verification", icon: ShieldCheck },
+  {
+    label: "Tableau de bord",
+    href: "/cadastre/dashboard",
+    icon: LayoutDashboard,
+  },
+  {
+    label: "Limites de section",
+    href: "/cadastre/sections",
+    icon: Shapes,
+    badge: "DXF",
+  },
+  {
+    label: "Vérification NICAD",
+    href: "/cadastre/verification",
+    icon: ShieldCheck,
+  },
   { label: "Génération NICAD", href: "/cadastre/generation", icon: Sparkles },
-  { label: "Basculement 2013→2026", href: "/cadastre/basculement", icon: GitBranch },
-  { label: "Migration en masse", href: "/cadastre/migration", icon: Layers, badge: "Masse" },
+  {
+    label: "Basculement 2013→2026",
+    href: "/cadastre/basculement",
+    icon: GitBranch,
+  },
+  {
+    label: "Migration en masse",
+    href: "/cadastre/migration",
+    icon: Layers,
+    badge: "Masse",
+  },
   { label: "Carte interactive", href: "/cadastre/carte", icon: MapIcon },
-  { label: "Limites de section", href: "/cadastre/sections", icon: Shapes, badge: "DXF" },
   { label: "Communes", href: "/cadastre/communes", icon: Building2 },
-  { label: "Correspondances", href: "/cadastre/correspondances", icon: GitMerge },
+  {
+    label: "Correspondances",
+    href: "/cadastre/correspondances",
+    icon: GitMerge,
+  },
   { label: "Import", href: "/cadastre/import", icon: Upload },
   { label: "Export", href: "/cadastre/export", icon: Download },
   { label: "Historique", href: "/cadastre/historique", icon: History },
@@ -51,6 +85,7 @@ export function CadastreSidebar() {
             <Link
               key={href}
               href={href}
+              aria-current={active ? "page" : undefined}
               className={cn(
                 "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all",
                 active
@@ -70,5 +105,69 @@ export function CadastreSidebar() {
         })}
       </nav>
     </aside>
+  );
+}
+
+/**
+ * Navigation mobile du module Cadastre : la sidebar est masquée sous 1024 px,
+ * ce drawer donne accès aux mêmes entrées (sinon le module est inutilisable
+ * sur mobile/tablette).
+ */
+export function CadastreMobileNav() {
+  const pathname = usePathname();
+  const current = CADASTRE_NAV.find(
+    ({ href }) => pathname === href || pathname.startsWith(href + "/"),
+  );
+
+  return (
+    <div className="flex items-center gap-3 border-b border-border/50 bg-card/30 px-4 py-2 lg:hidden">
+      <Sheet>
+        <SheetTrigger asChild>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            aria-label="Ouvrir le menu du module Cadastre"
+          >
+            <Menu className="h-4 w-4" />
+            Menu
+          </Button>
+        </SheetTrigger>
+        <SheetContent side="left" title="Cadastre · NICAD">
+          <nav className="flex flex-col gap-1">
+            {CADASTRE_NAV.map(({ label, href, icon: Icon, ...rest }) => {
+              const active =
+                pathname === href || pathname.startsWith(href + "/");
+              const badge = (rest as { badge?: string }).badge;
+              return (
+                <SheetClose asChild key={href}>
+                  <Link
+                    href={href}
+                    aria-current={active ? "page" : undefined}
+                    className={cn(
+                      "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-all",
+                      active
+                        ? "bg-primary/10 text-primary font-medium"
+                        : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+                    )}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className="truncate">{label}</span>
+                    {badge ? (
+                      <span className="ml-auto rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-mono text-primary">
+                        {badge}
+                      </span>
+                    ) : null}
+                  </Link>
+                </SheetClose>
+              );
+            })}
+          </nav>
+        </SheetContent>
+      </Sheet>
+      <span className="truncate text-sm font-medium">
+        {current?.label ?? "Cadastre · NICAD"}
+      </span>
+    </div>
   );
 }

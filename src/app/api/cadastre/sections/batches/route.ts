@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 import { listSectionBatches } from "@/lib/cadastre/sections-data";
 
 export const runtime = "nodejs";
@@ -9,6 +10,11 @@ export const runtime = "nodejs";
  * page /cadastre/sections sans réimporter.
  */
 export async function GET(): Promise<NextResponse> {
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
+  }
+
   try {
     const batches = await listSectionBatches();
     return NextResponse.json({ batches });

@@ -2,6 +2,8 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import HistoryClient from "@/components/HistoryClient";
 
+export const metadata = { title: "Historique des analyses" };
+
 export default async function HistoryPage({
   searchParams,
 }: {

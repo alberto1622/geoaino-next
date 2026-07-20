@@ -20,6 +20,15 @@ import {
 
 type PolyGeom = GeoJSON.Polygon | GeoJSON.MultiPolygon;
 
+// Aire maximale (m²) d'un polygone SANS numéro de section pour être traité en
+// RÉSIDU : trou ou lamelle découpé dans une vraie section par le noding — il
+// est fusionné dans la section qui le contient/borde (celle qui partage le
+// plus de frontière). Sans hôte trouvé, il est écarté. Une vraie section
+// couvre plusieurs hectares : un « numéro manquant » légitime reste au-dessus
+// du seuil et n'est jamais traité en résidu. Ne s'applique JAMAIS aux
+// polygones numérotés.
+const MIN_UNNUMBERED_AREA_M2 = Number(process.env.SECTION_MIN_AREA_SANS_NUMERO_M2 || 10_000);
+
 export interface BuildSectionsResult {
   sourceFichier: string;
   nbSections: number;
@@ -27,6 +36,10 @@ export interface BuildSectionsResult {
   nbOverlaps: number;
   /** Contours d'ensemble sans numéro écartés (contenaient des sections numérotées). */
   nbEnveloppesEcartees: number;
+  /** Résidus sans numéro fusionnés dans leur section hôte. */
+  nbResidusFusionnes: number;
+  /** Résidus sans numéro écartés (aucune section hôte trouvée). */
+  nbResidusEcartes: number;
 }
 
 /** Agrège des fragments en un (Multi)Polygon par concaténation d'anneaux (aucune perte). */
@@ -72,6 +85,85 @@ function areaM2(geom: PolyGeom): number {
 }
 
 /**
+ * Absorbe les résidus dans leur section hôte (mutation de `rows`). Hôte = la
+ * ligne dont l'intersection avec le résidu bufferisé de 1 m est la plus grande
+ * (≈ frontière partagée la plus longue — départage les lamelles bordées par
+ * deux sections). L'union comble aussi les TROUS : un résidu logé dans un trou
+ * de la section n'est pas « contenu » au sens point-dans-polygone (le trou est
+ * exclu), mais son buffer chevauche l'anneau — d'où le test par buffer.
+ */
+function absorbResidus(
+  rows: SectionInsert[],
+  residus: PolyGeom[],
+): { nbFusionnes: number; nbEcartes: number } {
+  let nbFusionnes = 0;
+  let nbEcartes = 0;
+  const rowBboxes: Array<[number, number, number, number] | null> = rows.map((r) => {
+    try {
+      return turf.bbox(turf.feature(r.geomGeoJson)) as [number, number, number, number];
+    } catch {
+      return null;
+    }
+  });
+  const MARGIN_DEG = 1e-4; // ≈ 11 m — couvre largement le buffer de 1 m
+
+  for (const g of residus) {
+    let feat: GeoJSON.Feature<PolyGeom>;
+    let buffered: GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | undefined;
+    let rbox: [number, number, number, number];
+    try {
+      feat = turf.feature(g);
+      rbox = turf.bbox(feat) as [number, number, number, number];
+      buffered = turf.buffer(feat, 1, { units: "meters" });
+    } catch {
+      nbEcartes++;
+      continue;
+    }
+    if (!buffered) {
+      nbEcartes++;
+      continue;
+    }
+
+    let best = -1;
+    let bestScore = 0;
+    rows.forEach((row, i) => {
+      const bb = rowBboxes[i];
+      if (
+        !bb ||
+        rbox[0] > bb[2] + MARGIN_DEG || rbox[2] < bb[0] - MARGIN_DEG ||
+        rbox[1] > bb[3] + MARGIN_DEG || rbox[3] < bb[1] - MARGIN_DEG
+      ) return;
+      try {
+        const inter = turf.intersect(turf.featureCollection([buffered!, turf.feature(row.geomGeoJson)]));
+        const a = inter ? turf.area(inter) : 0;
+        if (a > bestScore) {
+          bestScore = a;
+          best = i;
+        }
+      } catch { /* candidate suivante */ }
+    });
+
+    if (best < 0) {
+      nbEcartes++;
+      continue;
+    }
+    const host = rows[best];
+    try {
+      const u = turf.union(turf.featureCollection([turf.feature(host.geomGeoJson), feat]));
+      host.geomGeoJson = (u?.geometry as PolyGeom | undefined) ?? combineFragments([host.geomGeoJson, g]);
+    } catch {
+      host.geomGeoJson = combineFragments([host.geomGeoJson, g]);
+    }
+    host.surfaceM2 = areaM2(host.geomGeoJson);
+    try {
+      rowBboxes[best] = turf.bbox(turf.feature(host.geomGeoJson)) as [number, number, number, number];
+    } catch { /* bbox précédente conservée */ }
+    nbFusionnes++;
+  }
+  return { nbFusionnes, nbEcartes };
+}
+
+/**
  * Construit / rafraîchit la table `limite_section` pour un fichier source :
  * remplace le lot précédent, insère les sections dissoutes + rattachées à leur
  * commune, puis (re)détecte les chevauchements.
@@ -80,10 +172,26 @@ export async function buildLimiteSections(
   result: DxfIngestionResult,
   sourceFichier: string,
 ): Promise<BuildSectionsResult> {
-  const allCandidates = result.sections;
+  const rawCandidates = result.sections;
+  if (rawCandidates.length === 0) {
+    await deleteSectionsBySource(sourceFichier);
+    return { sourceFichier, nbSections: 0, nbSansCommune: 0, nbOverlaps: 0, nbEnveloppesEcartees: 0, nbResidusFusionnes: 0, nbResidusEcartes: 0 };
+  }
+
+  // Résidus non numérotés : un petit polygone SANS numéro est un artefact du
+  // noding (trou ou lamelle découpé dans une vraie section), pas une section
+  // dont le numéro manque. Mis de côté ici, puis FUSIONNÉ dans sa section hôte
+  // après dissolution (`absorbResidus`). Les polygones numérotés ne passent
+  // jamais par ce circuit.
+  const allCandidates: typeof rawCandidates = [];
+  const residus: PolyGeom[] = [];
+  for (const c of rawCandidates) {
+    if (c.numSection || areaM2(c.geomGeoJson4326) >= MIN_UNNUMBERED_AREA_M2) allCandidates.push(c);
+    else residus.push(c.geomGeoJson4326);
+  }
   if (allCandidates.length === 0) {
     await deleteSectionsBySource(sourceFichier);
-    return { sourceFichier, nbSections: 0, nbSansCommune: 0, nbOverlaps: 0, nbEnveloppesEcartees: 0 };
+    return { sourceFichier, nbSections: 0, nbSansCommune: 0, nbOverlaps: 0, nbEnveloppesEcartees: 0, nbResidusFusionnes: 0, nbResidusEcartes: residus.length };
   }
 
   // Enveloppes non numérotées : un polygone de section SANS numéro contenant le
@@ -116,7 +224,7 @@ export async function buildLimiteSections(
   const nbEnveloppesEcartees = allCandidates.length - candidates.length;
   if (candidates.length === 0) {
     await deleteSectionsBySource(sourceFichier);
-    return { sourceFichier, nbSections: 0, nbSansCommune: 0, nbOverlaps: 0, nbEnveloppesEcartees };
+    return { sourceFichier, nbSections: 0, nbSansCommune: 0, nbOverlaps: 0, nbEnveloppesEcartees, nbResidusFusionnes: 0, nbResidusEcartes: residus.length };
   }
 
   // Commune résolue PAR FRAGMENT, AVANT dissolution : un numéro de section n'est
@@ -165,9 +273,13 @@ export async function buildLimiteSections(
     };
   });
 
+  // Absorption des résidus APRÈS dissolution : chaque section hôte est alors
+  // complète, l'union comble ses trous/lamelles en une passe.
+  const { nbFusionnes: nbResidusFusionnes, nbEcartes: nbResidusEcartes } = absorbResidus(rows, residus);
+
   await deleteSectionsBySource(sourceFichier);
   await insertLimiteSections(sourceFichier, rows);
   const nbOverlaps = await refreshOverlaps(sourceFichier);
 
-  return { sourceFichier, nbSections: rows.length, nbSansCommune, nbOverlaps, nbEnveloppesEcartees };
+  return { sourceFichier, nbSections: rows.length, nbSansCommune, nbOverlaps, nbEnveloppesEcartees, nbResidusFusionnes, nbResidusEcartes };
 }

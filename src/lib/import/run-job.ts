@@ -77,6 +77,9 @@ export async function runImportJob(jobId: number): Promise<void> {
             nbSections: built.nbSections,
             nbSansCommune: built.nbSansCommune,
             nbOverlaps: built.nbOverlaps,
+            nbEnveloppesEcartees: built.nbEnveloppesEcartees,
+            nbResidusFusionnes: built.nbResidusFusionnes,
+            nbResidusEcartes: built.nbResidusEcartes,
           },
         },
       });

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 export const dynamic = "force-dynamic";
+export const metadata = { title: "Tableau de bord Cadastre" };
 
 function StatCard({
   label,
@@ -27,13 +28,19 @@ function StatCard({
   return (
     <Card>
       <CardContent className="flex items-center gap-4 p-5">
-        <div className={`flex h-11 w-11 items-center justify-center rounded-xl ${accent}`}>
+        <div
+          className={`flex h-11 w-11 items-center justify-center rounded-xl ${accent}`}
+        >
           <Icon className="h-5 w-5" />
         </div>
         <div className="min-w-0">
           <p className="text-2xl font-bold tabular-nums">{value}</p>
           <p className="truncate text-xs text-muted-foreground">{label}</p>
-          {sub ? <p className="truncate text-[11px] text-muted-foreground/70">{sub}</p> : null}
+          {sub ? (
+            <p className="truncate text-[11px] text-muted-foreground/70">
+              {sub}
+            </p>
+          ) : null}
         </div>
       </CardContent>
     </Card>
@@ -47,7 +54,9 @@ export default async function CadastreDashboardPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Tableau de bord — Cadastre</h1>
+        <h1 className="text-2xl font-bold tracking-tight">
+          Tableau de bord — Cadastre
+        </h1>
         <p className="text-sm text-muted-foreground">
           Vue d&apos;ensemble du référentiel NICAD (Syscol 2013 → 2026).
         </p>
@@ -102,14 +111,23 @@ export default async function CadastreDashboardPage() {
         </CardHeader>
         <CardContent>
           {stats.operations.recentes.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Aucune opération enregistrée pour le moment.</p>
+            <p className="text-sm text-muted-foreground">
+              Aucune opération enregistrée pour le moment.
+            </p>
           ) : (
             <ul className="divide-y divide-border/50">
               {stats.operations.recentes.map((op) => (
-                <li key={op.id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
+                <li
+                  key={op.id}
+                  className="flex items-center justify-between gap-3 py-2.5 text-sm"
+                >
                   <div className="min-w-0">
-                    <span className="font-medium capitalize">{op.typeOperation}</span>
-                    <span className="ml-2 text-muted-foreground">{op.description}</span>
+                    <span className="font-medium capitalize">
+                      {op.typeOperation}
+                    </span>
+                    <span className="ml-2 text-muted-foreground">
+                      {op.description}
+                    </span>
                   </div>
                   <span
                     className={

@@ -1,5 +1,25 @@
 {
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"Remember to run lint: npx eslint --max-warnings 0 .\""
+          }
+        ]
+      }
+    ]
+  },
   "worktree": {
     "bgIsolation": "none"
+  },
+  "enabledPlugins": {
+    "claude-code-setup@yasu551-plugins": true,
+    "frontend-design@claude-plugins-official": true,
+    "skill-creator@claude-plugins-official": true,
+    "claude-md-management@claude-plugins-official": true,
+    "typescript-lsp@claude-plugins-official": true
   }
 }

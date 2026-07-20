@@ -1,5 +1,6 @@
 "use client";
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -297,6 +298,13 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   const renamingRef = useRef(false);
   // Lignes cochées (index dans `tableRows`) pour suppression de parcelles.
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+  // Confirmation en attente pour les actions destructives (remplace window.confirm).
+  const [confirmState, setConfirmState] = useState<{
+    title: string;
+    description: string;
+    confirmLabel: string;
+    run: () => void;
+  } | null>(null);
   const [deletingRows, setDeletingRows] = useState(false);
   const [selectedParcel, setSelectedParcel] = useState<Record<string, unknown> | null>(null);
   const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set());
@@ -619,19 +627,10 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   // (occurrence d'un groupe NICAD) ou NICAD (repli). L'édition est écrite dans
   // `correctedData` côté serveur ; les erreurs de topologie rattachées
   // (`_errorId`) sont marquées corrigées. Action irréversible → confirmation.
-  const deleteRows = useCallback(async (indices: number[], confirmMsg?: string) => {
+  const performDeleteRows = useCallback(async (indices: number[]) => {
     const sorted = [...indices].sort((a, b) => a - b);
     const rows = sorted.map((i) => tableRows[i]).filter(Boolean);
     if (rows.length === 0) return;
-    if (
-      !window.confirm(
-        confirmMsg ??
-          `Supprimer ${rows.length} parcelle${rows.length > 1 ? "s" : ""} ? ` +
-            "Cette action modifie les données de l'analyse et est irréversible."
-      )
-    ) {
-      return;
-    }
 
     const locators = rows.map((r) => ({
       point: Array.isArray(r._point) ? (r._point as [number, number]) : undefined,
@@ -682,6 +681,22 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     }
   }, [tableRows, analysis.id, selectedDupNicad, applyOccurrenceMarkers]);
 
+  const deleteRows = useCallback(
+    (indices: number[], confirmMsg?: string) => {
+      const count = indices.filter((i) => tableRows[i]).length;
+      if (count === 0) return;
+      setConfirmState({
+        title: "Supprimer des parcelles",
+        description:
+          confirmMsg ??
+          `Supprimer ${count} parcelle${count > 1 ? "s" : ""} ?\nCette action modifie les données de l'analyse et est irréversible.`,
+        confirmLabel: "Supprimer",
+        run: () => void performDeleteRows(indices),
+      });
+    },
+    [tableRows, performDeleteRows],
+  );
+
   const handleDeleteSelectedParcels = useCallback(
     () => deleteRows(Array.from(selectedRows)),
     [deleteRows, selectedRows]
@@ -697,10 +712,10 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         return;
       }
       const keptRole = String(tableRows[keepIndex]?._role ?? `Occurrence ${keepIndex + 1}`);
-      void deleteRows(
+      deleteRows(
         others,
-        `Conserver « ${keptRole} » et supprimer les ${others.length} autre(s) occurrence(s) de ce NICAD ? ` +
-          "Action irréversible."
+        `Conserver « ${keptRole} » et supprimer les ${others.length} autre(s) occurrence(s) de ce NICAD ?\n` +
+          "Action irréversible.",
       );
     },
     [tableRows, deleteRows]
@@ -709,7 +724,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   // Mode édition doublons : réassigne un NICAD distinct à l'occurrence `index`
   // (résout la doublure sans supprimer). Localisée par emprise (précise), point ou
   // NICAD ; l'erreur DUPLICATE rattachée (`_errorId`) est marquée corrigée.
-  const handleRenameOccurrence = useCallback(
+  const performRenameOccurrence = useCallback(
     async (index: number, newNicad: string) => {
       const row = tableRows[index];
       const target = newNicad.trim();
@@ -717,13 +732,6 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       const current = rowNicad(row);
       if (target === current) return;
       if (renamingRef.current) return;
-      if (
-        !window.confirm(
-          `Réassigner le NICAD de l'occurrence ${index + 1} : « ${current || "—"} » → « ${target} » ?`
-        )
-      ) {
-        return;
-      }
       const locator = {
         point: Array.isArray(row._point) ? (row._point as [number, number]) : undefined,
         bbox: Array.isArray(row._bbox) && row._bbox.length === 4 ? (row._bbox as BBox) : undefined,
@@ -752,6 +760,23 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       }
     },
     [tableRows, analysis.id]
+  );
+
+  const handleRenameOccurrence = useCallback(
+    (index: number, newNicad: string) => {
+      const row = tableRows[index];
+      const target = newNicad.trim();
+      if (!row || !target) return;
+      const current = rowNicad(row);
+      if (target === current) return;
+      setConfirmState({
+        title: "Réassigner le NICAD",
+        description: `Réassigner le NICAD de l'occurrence ${index + 1} : « ${current || "—"} » → « ${target} » ?`,
+        confirmLabel: "Réassigner",
+        run: () => void performRenameOccurrence(index, newNicad),
+      });
+    },
+    [tableRows, performRenameOccurrence],
   );
 
   // NiCADs of all selected table rows (drives map highlight)
@@ -1685,6 +1710,18 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmState !== null}
+        title={confirmState?.title ?? ""}
+        description={confirmState?.description ?? ""}
+        confirmLabel={confirmState?.confirmLabel}
+        onConfirm={() => {
+          confirmState?.run();
+          setConfirmState(null);
+        }}
+        onCancel={() => setConfirmState(null)}
+      />
     </div>
   );
 }

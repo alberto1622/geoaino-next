@@ -2,12 +2,12 @@ import { auth } from "@/lib/auth";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const session = await auth();
   const { pathname } = request.nextUrl;
 
   // Pages that require authentication
-  const protectedPaths = ["/dashboard", "/history", "/reports", "/map"];
+  const protectedPaths = ["/dashboard", "/history", "/reports", "/map", "/cadastre", "/admin"];
   const isProtected = protectedPaths.some((p) => pathname.startsWith(p));
 
   if (isProtected && !session) {

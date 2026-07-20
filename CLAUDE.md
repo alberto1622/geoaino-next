@@ -1,3 +1,21 @@
+<!-- claude-code-setup:begin — DO NOT EDIT THIS SECTION -->
+## Next.js Conventions
+
+- Use the App Router (app/) for new pages unless the project uses Pages Router
+- Prefer Server Components by default; use 'use client' only when needed
+- Use Next.js built-in Image, Link, and Font components
+- TypeScript strict mode is expected
+
+## Code Quality
+
+- Linter: eslint (`npx eslint .`)
+- Fix lint errors before committing
+
+## Code Changes
+
+- Make minimal, targeted changes — only modify what is explicitly asked
+<!-- claude-code-setup:end -->
+
 @AGENTS.md
 
 ## Documentation continue des concepts de traitement

@@ -334,7 +334,7 @@ export default function CadastreMap() {
             </button>
           ))}
         </div>
-        <select className={selectCls} value={syscol} onChange={(e) => setSyscol(e.target.value)}>
+        <select className={selectCls} value={syscol} onChange={(e) => setSyscol(e.target.value)} aria-label="Choisir une commune">
           <option className={optionCls} value="">
             Toutes les communes ({version})
           </option>

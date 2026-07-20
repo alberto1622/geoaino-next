@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { NavBar } from "@/components/NavBar";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { toast } from "sonner";
 import { toNum } from "@/lib/utils";
 
@@ -45,6 +46,7 @@ export default function HistoryClient({ user, analyses, total, page, limit, sear
   const router = useRouter();
   const [searchValue, setSearchValue] = useState(search);
   const [deleting, setDeleting] = useState<number | null>(null);
+  const [toDelete, setToDelete] = useState<Analysis | null>(null);
   const totalPages = Math.ceil(total / limit);
 
   const handleSearch = (e: React.FormEvent) => {
@@ -52,8 +54,7 @@ export default function HistoryClient({ user, analyses, total, page, limit, sear
     router.push(`/history?search=${encodeURIComponent(searchValue)}&page=1`);
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm("Supprimer cette analyse ? Cette action est irréversible.")) return;
+  const performDelete = async (id: number) => {
     setDeleting(id);
     try {
       const res = await fetch(`/api/analyses/${id}`, { method: "DELETE" });
@@ -169,8 +170,9 @@ export default function HistoryClient({ user, analyses, total, page, limit, sear
                       size="icon"
                       variant="ghost"
                       className="h-8 w-8 text-destructive hover:text-destructive"
-                      onClick={() => handleDelete(analysis.id)}
+                      onClick={() => setToDelete(analysis)}
                       disabled={deleting === analysis.id}
+                      aria-label={`Supprimer l'analyse ${analysis.fileName}`}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </Button>
@@ -200,6 +202,18 @@ export default function HistoryClient({ user, analyses, total, page, limit, sear
           </div>
         )}
       </main>
+
+      <ConfirmDialog
+        open={toDelete !== null}
+        title="Supprimer l'analyse"
+        description={`Supprimer l'analyse « ${toDelete?.fileName ?? ""} » et ses erreurs topologiques associées ?\nCette action est irréversible.`}
+        confirmLabel="Supprimer"
+        onConfirm={() => {
+          if (toDelete) void performDelete(toDelete.id);
+          setToDelete(null);
+        }}
+        onCancel={() => setToDelete(null)}
+      />
     </div>
   );
 }

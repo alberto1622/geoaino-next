@@ -23,6 +23,7 @@ export async function listCorrespondances(input?: {
   limit?: number;
   offset?: number;
 }) {
+  await requireUserId();
   return getCorrespondances({
     region: input?.region,
     departement: input?.departement,
@@ -35,6 +36,7 @@ export async function listCorrespondances(input?: {
 }
 
 export async function getCorrespondance(input: { syscol2013: string }) {
+  await requireUserId();
   return getCorrespondanceBySyscol2013(input.syscol2013);
 }
 
@@ -74,15 +76,18 @@ export async function confirmerToutes() {
 }
 
 export async function countCorrespondancesAction() {
+  await requireUserId();
   return countCorrespondances();
 }
 
 // Syscol 2026 ayant une correspondance confirmée avec 2013 (pour la carte).
 export async function listSyscol2026Confirmes() {
+  await requireUserId();
   return getSyscol2026Confirmes();
 }
 
 // Cartes type de changement (indexées par syscol 2013 et 2026) pour la carte.
 export async function listChangementMaps() {
+  await requireUserId();
   return getChangementMaps();
 }

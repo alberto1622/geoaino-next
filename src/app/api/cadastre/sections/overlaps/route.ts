@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 import { listSections, listOverlaps } from "@/lib/cadastre/sections-data";
 
 export const runtime = "nodejs";
@@ -10,6 +11,11 @@ export const runtime = "nodejs";
  * sections de TOUS les lots stockés (affichage complet au premier chargement).
  */
 export async function GET(req: NextRequest): Promise<NextResponse> {
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
+  }
+
   const sourceFichier = req.nextUrl.searchParams.get("sourceFichier");
   try {
     const [sections, overlaps] = await Promise.all([

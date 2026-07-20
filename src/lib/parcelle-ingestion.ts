@@ -213,10 +213,26 @@ export async function convertDxfToFc32628(
       inputPath,
     ];
 
-    await execFileAsync(resolveOgr2Ogr(), args, {
-      timeout: 180000,
-      maxBuffer: 1024 * 1024 * 100,
-    });
+    try {
+      await execFileAsync(resolveOgr2Ogr(), args, {
+        timeout: 180000,
+        maxBuffer: 1024 * 1024 * 100,
+        // CPL_LOG → puits : GDAL émet un « Warning 1: Non closed ring » PAR
+        // anneau non fermé (des dizaines de milliers sur un DXF cadastral) ;
+        // sans cela, le flot pollue les journaux et gonfle les messages d'erreur.
+        env: { ...process.env, CPL_LOG: os.devNull },
+      });
+    } catch (err) {
+      // Résume l'erreur : ne JAMAIS rethrow le stderr brut (peut contenir
+      // 100k+ caractères de warnings bénins qui noient la vraie cause).
+      const stderr = String((err as { stderr?: string }).stderr ?? "");
+      const causes = stderr
+        .split(/\r?\n/)
+        .filter((l) => l.trim() && !l.includes("Non closed ring"))
+        .slice(0, 5);
+      const base = err instanceof Error ? err.message.split("\n")[0].slice(0, 300) : String(err);
+      throw new Error(`ogr2ogr a échoué : ${base}${causes.length ? ` — ${causes.join(" | ")}` : ""}`);
+    }
 
     if (!fs.existsSync(outputPath)) {
       throw new Error("ogr2ogr n'a produit aucune sortie pour ce DXF.");
@@ -1771,7 +1787,14 @@ export async function ingestDxfToParcelles(
     const nativeFc = readDxfWorldFeatures(buffer);
     if (nativeFc.features.length > 0) {
       const nativeResult = buildParcellesFromFc32628(nativeFc, options);
-      if (nativeResult.parcelles.length > 0) {
+      // Critère de succès selon la cible : en `sectionsOnly`, `parcelles` est
+      // TOUJOURS vide (court-circuit) — tester les parcelles envoyait chaque
+      // import de sections vers ogr2ogr même quand le natif fonctionnait
+      // (conversion moins fidèle + déluge « Non closed ring » de GDAL).
+      const nativeOk = options.sectionsOnly
+        ? nativeResult.sections.length > 0
+        : nativeResult.parcelles.length > 0;
+      if (nativeOk) {
         // Remonte la réconciliation du lecteur natif dans le rapport.
         if (nativeFc._census) nativeResult.report.reconciliation = nativeFc._census;
         return nativeResult;

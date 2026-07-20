@@ -1,4 +1,5 @@
 "use client";
+import { PageTitle } from "@/components/PageTitle";
 
 import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
@@ -147,6 +148,7 @@ export default function CorrespondancesPage() {
 
   return (
     <div className="space-y-6">
+      <PageTitle title="Correspondances 2013-2026" />
       <div className="flex items-center gap-3">
         <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
           <GitMerge className="h-5 w-5" />
@@ -161,13 +163,13 @@ export default function CorrespondancesPage() {
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
           <CardTitle className="text-base">{rows.length} correspondance(s)</CardTitle>
           <div className="flex flex-wrap items-center gap-2">
-            <select className={selectCls} value={statut} onChange={(e) => setStatut(e.target.value as Statut | "")}>
+            <select className={selectCls} value={statut} onChange={(e) => setStatut(e.target.value as Statut | "")} aria-label="Filtrer par statut">
               <option value="">Tous statuts</option>
               <option value="confirme">Confirmées</option>
               <option value="provisoire">Provisoires</option>
               <option value="sans_correspondance">Sans correspondance</option>
             </select>
-            <select className={selectCls} value={typeChangement} onChange={(e) => setTypeChangement(e.target.value)}>
+            <select className={selectCls} value={typeChangement} onChange={(e) => setTypeChangement(e.target.value)} aria-label="Filtrer par type de changement">
               <option value="">Tous types</option>
               <option value="inchange">Inchangé</option>
               <option value="renomme">Renommé</option>

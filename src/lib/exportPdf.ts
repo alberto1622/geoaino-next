@@ -163,11 +163,11 @@ export async function exportReportPDF(report: PdfReport): Promise<void> {
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(16);
   doc.setFont("helvetica", "bold");
-  doc.text("GEO-AINO SUPREME™", MARGIN, 10);
+  doc.text("GéoAino", MARGIN, 10);
 
   doc.setFontSize(8);
   doc.setFont("helvetica", "normal");
-  doc.text("Plateforme IA de Fiabilisation Cadastrale", MARGIN, 16);
+  doc.text("Fiabilisation des données cadastrales", MARGIN, 16);
 
   doc.setFontSize(8);
   doc.text(
@@ -358,7 +358,7 @@ export async function exportReportPDF(report: PdfReport): Promise<void> {
     doc.setFont("helvetica", "normal");
     doc.setTextColor(148, 163, 184);
     doc.text(
-      "GEO-AINO SUPREME™ — Rapport d'expertise cadastrale",
+      "GéoAino — Rapport d'analyse cadastrale",
       MARGIN, PAGE_H - 4
     );
     doc.text(`Page ${p} / ${totalPages}`, PAGE_W - MARGIN, PAGE_H - 4, { align: "right" });

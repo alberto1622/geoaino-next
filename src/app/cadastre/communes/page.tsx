@@ -1,4 +1,5 @@
 "use client";
+import { PageTitle } from "@/components/PageTitle";
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -86,6 +87,7 @@ export default function CommunesPage() {
 
   return (
     <div className="space-y-6">
+      <PageTitle title="Communes" />
       <div className="flex items-center gap-3">
         <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
           <Building2 className="h-5 w-5" />
@@ -105,7 +107,7 @@ export default function CommunesPage() {
                 Syscol {v}
               </Button>
             ))}
-            <select className={selectCls} value={region} onChange={(e) => setRegion(e.target.value)}>
+            <select className={selectCls} value={region} onChange={(e) => setRegion(e.target.value)} aria-label="Filtrer par région">
               <option value="">Toutes régions</option>
               {regions.map((r) => (
                 <option key={r} value={r}>

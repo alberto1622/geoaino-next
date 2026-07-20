@@ -1,4 +1,5 @@
 "use client";
+import { PageTitle } from "@/components/PageTitle";
 
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
@@ -62,6 +63,7 @@ export default function ImportPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
+      <PageTitle title="Import de données" />
       <div className="flex items-center gap-3">
         <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
           <Upload className="h-5 w-5" />

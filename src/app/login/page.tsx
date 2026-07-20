@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Globe, LogIn, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PageTitle } from "@/components/PageTitle";
 import { toast } from "sonner";
 
 export default function LoginPage() {
@@ -36,13 +37,14 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground flex items-center justify-center">
+      <PageTitle title="Connexion" />
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <div className="w-14 h-14 rounded-2xl bg-primary flex items-center justify-center shadow-xl shadow-primary/30 mx-auto mb-4">
             <Globe className="w-7 h-7 text-primary-foreground" />
           </div>
-          <h1 className="text-2xl font-bold">GEO-AINO SUPREME™</h1>
-          <p className="text-sm text-muted-foreground mt-1">Plateforme IA de Fiabilisation Cadastrale</p>
+          <h1 className="text-2xl font-bold">GéoAino</h1>
+          <p className="text-sm text-muted-foreground mt-1">Fiabilisation des données cadastrales</p>
         </div>
 
         <div className="rounded-2xl border border-border bg-card p-8 shadow-xl">
@@ -52,10 +54,13 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Email</label>
+              <label htmlFor="login-email" className="text-xs font-medium text-muted-foreground mb-1.5 block">
+                Email
+              </label>
               <Input
+                id="login-email"
                 type="email"
-                placeholder="admin@geoaino.sn"
+                placeholder="agent@geoaino.sn"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -63,8 +68,11 @@ export default function LoginPage() {
               />
             </div>
             <div>
-              <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Mot de passe</label>
+              <label htmlFor="login-password" className="text-xs font-medium text-muted-foreground mb-1.5 block">
+                Mot de passe
+              </label>
               <Input
+                id="login-password"
                 type="password"
                 placeholder="••••••••"
                 value={password}
@@ -80,8 +88,8 @@ export default function LoginPage() {
           </form>
 
           <p className="text-xs text-muted-foreground text-center mt-4">
-            Pas encore de compte ?{" "}
-            <a href="/api/auth/register" className="text-primary hover:underline">Créer un compte</a>
+            L&apos;accès est réservé aux agents habilités. Contactez un administrateur pour obtenir un
+            compte.
           </p>
         </div>
       </div>

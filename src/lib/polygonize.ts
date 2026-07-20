@@ -248,8 +248,24 @@ function healUndershoots(lines: LineCoords[], tol: number, stats?: HealStats): L
   }
 
   // ---- Passe 2 : extrémités pendantes → raccord au segment le plus proche. ----
-  // Index spatial des segments (bbox → cellules de grille).
-  const segCell = Math.max(tol * 4, 8);
+  // Index spatial des segments (bbox → cellules de grille). La taille de
+  // cellule est bornée par l'étendue du PLUS GRAND segment : chaque segment
+  // est inséré dans toutes les cellules du rectangle de sa bbox, donc un
+  // segment kilométrique sur des cellules de 8 m insérerait des MILLIONS de
+  // cellules (« RangeError: Map maximum size exceeded » — limites de sections
+  // Matam). Avec la borne, ≤ ~65 cellules par axe et par segment ; des
+  // cellules plus grandes ajoutent des candidats par requête, mais le calcul
+  // de distance exact filtre — seul le coût varie, jamais le résultat.
+  let maxSpan = 0;
+  for (const l of out) {
+    for (let s = 0; s < l.length - 1; s++) {
+      const w = Math.abs(l[s + 1][0] - l[s][0]);
+      const h = Math.abs(l[s + 1][1] - l[s][1]);
+      if (w > maxSpan) maxSpan = w;
+      if (h > maxSpan) maxSpan = h;
+    }
+  }
+  const segCell = Math.max(tol * 4, 8, maxSpan / 64);
   const segs: Array<[number, number]> = []; // [indice ligne, indice du 1er sommet]
   const segGrid = new Map<string, number[]>();
   for (let i = 0; i < out.length; i++) {

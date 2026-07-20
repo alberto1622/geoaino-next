@@ -1,5 +1,6 @@
 "use server";
 
+import { requireUserId } from "./_auth";
 import {
   countNicads,
   countNicadsBascules,
@@ -13,6 +14,7 @@ import {
 } from "@/lib/cadastre/data";
 
 export async function getDashboardStats() {
+  await requireUserId();
   const [
     totalNicads,
     nicads2013,
@@ -55,5 +57,6 @@ export async function getDashboardStats() {
 }
 
 export async function getRecentOperationsList(input?: { limit?: number }) {
+  await requireUserId();
   return getRecentOperations(input?.limit ?? 20);
 }

@@ -1,7 +1,7 @@
 "use server";
 
 import { z } from "zod";
-import { requireUserId } from "./_auth";
+import { requireUserId, requireAdmin } from "./_auth";
 import {
   validateNicadFormat,
   validateNicadBatch,
@@ -33,6 +33,7 @@ import {
 
 // ─── Vérifier la validité d'un NICAD (format + existence en DB) ───────────────
 export async function verifierNicad(input: { nicad: string }) {
+  await requireUserId();
   const formatResult = validateNicadFormat(input.nicad);
 
   if (!formatResult.valid) {
@@ -81,6 +82,7 @@ export async function verifierNicad(input: { nicad: string }) {
 
 // ─── Vérifier un batch de NICAD ───────────────────────────────────────────────
 export async function verifierBatch(input: { nicads: string[] }) {
+  await requireUserId();
   const nicads = z.array(z.string()).max(1000).parse(input.nicads);
   const result = validateNicadBatch(nicads);
   await insertOperation({
@@ -378,7 +380,7 @@ const basculeBatchSchema = z.object({
 
 export async function basculerBatch(input: z.infer<typeof basculeBatchSchema>) {
   const data = basculeBatchSchema.parse(input);
-  const userId = await requireUserId();
+  const userId = await requireAdmin();
 
   const results: Array<{ nicadAncien: string; nicadNouveau?: string; success: boolean; error?: string }> = [];
 
@@ -453,21 +455,26 @@ export async function basculerBatch(input: z.infer<typeof basculeBatchSchema>) {
 
 // ─── Lectures ─────────────────────────────────────────────────────────────────
 export async function getNicad(input: { nicad: string }) {
+  await requireUserId();
   return (await getNicadByCode(input.nicad)) ?? null;
 }
 
 export async function rechercherNicad(input: { query: string; limit?: number }) {
+  await requireUserId();
   return searchNicads(input.query, input.limit ?? 20);
 }
 
 export async function historiqueNicad(input: { nicad: string }) {
+  await requireUserId();
   return getHistoriqueByNicad(input.nicad);
 }
 
 export async function historiqueRecent(input?: { limit?: number }) {
+  await requireUserId();
   return getRecentHistorique(input?.limit ?? 20);
 }
 
 export async function nicadsRecents(input?: { limit?: number }) {
+  await requireUserId();
   return getRecentNicads(input?.limit ?? 10);
 }

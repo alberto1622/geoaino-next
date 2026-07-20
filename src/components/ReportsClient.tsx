@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { NavBar } from "@/components/NavBar";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 import { toNum } from "@/lib/utils";
@@ -33,6 +34,7 @@ export default function ReportsClient({ user, reports }: Props) {
   const [selected, setSelected] = useState<Report | null>(reports[0] ?? null);
   const [generatingPdf, setGeneratingPdf] = useState(false);
   const [deleting, setDeleting] = useState<number | null>(null);
+  const [toDelete, setToDelete] = useState<Report | null>(null);
 
   const reportTypeLabel = (type: string) => {
     switch (type) {
@@ -64,9 +66,7 @@ export default function ReportsClient({ user, reports }: Props) {
     }
   };
 
-  const handleDeleteReport = async (e: React.MouseEvent, reportId: number) => {
-    e.stopPropagation();
-    if (!confirm("Supprimer ce rapport ? Cette action est irréversible.")) return;
+  const performDeleteReport = async (reportId: number) => {
     setDeleting(reportId);
     try {
       const res = await fetch(`/api/reports/${reportId}`, { method: "DELETE" });
@@ -81,6 +81,11 @@ export default function ReportsClient({ user, reports }: Props) {
     } finally {
       setDeleting(null);
     }
+  };
+
+  const handleDeleteReport = (e: React.MouseEvent, report: Report) => {
+    e.stopPropagation();
+    setToDelete(report);
   };
 
   return (
@@ -125,10 +130,11 @@ export default function ReportsClient({ user, reports }: Props) {
                         <Badge variant="default" className="text-[10px]">{reportTypeLabel(report.reportType)}</Badge>
                         <div className="flex items-center gap-1">
                           <button
-                            onClick={(e) => handleDeleteReport(e, report.id)}
+                            onClick={(e) => handleDeleteReport(e, report)}
                             disabled={deleting === report.id}
                             className="p-1 rounded cursor-pointer hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
                             title="Supprimer le rapport"
+                            aria-label="Supprimer le rapport"
                           >
                             {deleting === report.id ? (
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -179,8 +185,9 @@ export default function ReportsClient({ user, reports }: Props) {
                         size="sm"
                         variant="outline"
                         className="gap-1.5 h-8 text-destructive hover:text-destructive"
-                        onClick={(e) => handleDeleteReport(e, selected.id)}
+                        onClick={(e) => handleDeleteReport(e, selected)}
                         disabled={deleting === selected.id}
+                        aria-label="Supprimer le rapport"
                       >
                         {deleting === selected.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
                       </Button>
@@ -204,6 +211,17 @@ export default function ReportsClient({ user, reports }: Props) {
         )}
       </main>
 
+      <ConfirmDialog
+        open={toDelete !== null}
+        title="Supprimer le rapport"
+        description={`Supprimer le rapport « ${toDelete?.title ?? "sans titre"} » ?\nCette action est irréversible.`}
+        confirmLabel="Supprimer"
+        onConfirm={() => {
+          if (toDelete) void performDeleteReport(toDelete.id);
+          setToDelete(null);
+        }}
+        onCancel={() => setToDelete(null)}
+      />
     </div>
   );
 }

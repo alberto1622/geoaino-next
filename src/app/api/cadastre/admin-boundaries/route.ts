@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 import { getAdminBoundaries, type AdminLevel } from "@/lib/cadastre/admin-boundaries";
 
 export const runtime = "nodejs";
@@ -12,6 +13,11 @@ const LEVELS = new Set<AdminLevel>(["regions", "departements", "communes"]);
  * en mémoire + cache HTTP (référentiel statique).
  */
 export async function GET(req: NextRequest): Promise<NextResponse> {
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
+  }
+
   const niveau = req.nextUrl.searchParams.get("niveau") as AdminLevel | null;
   if (!niveau || !LEVELS.has(niveau)) {
     return NextResponse.json(

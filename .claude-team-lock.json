@@ -1,0 +1,28 @@
+{
+  "profile": "generated",
+  "source": "generated",
+  "version": "1.0.0",
+  "appliedAt": "2026-07-16T09:23:20.536Z",
+  "overlays": [
+    "javascript"
+  ],
+  "checksums": {
+    "CLAUDE.md.managed": "sha256:ab928d81e771ad897322df297e45e870c811d8bcb68fa9873cec15a812274c1c",
+    ".mcp.json.profile": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "settings.json.profile": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hooks.json.team": "sha256:61c804aede30521aa7c115de001dba24e952bf75fe76917fa78dc88af7278c8b"
+  },
+  "teamHookRefs": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash"
+      }
+    ]
+  },
+  "fingerprint": "8e1908e27aabc412",
+  "wizardAnswers": {
+    "testingRigor": "strict",
+    "codeChangeStyle": "surgical",
+    "securityPosture": "relaxed"
+  }
+}

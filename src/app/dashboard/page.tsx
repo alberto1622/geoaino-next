@@ -2,6 +2,8 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import DashboardClient from "@/components/DashboardClient";
 
+export const metadata = { title: "Tableau de bord" };
+
 type Period = "TODAY" | "WEEK" | "MONTH" | "ALL";
 
 function getDateFrom(period: Period): Date | null {

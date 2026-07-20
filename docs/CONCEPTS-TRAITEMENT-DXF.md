@@ -247,6 +247,15 @@ coin ouvert, trou > tolérance non corrigé, mitoyenneté saine inchangée).
 > (orientation neutralisée, `polygonize.ts · canonicalLineKey`) avant raccord et
 > noding.
 
+> ⚠️ **Piège — index en grille et segments kilométriques.** L'index spatial du
+> raccord insère chaque segment dans toutes les cellules du rectangle de sa
+> bbox : un segment kilométrique (limites de sections Matam) sur des cellules
+> de 8 m = des millions de cellules → `RangeError: Map maximum size exceeded`.
+> La taille de cellule est bornée par l'étendue du plus grand segment
+> (≤ ~65 cellules/axe/segment) — des cellules plus grandes ajoutent des
+> candidats par requête, mais la distance exacte filtre : le résultat est
+> identique, seul le coût varie.
+
 > ⚠️ **Piège — un « contact » à 1 µm n'est PAS une intersection.** La même
 > mitoyenne s'arrêtait à **0,7 µm** du segment de limite : sous l'ancien seuil
 > de contact (1 µm), le raccord supposait que le noding s'en chargerait. Faux :
@@ -629,6 +638,66 @@ montage les **lots stockés** (`listSectionBatches` → `/api/cadastre/sections/
 regroupés par `sourceFichier`) et réaffiche automatiquement le plus récent
 (sections + chevauchements) — un sélecteur permet de basculer entre lots.
 
+**Résidus non numérotés fusionnés à leur section hôte.** La polygonisation des
+limites de sections produit aussi de **petits polygones sans numéro** (trous ou
+lamelles découpés dans une vraie section par le noding) que le filtre
+« enveloppes » ne capte pas (ils n'englobent personne) — ils étaient conservés
+comme « numéro simplement manquant ». Règle : un polygone **sans numéro** ET
+sous `SECTION_MIN_AREA_SANS_NUMERO_M2` (défaut **1 ha**) est un résidu — il est
+**fusionné (union) dans sa section hôte**, jamais gardé comme section à part ;
+sans hôte trouvé, il est écarté (`build-sections.ts · absorbResidus`, compteurs
+`nbResidusFusionnes` / `nbResidusEcartes` dans le rapport du job). Le seuil ne
+s'applique JAMAIS aux polygones numérotés ; une vraie section sans étiquette
+(plusieurs hectares) reste conservée telle quelle.
+
+Pièges de l'absorption :
+
+- **Ne pas simplement les jeter** : un résidu logé dans un TROU de la section
+  laisserait un vide dans la couverture — l'union avec l'hôte comble le trou.
+- **Point-dans-polygone ne trouve pas l'hôte d'un trou** (l'intérieur d'un trou
+  est *hors* du polygone au sens PIP). Le rattachement se fait par **buffer de
+  1 m ∩ section** : l'hôte est la ligne d'intersection maximale, ce qui départage
+  aussi les lamelles bordées par deux sections (frontière partagée la plus longue).
+- L'absorption s'exécute **après dissolution** (commune, numéro) : chaque hôte
+  est complet et l'union se fait en une passe.
+
+**Suppression des zones récupérées à tort comme sections.** La polygonisation
+de la couche `limites_sections` peut produire des polygones qui ne sont PAS des
+sections (enveloppes de quartier, blocs, artefacts de tracé) : ils se repèrent
+surtout **visuellement**. Deux entrées de suppression, même route
+(`POST /api/cadastre/sections/delete`, `{ sectionId }`) : la corbeille de la
+table latérale, et le **popup au clic sur le polygone** (identité + bouton
+« Supprimer cette section »). Piège d'implémentation : la mise en évidence du
+chevauchement sélectionné restyle les couches en place (`setStyle`) au lieu de
+les reconstruire — sinon le changement de sélection déclenché par le même clic
+refermait aussitôt le popup (`SectionsClient.tsx`).
+
+**Fusion manuelle de sections (sans chevauchement détecté).** L'action `merge`
+du contrôle de chevauchements ne couvre pas tous les cas : une section arrive
+**fragmentée** (dissolution impossible faute de numéro ou de commune résolue,
+cf. dissolution par (commune, numéro)) ou **scindée à tort** — fragments
+disjoints ou seulement mitoyens, donc jamais présents dans
+`limite_section_overlap`. La page permet de sélectionner 2+ sections librement
+(bouton violet du popup carte, ou cases de la table) puis de les fusionner :
+`POST /api/cadastre/sections/merge` `{ sectionIds }` — **l'ordre compte, la
+première sélectionnée conserve numéro/commune/lot**, les autres sont
+supprimées. Géométrie : `turf.union` de l'ensemble (MultiPolygon si
+disjointes), **repli concaténation d'anneaux** si l'union échoue (même
+stratégie anti-perte que la dissolution de `build-sections`), puis re-contrôle
+des chevauchements de chaque lot touché. Côté UI, la surbrillance violette de
+la sélection est appliquée par restylage en place (même piège popup que la
+suppression, cf. ci-dessus).
+
+**Export shapefile des sections corrigées.** Le bouton « Exporter SHP » de la
+page produit un ZIP `.shp/.shx/.dbf/.prj` (WGS84) des sections **telles qu'en
+base** — donc APRÈS corrections de chevauchements (clip/merge/suppressions),
+pas la géométrie brute du DXF. La portée suit la vue courante : le lot
+sélectionné (`?sourceFichier=...`) ou tous les lots. L'écriture réutilise le
+générateur binaire des parcelles (`export-shapefile.ts`), avec le DBF
+paramétré par jeu de champs (`SECTION, COMMUNE, SYSCOL, REGION, DEPT, SURF_M2`,
+latin1 comme le reste du module) — `export-shapefile.ts ·
+buildSectionsShapefileZip`, route `GET /api/cadastre/sections/export`.
+
 **Pourquoi / pièges.**
 
 - La géométrie est stockée en **4326** (comme `cad_communes_2026`) pour que la
@@ -658,7 +727,16 @@ regroupés par `sourceFichier`) et réaffiche automatiquement le plus récent
 >    utilise sa propre tolérance `DXF_SECTION_SNAP_TOLERANCE_M` (défaut **1 m**,
 >    sans risque : deux sommets légitimes d'une section sont à des centaines de
 >    mètres) — `parcelle-ingestion.ts · polygonizeBoundaries`.
-> 3. **Jointures « premier contenant » (libellés ET NICAD).** Un point tombe à
+> 3. **Repli ogr2ogr systématique en `sectionsOnly` (corrigé).** Le critère de
+>    succès du lecteur natif testait `parcelles.length > 0` — or en
+>    `sectionsOnly`, `parcelles` est TOUJOURS vide (court-circuit) : chaque
+>    import de sections partait sur ogr2ogr même quand le natif fonctionnait
+>    (conversion moins fidèle, déluge « Warning 1: Non closed ring » de GDAL —
+>    cas Matam). Le critère est désormais `sections.length > 0` en
+>    `sectionsOnly`. En prime, le repli ogr2ogr écrit son journal GDAL dans un
+>    puits (`CPL_LOG=os.devNull`) et résume ses erreurs au lieu d'embarquer
+>    100k+ caractères de warnings bénins.
+> 4. **Jointures « premier contenant » (libellés ET NICAD).** Un point tombe à
 >    la fois dans sa vraie section et dans tout anneau d'ensemble/face sans
 >    numéro qui l'englobe : au « premier contenant » (ordre de grille
 >    arbitraire), l'enveloppe raflait la jointure. Les libellés `numero_section`
@@ -673,8 +751,58 @@ regroupés par `sourceFichier`) et réaffiche automatiquement le plus récent
 `src/lib/cadastre/build-sections.ts`, `src/lib/cadastre/sections-data.ts`
 (persistance + overlaps SQL brut + `listSectionBatches`), `src/lib/cadastre/data.ts`
 (`getCommuneInfo2026ForPoints`), `src/lib/import/run-job.ts` (branche `sections`),
-`src/app/api/cadastre/sections/{import,overlaps,correct,batches}/route.ts`,
+`src/lib/cadastre/export-shapefile.ts` (`buildSectionsShapefileZip`),
+`src/app/api/cadastre/sections/{import,overlaps,correct,merge,batches,export}/route.ts`,
 `src/app/cadastre/sections/page.tsx` + `src/components/cadastre/SectionsClient.tsx`.
+
+---
+
+## 11 bis. Sections fusionnées SANS trou de raccord : limite mitoyenne absente de la source
+
+**Problème métier.** Kaolack (`PLAN-CADASTRAL_KAOLACK_FINAL_-11-12-2025.dxf`),
+commune de THIARE : les sections **013 et 018** sortent fusionnées en une seule
+section « 013 » de 3 124 ha (le double d'une section normale de la commune) ;
+même pathologie pour **004/019**. Les sections 018 et 019 n'existent pas en base
+alors que leurs libellés `numero_section` sont bien dans le DXF.
+
+**Cause technique — à distinguer du cas « undershoot » (§ mémoire heal).** Deux
+mécanismes très différents produisent le même symptôme :
+
+1. **Trou de raccord** (undershoot métrique) : la mitoyenne existe mais s'arrête
+   à quelques dm/m du contour → `healUndershoots` la raccorde si le trou est
+   ≤ `DXF_SECTION_SNAP_TOLERANCE_M` (1 m par défaut). *Signature : des extrémités
+   pendantes proches de la zone, et une tolérance plus large sépare les sections.*
+2. **Limite absente** (cas THIARE) : la mitoyenne n'est dessinée **sur aucun
+   calque** du DXF. *Signature : AUCUNE extrémité pendante avec trou 1–50 m dans
+   la zone, et monter la tolérance ne sépare jamais — au contraire, à 2 m+ la
+   face absorbait aussi la 015.* Vérifié en polygonisant le réseau sections
+   enrichi tour à tour des lignes brutes de chaque calque du corridor
+   (`limites_parcelles` 83, `limite_section` 8, `limites_communes` 2) : 013/018
+   restent fusionnées dans tous les cas → la donnée n'existe pas.
+
+**Comportement du pipeline (correct vu la donnée).** Une seule face fermée
+contient deux libellés : la jointure « plus petit contenant » ajoute les deux
+numéros à `sectionNumerosVus[idx]`, mais la face ne garde que le **premier
+numéro vu** (`parcelle-ingestion.ts:1393`) — d'où « 013 ». Un avertissement est
+émis (`N section(s) contenant PLUSIEURS numéros … fusion probable`) listant les
+paires (ex. `013+018`).
+
+**Diagnostic.** `scripts/diagnose-sections.ts` (balayage de tolérances sur tout
+le fichier + liste des faces multi-numéros). Pour un cas localisé : restreindre
+le réseau à l'emprise de la commune (bbox 32628 via `cad_communes_2026`),
+mesurer les extrémités pendantes (distance extrémité → autre ligne, fenêtre
+1–50 m) et balayer les tolérances. Indice rapide côté base : une section dont la
+surface vaut ~2× ses voisines + des numéros manquants dans la séquence.
+
+**Remédiations.** (a) corriger le DXF source (tracer la mitoyenne) — seule vraie
+correction, la géométrie légale n'est pas inventable ; (b) à défaut, tracer la
+limite dans un SIG et réimporter ; (c) côté application, les avertissements
+multi-numéros de l'ingestion identifient les communes à contrôler — les paires
+sont dans le rapport d'import.
+
+**Pourquoi ne PAS augmenter la tolérance.** À 2 m, la face fusionnée absorbait
+aussi la section 015 : sur des tracés sans trou réel, élargir la tolérance ne
+sépare rien et **dégrade** les sections voisines saines. 1 m reste le bon réglage.
 
 ---
 
@@ -708,6 +836,8 @@ regroupés par `sourceFichier`) et réaffiche automatiquement le plus récent
 | `DXF_POLYGONIZE_PRECISION_SCALES` | `1000,100,20,10,5` | grilles de snap-rounding, fin → grossier (§4-5) |
 | `DXF_POLYGONIZE_SNAP_TOLERANCE_M` | `0.25` | raccord des extrémités pendantes avant noding, 0 = désactivé (§4 bis) |
 | `DXF_SECTION_SNAP_TOLERANCE_M` | `1` | idem, spécifique à la couche `limites_sections` (trous métriques, §11) |
+| `SECTION_MIN_AREA_SANS_NUMERO_M2` | `10000` | aire mini d'une section SANS numéro — en dessous : résidu fusionné à sa section hôte (§11) |
+| `SECTION_OVERLAP_MIN_AREA_M2` | `1` | aire mini d'une intersection pour compter comme chevauchement (§11) |
 | `DXF_POLYGONIZE_TILE_THRESHOLD` | `20000` | seuil de bascule vers le tuilage |
 | `DXF_POLYGONIZE_TILE_TARGET` | `4000` | segments visés par tuile (grille initiale) |
 | `DXF_POLYGONIZE_TILE_MARGIN_M` | `400` | marge de collecte des segments par tuile |

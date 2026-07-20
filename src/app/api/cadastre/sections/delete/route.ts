@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 import {
   deleteSection,
   deleteSectionsBySource,
@@ -15,6 +16,14 @@ export const runtime = "nodejs";
  *    retirés par `deleteSection` ; en supprimer une ne peut pas en créer).
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
+  }
+  if ((session.user as { role?: string }).role !== "ADMIN") {
+    return NextResponse.json({ error: "Opération réservée aux administrateurs" }, { status: 403 });
+  }
+
   let body: { sourceFichier?: string; sectionId?: number } = {};
   try {
     body = await req.json();

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 import { listSectionsGeo } from "@/lib/cadastre/sections-data";
 
 export const runtime = "nodejs";
@@ -10,6 +11,11 @@ export const runtime = "nodejs";
  * (ST_PointOnSurface) portant `numSection`/`commune`.
  */
 export async function GET(): Promise<NextResponse> {
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
+  }
+
   try {
     const sections = await listSectionsGeo();
 

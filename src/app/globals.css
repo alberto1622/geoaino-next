@@ -28,6 +28,10 @@
 }
 
 :root {
+  /* Widgets natifs (listes des <select>, scrollbars, date pickers) rendus en
+     sombre : sans cela le navigateur ouvre un popup clair avec le texte clair
+     du thème hérité → blanc sur blanc. */
+  color-scheme: dark;
   --radius: 0.625rem;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
@@ -48,6 +52,7 @@
 }
 
 .light {
+  color-scheme: light;
   --background: oklch(0.985 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -64,6 +69,13 @@
 
 * {
   border-color: var(--border);
+}
+
+/* Ceinture + bretelles pour Chrome/Edge Windows : couleurs explicites des
+   options des <select> natifs (le popup ne suit pas toujours color-scheme). */
+select option {
+  background-color: var(--card);
+  color: var(--foreground);
 }
 
 body {

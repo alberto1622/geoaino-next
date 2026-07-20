@@ -1,5 +1,6 @@
 "use server";
 
+import { requireUserId } from "./_auth";
 import {
   getParcelleByCoords,
   getParcellesBySyscol,
@@ -21,6 +22,7 @@ function nicadDisplay(nicad: string | null | undefined) {
 }
 
 export async function parcelleByCoords(input: { lat: number; lng: number; radiusKm?: number }) {
+  await requireUserId();
   const parcelle = await getParcelleByCoords(input.lat, input.lng, input.radiusKm ?? 0.2);
   if (!parcelle) return null;
   return { ...parcelle, nicadDisplay: nicadDisplay(parcelle.nicad) };
@@ -31,23 +33,28 @@ export async function parcellesBySyscol(input: {
   limit?: number;
   version?: "2013" | "2026";
 }) {
+  await requireUserId();
   return getParcellesBySyscol(input.syscol, input.limit ?? 1000, input.version);
 }
 
 export async function sectionsBySyscol(input: { syscol: string }) {
+  await requireUserId();
   return getSectionsWithGeom(input.syscol);
 }
 
 export async function allSections(input?: { limit?: number }) {
+  await requireUserId();
   return getAllSectionsWithGeom(input?.limit ?? 500);
 }
 
 export async function parcelleByNicad(input: { nicad: string }) {
+  await requireUserId();
   const p = await getParcelleByNicad(input.nicad);
   if (!p) return null;
   return { ...p, nicadDisplay: nicadDisplay(p.nicad) };
 }
 
 export async function parcellesCount() {
+  await requireUserId();
   return getParcellesCountBySyscol();
 }

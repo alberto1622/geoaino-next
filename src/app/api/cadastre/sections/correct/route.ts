@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 import * as turf from "@turf/turf";
 import {
   getOverlap,
@@ -36,6 +37,14 @@ function areaM2(g: PolyGeom): number {
  * Renvoie les sections + chevauchements à jour (re-contrôle après géométrie).
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
+  }
+  if ((session.user as { role?: string }).role !== "ADMIN") {
+    return NextResponse.json({ error: "Opération réservée aux administrateurs" }, { status: 403 });
+  }
+
   let body: { overlapId?: number; action?: string } = {};
   try {
     body = await req.json();

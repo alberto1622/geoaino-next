@@ -19,7 +19,10 @@ export const maxDuration = 600;
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     const session = await auth();
-    const userId = session?.user?.id ?? null;
+    const userId = session?.user?.id;
+    if (!userId) {
+      return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
+    }
 
     const formData = await req.formData();
     const files = formData.getAll("files") as File[];

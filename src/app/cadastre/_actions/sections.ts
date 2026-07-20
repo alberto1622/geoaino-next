@@ -11,6 +11,7 @@ import {
 } from "@/lib/cadastre/data";
 
 export async function listSectionsByCommune(input: { syscol: string; version?: "2013" | "2026" }) {
+  await requireUserId();
   return getSectionsByCommune(input.syscol, input.version);
 }
 
@@ -19,6 +20,7 @@ export async function verifierSection(input: {
   numSection: string;
   version: "2013" | "2026";
 }) {
+  await requireUserId();
   const section = await getSectionByKey(input.syscol, input.numSection, input.version);
   return { existe: !!section, section: section ?? null };
 }
