@@ -43,3 +43,6 @@ next-env.d.ts
 # upload files
 uploads/
 .claude-team-cache/
+
+# superpowers subagent-driven-development scratch workspace
+.superpowers/
