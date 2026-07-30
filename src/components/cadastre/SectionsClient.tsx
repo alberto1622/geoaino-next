@@ -169,6 +169,11 @@ export default function SectionsClient() {
   const [mergeSelection, setMergeSelection] = useState<number[]>([]);
   const mergeSelectionRef = useRef<number[]>([]);
   const [merging, setMerging] = useState(false);
+  // Sélection multiple de chevauchements pour un traitement groupé (découpe
+  // A/B, auto, ignorer) — même principe que `mergeSelection` mais restreinte
+  // aux chevauchements PENDING (voir `activeOverlapSelection` plus bas).
+  const [overlapSelection, setOverlapSelection] = useState<number[]>([]);
+  const [batchCorrecting, setBatchCorrecting] = useState(false);
   // Recadrage global : uniquement quand la PORTÉE des données change (premier
   // chargement, changement de lot) — jamais après une correction, fusion ou
   // suppression, sinon l'utilisateur perd sa vue zoomée à chaque action.
@@ -405,6 +410,12 @@ export default function SectionsClient() {
   // ── Sélection pour fusion manuelle ──────────────────────────────────────────
   const toggleMergeSelection = useCallback((id: number) => {
     setMergeSelection((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  }, []);
+
+  const toggleOverlapSelection = useCallback((id: number) => {
+    setOverlapSelection((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     );
   }, []);
@@ -962,6 +973,12 @@ export default function SectionsClient() {
   }, [sourceFichier, batches, performDeleteBatch]);
 
   const pending = overlaps.filter((o) => o.status === "PENDING");
+  // Sélection restreinte aux chevauchements encore PENDING affichés : les ids
+  // résolus (correction individuelle, changement de lot) deviennent inertes
+  // sans setState d'effet — même principe que `activeMergeSelection`.
+  const activeOverlapSelection = overlapSelection.filter((id) =>
+    pending.some((o) => o.id === id),
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -1299,6 +1316,31 @@ export default function SectionsClient() {
                     </p>
                   ) : (
                     <div className="space-y-2">
+                      <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                        <input
+                          type="checkbox"
+                          checked={
+                            pending.length > 0 &&
+                            activeOverlapSelection.length === pending.length
+                          }
+                          ref={(el) => {
+                            if (el) {
+                              el.indeterminate =
+                                activeOverlapSelection.length > 0 &&
+                                activeOverlapSelection.length < pending.length;
+                            }
+                          }}
+                          onChange={() =>
+                            setOverlapSelection(
+                              activeOverlapSelection.length === pending.length
+                                ? []
+                                : pending.map((o) => o.id),
+                            )
+                          }
+                          className="h-3 w-3 cursor-pointer accent-red-500"
+                        />
+                        Tout sélectionner ({pending.length})
+                      </label>
                       {pending.map((o) => {
                         const isSel = o.id === selectedOverlapId;
                         const busy = correcting === o.id;
@@ -1318,6 +1360,14 @@ export default function SectionsClient() {
                             ].join(" ")}
                           >
                             <div className="mb-1.5 flex items-center gap-2 text-xs">
+                              <input
+                                type="checkbox"
+                                checked={activeOverlapSelection.includes(o.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={() => toggleOverlapSelection(o.id)}
+                                title="Sélectionner pour traitement groupé"
+                                className="h-3 w-3 shrink-0 cursor-pointer accent-red-500"
+                              />
                               <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0" />
                               <span className="font-medium">
                                 Section {o.aNumSection ?? "—"} ↔{" "}
