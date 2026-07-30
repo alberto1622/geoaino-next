@@ -28,16 +28,6 @@ export type OverlapAction =
   | "delete_b"
   | "ignore";
 
-export const OVERLAP_ACTIONS = new Set<OverlapAction>([
-  "clip_a",
-  "clip_b",
-  "auto",
-  "merge",
-  "delete_a",
-  "delete_b",
-  "ignore",
-]);
-
 function areaM2(g: PolyGeom): number {
   try {
     return turf.area(turf.feature(g));

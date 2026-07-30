@@ -5,6 +5,7 @@ import { applyOverlapCorrection, type OverlapAction } from "@/lib/cadastre/overl
 import { refreshOverlaps, listSections, listOverlaps } from "@/lib/cadastre/sections-data";
 
 export const runtime = "nodejs";
+export const maxDuration = 600;
 
 // Fusion/suppression exclues du batch : trop sensibles pour un traitement en
 // masse (cf. design doc, portée). Seules les règles de découpe + l'ignorance
@@ -52,6 +53,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       { status: 400 },
     );
   }
+  if (overlapIds.length > 500) {
+    return NextResponse.json(
+      { error: "Lot trop volumineux (max 500 chevauchements par appel)." },
+      { status: 400 },
+    );
+  }
 
   const results: BatchResult[] = [];
   const touchedSources = new Set<string>();
@@ -61,6 +68,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       if (action !== "ignore") touchedSources.add(src);
       results.push({ overlapId, ok: true });
     } catch (err) {
+      console.error("[cadastre/sections/correct-batch] item failed", overlapId, err);
       results.push({ overlapId, ok: false, error: err instanceof Error ? err.message : String(err) });
     }
   }

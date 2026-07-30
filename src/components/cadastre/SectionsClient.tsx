@@ -1499,35 +1499,35 @@ export default function SectionsClient() {
                             </div>
                             <div className="grid grid-cols-2 gap-1">
                               <ActBtn
-                                busy={busy}
+                                busy={busy || batchCorrecting}
                                 onClick={() => applyCorrection(o, "clip_a")}
                                 icon={<Scissors className="h-3 w-3" />}
                               >
                                 Découper {o.aNumSection ?? "A"}
                               </ActBtn>
                               <ActBtn
-                                busy={busy}
+                                busy={busy || batchCorrecting}
                                 onClick={() => applyCorrection(o, "clip_b")}
                                 icon={<Scissors className="h-3 w-3" />}
                               >
                                 Découper {o.bNumSection ?? "B"}
                               </ActBtn>
                               <ActBtn
-                                busy={busy}
+                                busy={busy || batchCorrecting}
                                 onClick={() => applyCorrection(o, "merge")}
                                 icon={<Combine className="h-3 w-3" />}
                               >
                                 Fusionner
                               </ActBtn>
                               <ActBtn
-                                busy={busy}
+                                busy={busy || batchCorrecting}
                                 onClick={() => applyCorrection(o, "ignore")}
                                 icon={<EyeOff className="h-3 w-3" />}
                               >
                                 Ignorer
                               </ActBtn>
                               <ActBtn
-                                busy={busy}
+                                busy={busy || batchCorrecting}
                                 danger
                                 onClick={() => applyCorrection(o, "delete_a")}
                                 icon={<Trash2 className="h-3 w-3" />}
@@ -1535,7 +1535,7 @@ export default function SectionsClient() {
                                 Suppr. {o.aNumSection ?? "A"}
                               </ActBtn>
                               <ActBtn
-                                busy={busy}
+                                busy={busy || batchCorrecting}
                                 danger
                                 onClick={() => applyCorrection(o, "delete_b")}
                                 icon={<Trash2 className="h-3 w-3" />}
@@ -1627,7 +1627,7 @@ export default function SectionsClient() {
                                     e.stopPropagation();
                                     handleDeleteSection(s);
                                   }}
-                                  disabled={deletingSectionId === s.id}
+                                  disabled={deletingSectionId === s.id || batchCorrecting}
                                   title={`Supprimer la section ${s.numSection ?? "—"}`}
                                   className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
                                 >
