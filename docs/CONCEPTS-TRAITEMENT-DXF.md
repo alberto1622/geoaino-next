@@ -870,7 +870,7 @@ chevauchement au profit d'un autre traité juste avant dans le même lot.
 
 **Cause technique** : deux pièges distincts pour un traitement en masse
 d'objets géométriques qui peuvent se chevaucher les uns les autres :
-1. Une règle « garder la plus petite section » ne peut pas être décidée une
+1. Une règle « découper la plus grande section » ne peut pas être décidée une
    fois pour toutes à l'avance : elle dépend de l'aire de CHAQUE paire
    (`turf.area`), recalculée au moment de traiter CE chevauchement précis —
    pas un tri global des sections par taille en amont.
@@ -893,9 +893,15 @@ d'objets géométriques qui peuvent se chevaucher les uns les autres :
   précédente du même lot.
 - `refreshOverlaps` (recalcul des chevauchements du lot) n'est appelé
   **qu'une seule fois à la fin**, pour chaque `sourceFichier` distinct
-  effectivement modifié — pas une fois par chevauchement traité (coûteux et
-  inutile, l'état intermédiaire entre deux corrections du même lot n'a pas
-  besoin d'être recalculé).
+  effectivement modifié — pas une fois par chevauchement traité. Ce n'est PAS
+  une simple optimisation de performance : `refreshOverlaps` fait un `DELETE`
+  puis une nouvelle `INSERT ... SELECT` de toutes les lignes PENDING de
+  `limite_section_overlap` pour ce `sourceFichier`, ce qui leur donne de
+  **nouveaux id** en base (les anciens ids ne sont pas préservés). Si on
+  l'appelait après chaque item à l'intérieur de la boucle, tout `overlapId`
+  encore en file dans ce même lot pointerait vers une ligne qui n'existe
+  plus : le reste du lot échouerait à tort avec `"Chevauchement introuvable"`.
+  C'est une exigence de correction, pas seulement de performance.
 
 **Pourquoi (pièges inclus)** : un chevauchement déjà résolu par un item
 précédent du même lot (section supprimée car entièrement couverte) fait
