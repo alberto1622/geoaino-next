@@ -125,6 +125,13 @@ function escHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+const BATCH_ACTION_LABELS = {
+  clip_a: "Découper la section A",
+  clip_b: "Découper la section B",
+  auto: "Découper automatiquement (garder la plus petite section)",
+  ignore: "Ignorer",
+} as const;
+
 export default function SectionsClient() {
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
@@ -980,6 +987,71 @@ export default function SectionsClient() {
     pending.some((o) => o.id === id),
   );
 
+  // ── Application groupée d'une règle sur plusieurs chevauchements ───────────
+  const performBatchCorrection = useCallback(
+    async (ids: number[], action: "clip_a" | "clip_b" | "auto" | "ignore") => {
+      setBatchCorrecting(true);
+      try {
+        const res = await fetch("/api/cadastre/sections/correct-batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ overlapIds: ids, action, sourceFichier }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Correction groupée échouée");
+        setSections(data.sections ?? []);
+        setOverlaps(data.overlaps ?? []);
+        setOverlapSelection([]);
+        const results: Array<{ overlapId: number; ok: boolean; error?: string }> =
+          data.results ?? [];
+        const nbOk = results.filter((r) => r.ok).length;
+        const nbFail = results.length - nbOk;
+        if (nbFail === 0) {
+          toast.success(
+            `${nbOk} correction${nbOk > 1 ? "s" : ""} appliquée${nbOk > 1 ? "s" : ""}.`,
+          );
+        } else {
+          toast.warning(
+            `${nbOk} correction${nbOk > 1 ? "s" : ""} appliquée${nbOk > 1 ? "s" : ""}, ${nbFail} échouée${nbFail > 1 ? "s" : ""}.`,
+          );
+          console.warn(
+            "[correct-batch] échecs :",
+            results.filter((r) => !r.ok),
+          );
+        }
+      } catch (err) {
+        toast.error(String(err));
+      } finally {
+        setBatchCorrecting(false);
+      }
+    },
+    [sourceFichier],
+  );
+
+  const confirmBatchCorrection = useCallback(
+    (action: "clip_a" | "clip_b" | "auto" | "ignore") => {
+      const ids = activeOverlapSelection;
+      if (ids.length === 0) return;
+      const label = BATCH_ACTION_LABELS[action];
+      if (action === "ignore") {
+        setConfirmState({
+          title: "Ignorer les chevauchements sélectionnés",
+          description: `Marquer ${ids.length} chevauchement(s) comme intentionnel(s) — ils ne seront plus listés comme erreur.`,
+          confirmLabel: "Ignorer",
+          run: () => void performBatchCorrection(ids, action),
+        });
+        return;
+      }
+      setConfirmState({
+        title: label,
+        description: `${label} sur ${ids.length} chevauchement(s) sélectionné(s).\nCette action est irréversible.`,
+        confirmLabel: "Appliquer",
+        run: () => void performBatchCorrection(ids, action),
+      });
+    },
+    [activeOverlapSelection, performBatchCorrection],
+  );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Carte pleine largeur — les chevauchements sont dans un panneau
@@ -1341,6 +1413,52 @@ export default function SectionsClient() {
                         />
                         Tout sélectionner ({pending.length})
                       </label>
+                      {activeOverlapSelection.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-red-400/30 bg-red-500/5 p-2">
+                          <span className="text-[11px] font-medium">
+                            {activeOverlapSelection.length} sélectionné
+                            {activeOverlapSelection.length > 1 ? "s" : ""}
+                          </span>
+                          <div className="ml-auto flex flex-wrap gap-1">
+                            <ActBtn
+                              busy={batchCorrecting}
+                              onClick={() => confirmBatchCorrection("clip_a")}
+                              icon={<Scissors className="h-3 w-3" />}
+                            >
+                              Découper A
+                            </ActBtn>
+                            <ActBtn
+                              busy={batchCorrecting}
+                              onClick={() => confirmBatchCorrection("clip_b")}
+                              icon={<Scissors className="h-3 w-3" />}
+                            >
+                              Découper B
+                            </ActBtn>
+                            <ActBtn
+                              busy={batchCorrecting}
+                              onClick={() => confirmBatchCorrection("auto")}
+                              icon={<Scissors className="h-3 w-3" />}
+                            >
+                              Auto (+ petite)
+                            </ActBtn>
+                            <ActBtn
+                              busy={batchCorrecting}
+                              onClick={() => confirmBatchCorrection("ignore")}
+                              icon={<EyeOff className="h-3 w-3" />}
+                            >
+                              Ignorer
+                            </ActBtn>
+                            <button
+                              onClick={() => setOverlapSelection([])}
+                              disabled={batchCorrecting}
+                              className="rounded p-1 text-muted-foreground transition-colors hover:bg-secondary disabled:opacity-40"
+                              title="Annuler la sélection"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        </div>
+                      )}
                       {pending.map((o) => {
                         const isSel = o.id === selectedOverlapId;
                         const busy = correcting === o.id;
