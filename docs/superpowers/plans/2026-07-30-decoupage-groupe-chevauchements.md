@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Permettre de résoudre plusieurs chevauchements de `limite_section` en une seule opération (découpe A / découpe B / auto « garder la plus grande » / ignorer en masse), au lieu d'un traitement un par un.
+**Goal:** Permettre de résoudre plusieurs chevauchements de `limite_section` en une seule opération (découpe A / découpe B / auto « garder la plus petite » / ignorer en masse), au lieu d'un traitement un par un.
 
 **Architecture:** Extraire la logique de résolution d'un chevauchement (aujourd'hui inline dans `correct/route.ts`) dans une fonction partagée `applyOverlapCorrection`, réutilisée par l'endpoint existant (inchangé pour l'utilisateur) et un nouvel endpoint `/correct-batch` qui boucle dessus séquentiellement. Le frontend ajoute une sélection multiple (checkboxes) sur la liste des chevauchements en attente et une barre d'action groupée.
 
@@ -96,8 +96,9 @@ function areaM2(g: PolyGeom): number {
  *  - `clip_a` / `clip_b` : retire l'intersection de la section A (ou B) —
  *    `turf.difference` ; cible entièrement couverte → supprimée ;
  *  - `auto` : compare l'aire de A et de B (`turf.area`), découpe la plus
- *    PETITE des deux (équivalent à `clip_a` ou `clip_b` selon le cas) — à
- *    aire égale, découpe B (choix arbitraire mais déterministe) ;
+ *    GRANDE des deux, garde la plus petite intacte (équivalent à `clip_a`
+ *    ou `clip_b` selon le cas) — à aire égale, découpe B (choix arbitraire
+ *    mais déterministe) ;
  *  - `merge` : fusionne A et B (`turf.union`), B supprimée ;
  *  - `delete_a` / `delete_b` : supprime la section choisie ;
  *  - `ignore` : marque le chevauchement intentionnel (IGNORED).
@@ -616,7 +617,7 @@ dupliquer) puis, directement à la suite :
   const BATCH_ACTION_LABELS = {
     clip_a: "Découper la section A",
     clip_b: "Découper la section B",
-    auto: "Découper automatiquement (garder la plus grande section)",
+    auto: "Découper automatiquement (garder la plus petite section)",
     ignore: "Ignorer",
   } as const;
 
@@ -676,7 +677,7 @@ Juste après le `<label>` « Tout sélectionner » ajouté en Task 4 Step 4, ava
                               onClick={() => confirmBatchCorrection("auto")}
                               icon={<Scissors className="h-3 w-3" />}
                             >
-                              Auto (+ grande)
+                              Auto (+ petite)
                             </ActBtn>
                             <ActBtn
                               busy={batchCorrecting}
@@ -710,7 +711,7 @@ Expected: aucune sortie.
 
 `npm run dev`, page sections avec un lot ayant ≥ 3 chevauchements `PENDING` :
 1. Sélectionner 2 chevauchements → la barre d'action apparaît avec le bon compte.
-2. Cliquer « Auto (+ grande) » → dialogue de confirmation avec le bon message et le bon nombre → confirmer → toast `"2 corrections appliquées."`, les 2 chevauchements disparaissent de la liste, la carte se rafraîchit.
+2. Cliquer « Auto (+ petite) » → dialogue de confirmation avec le bon message et le bon nombre → confirmer → toast `"2 corrections appliquées."`, les 2 chevauchements disparaissent de la liste, la carte se rafraîchit. Vérifier dans la table des sections que c'est bien la section la plus GRANDE des deux qui a été rognée (surface réduite) et la plus petite qui reste intacte.
 3. Sélectionner 2 chevauchements dont un partage une section avec l'autre (si le jeu de données le permet) → « Découper A » → vérifier le toast en cas d'échec partiel (`"1 correction appliquée, 1 échouée."`) et que la correction réussie est bien appliquée malgré l'échec de l'autre.
 4. Cliquer « Tout sélectionner » puis « Ignorer » → tous les chevauchements du lot disparaissent de `PENDING` (statut `IGNORED`), aucune géométrie ne change (vérifier les surfaces des sections avant/après dans la table).
 
@@ -753,7 +754,7 @@ chevauchement au profit d'un autre traité juste avant dans le même lot.
 
 **Cause technique** : deux pièges distincts pour un traitement en masse
 d'objets géométriques qui peuvent se chevaucher les uns les autres :
-1. Une règle « garder la plus grande section » ne peut pas être décidée une
+1. Une règle « garder la plus petite section » ne peut pas être décidée une
    fois pour toutes à l'avance : elle dépend de l'aire de CHAQUE paire
    (`turf.area`), recalculée au moment de traiter CE chevauchement précis —
    pas un tri global des sections par taille en amont.
@@ -769,7 +770,7 @@ d'objets géométriques qui peuvent se chevaucher les uns les autres :
   `turf.area(b.geomGeoJson)` **au moment de traiter ce chevauchement précis**
   (les deux sections sont rechargées depuis la base via `getSection`, pas
   passées en paramètre depuis un calcul antérieur) — découpe systématiquement
-  la plus petite.
+  la plus grande, garde la plus petite intacte (à aire égale, découpe B).
 - Le traitement par lot boucle **séquentiellement** (`for...of`, pas
   `Promise.all`) sur la liste de chevauchements : chaque itération relit les
   sections depuis la base, donc voit forcément l'état laissé par l'itération

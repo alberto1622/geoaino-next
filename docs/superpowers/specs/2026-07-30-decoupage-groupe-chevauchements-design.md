@@ -21,8 +21,8 @@ appliquer une même règle de découpe (ou d'ignorance) en une seule opération.
   - **Découper A** — découpe systématiquement la première section (`aNumSection`)
     de chaque chevauchement sélectionné.
   - **Découper B** — idem pour la seconde section (`bNumSection`).
-  - **Auto (garder la plus grande)** — pour chaque chevauchement, calcule
-    l'aire de A et de B et découpe la plus petite.
+  - **Auto (garder la plus petite)** — pour chaque chevauchement, calcule
+    l'aire de A et de B et découpe la plus grande.
   - **Ignorer** — marque en masse les chevauchements sélectionnés comme
     `IGNORED` (intentionnels), aucune modification géométrique.
 - Traitement séquentiel : si un élément du lot échoue (ex. section déjà
@@ -60,7 +60,8 @@ export async function applyOverlapCorrection(
 - Nouvelle action `"auto"` : calcule `turf.area(fa)` et `turf.area(fb)`
   (mêmes `fa`/`fb` déjà construits pour `clip_a`/`clip_b`) et se comporte
   comme `clip_a` si `aire(A) > aire(B)`, sinon comme `clip_b` — découpe
-  toujours la plus petite, garde la plus grande intacte.
+  toujours la plus grande, garde la plus petite intacte (à aire égale,
+  découpe B).
 - Erreurs (overlap introuvable, section introuvable, fusion impossible)
   lancées comme `Error` avec message clair — à charge de l'appelant de les
   catcher (le batch les capture par item, `/correct` les laisse remonter
