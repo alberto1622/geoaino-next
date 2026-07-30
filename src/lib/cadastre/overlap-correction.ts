@@ -51,7 +51,7 @@ function areaM2(g: PolyGeom): number {
  *  - `clip_a` / `clip_b` : retire l'intersection de la section A (ou B) —
  *    `turf.difference` ; cible entièrement couverte → supprimée ;
  *  - `auto` : compare l'aire de A et de B (`turf.area`), découpe la plus
- *    PETITE des deux (équivalent à `clip_a` ou `clip_b` selon le cas) — à
+ *    GRANDE des deux (équivalent à `clip_a` ou `clip_b` selon le cas) — à
  *    aire égale, découpe B (choix arbitraire mais déterministe) ;
  *  - `merge` : fusionne A et B (`turf.union`), B supprimée ;
  *  - `delete_a` / `delete_b` : supprime la section choisie ;
