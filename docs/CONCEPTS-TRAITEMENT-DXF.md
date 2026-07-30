@@ -28,6 +28,7 @@ est vu, il doit être ajouté ici (cf. règle dans `CLAUDE.md`).
 10. [Colorer les NICAD manquants/courts sur toute l'analyse (hors plafond d'erreurs)](#10-colorer-les-nicad-manquantscourts-sur-toute-lanalyse-hors-plafond-derreurs)
 11. [Table `limite_section` : extraction des sections + contrôle des chevauchements](#11-table-limite_section--extraction-des-sections--contrôle-des-chevauchements)
 12. [Annexe — compteurs du rapport & variables d'environnement](#12-annexe--compteurs-du-rapport--variables-denvironnement)
+13. [Correction groupée des chevauchements de sections : règle « auto » et ordre séquentiel](#13-correction-groupée-des-chevauchements-de-sections--règle--auto--et-ordre-séquentiel)
 
 ---
 
@@ -856,6 +857,53 @@ sépare rien et **dégrade** les sections voisines saines. 1 m reste le bon rég
 `src/lib/polygonize.ts` (noding robuste + tuilage),
 `src/lib/parcelle-ingestion.ts` (validation, dédoublonnage, jointures),
 `src/app/api/analyses/[id]/features/delete/route.ts` (suppression manuelle).
+
+---
+
+## 13. Correction groupée des chevauchements de sections : règle « auto » et ordre séquentiel
+
+**Problème métier** : résoudre les chevauchements de `limite_section` un par
+un (découper/fusionner/supprimer) est lent quand un lot en contient des
+dizaines. Il faut pouvoir appliquer la même règle à plusieurs chevauchements
+en une fois, sans dupliquer la logique de résolution ni casser un
+chevauchement au profit d'un autre traité juste avant dans le même lot.
+
+**Cause technique** : deux pièges distincts pour un traitement en masse
+d'objets géométriques qui peuvent se chevaucher les uns les autres :
+1. Une règle « garder la plus petite section » ne peut pas être décidée une
+   fois pour toutes à l'avance : elle dépend de l'aire de CHAQUE paire
+   (`turf.area`), recalculée au moment de traiter CE chevauchement précis —
+   pas un tri global des sections par taille en amont.
+2. Un traitement **parallèle** (`Promise.all`) de plusieurs corrections est
+   dangereux dès que deux chevauchements du même lot partagent une section :
+   corriger le premier modifie la géométrie de cette section en base : si le
+   second lit sa version AVANT cette modification (ce qu'un traitement
+   parallèle ferait), il calcule une découpe sur une géométrie déjà périmée.
+
+**Solution** (`src/lib/cadastre/overlap-correction.ts` ·
+`applyOverlapCorrection`, `src/app/api/cadastre/sections/correct-batch/route.ts`) :
+- La règle `"auto"` compare `turf.area(a.geomGeoJson)` et
+  `turf.area(b.geomGeoJson)` **au moment de traiter ce chevauchement précis**
+  (les deux sections sont rechargées depuis la base via `getSection`, pas
+  passées en paramètre depuis un calcul antérieur) — découpe systématiquement
+  la plus grande, garde la plus petite intacte (à aire égale, découpe B).
+- Le traitement par lot boucle **séquentiellement** (`for...of`, pas
+  `Promise.all`) sur la liste de chevauchements : chaque itération relit les
+  sections depuis la base, donc voit forcément l'état laissé par l'itération
+  précédente du même lot.
+- `refreshOverlaps` (recalcul des chevauchements du lot) n'est appelé
+  **qu'une seule fois à la fin**, pour chaque `sourceFichier` distinct
+  effectivement modifié — pas une fois par chevauchement traité (coûteux et
+  inutile, l'état intermédiaire entre deux corrections du même lot n'a pas
+  besoin d'être recalculé).
+
+**Pourquoi (pièges inclus)** : un chevauchement déjà résolu par un item
+précédent du même lot (section supprimée car entièrement couverte) fait
+échouer proprement l'item suivant qui la référencerait encore
+(`"Section introuvable"`) — accepté par design (pas de rollback global, cf.
+`docs/superpowers/specs/2026-07-30-decoupage-groupe-chevauchements-design.md`) :
+le rapport `results[]` distingue réussites/échecs plutôt que de bloquer tout
+le lot pour un seul cas déjà résolu par ailleurs.
 
 ---
 
