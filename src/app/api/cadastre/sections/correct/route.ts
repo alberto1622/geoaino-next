@@ -2,13 +2,25 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import {
   applyOverlapCorrection,
-  OVERLAP_ACTIONS,
   statusForOverlapError,
   type OverlapAction,
 } from "@/lib/cadastre/overlap-correction";
 import { refreshOverlaps, listSections, listOverlaps } from "@/lib/cadastre/sections-data";
 
 export const runtime = "nodejs";
+
+// "auto" est réservé au traitement par lot (`correct-batch` — n'a de sens
+// que comparé à un groupe de chevauchements) : cette route à chevauchement
+// unique garde EXACTEMENT le même ensemble d'actions qu'avant l'extraction
+// (aucun changement d'interface HTTP), donc ne l'inclut pas.
+const SINGLE_CORRECT_ACTIONS = new Set<OverlapAction>([
+  "clip_a",
+  "clip_b",
+  "merge",
+  "delete_a",
+  "delete_b",
+  "ignore",
+]);
 
 /**
  * POST /api/cadastre/sections/correct — résout un chevauchement entre deux
@@ -32,7 +44,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   const overlapId = Number(body.overlapId);
   const action = body.action as OverlapAction;
-  if (!Number.isInteger(overlapId) || !OVERLAP_ACTIONS.has(action)) {
+  if (!Number.isInteger(overlapId) || !SINGLE_CORRECT_ACTIONS.has(action)) {
     return NextResponse.json({ error: "overlapId et action valides requis" }, { status: 400 });
   }
 
