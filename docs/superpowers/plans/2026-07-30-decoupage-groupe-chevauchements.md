@@ -203,9 +203,9 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Modify: `src/app/api/cadastre/sections/correct/route.ts` (fichier entier remplacé — 107 lignes actuelles)
 
 **Interfaces:**
-- Consomme (Task 1) : `applyOverlapCorrection`, `OVERLAP_ACTIONS`, `OverlapAction`, `statusForOverlapError` depuis `@/lib/cadastre/overlap-correction`.
+- Consomme (Task 1) : `applyOverlapCorrection`, `OverlapAction`, `statusForOverlapError` depuis `@/lib/cadastre/overlap-correction` (PAS `OVERLAP_ACTIONS` — voir `SINGLE_CORRECT_ACTIONS` ci-dessous, ensemble restreint local à ce fichier).
 - Consomme (existant) : `refreshOverlaps`, `listSections`, `listOverlaps` depuis `@/lib/cadastre/sections-data`.
-- Produit : aucun changement d'interface HTTP — même body `{overlapId, action}`, mêmes réponses/statuts qu'avant (régression zéro attendue).
+- Produit : aucun changement d'interface HTTP — même body `{overlapId, action}`, mêmes réponses/statuts qu'avant (régression zéro attendue, y compris le rejet en 400 de `action: "auto"` — réservée à `correct-batch`, Task 3).
 
 - [ ] **Step 1: Remplacer le contenu du fichier**
 
@@ -215,13 +215,25 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import {
   applyOverlapCorrection,
-  OVERLAP_ACTIONS,
   statusForOverlapError,
   type OverlapAction,
 } from "@/lib/cadastre/overlap-correction";
 import { refreshOverlaps, listSections, listOverlaps } from "@/lib/cadastre/sections-data";
 
 export const runtime = "nodejs";
+
+// "auto" est réservé au traitement par lot (`correct-batch` — n'a de sens
+// que comparé à un groupe de chevauchements) : cette route à chevauchement
+// unique garde EXACTEMENT le même ensemble d'actions qu'avant l'extraction
+// (aucun changement d'interface HTTP), donc ne l'inclut pas.
+const SINGLE_CORRECT_ACTIONS = new Set<OverlapAction>([
+  "clip_a",
+  "clip_b",
+  "merge",
+  "delete_a",
+  "delete_b",
+  "ignore",
+]);
 
 /**
  * POST /api/cadastre/sections/correct — résout un chevauchement entre deux
@@ -245,7 +257,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   const overlapId = Number(body.overlapId);
   const action = body.action as OverlapAction;
-  if (!Number.isInteger(overlapId) || !OVERLAP_ACTIONS.has(action)) {
+  if (!Number.isInteger(overlapId) || !SINGLE_CORRECT_ACTIONS.has(action)) {
     return NextResponse.json({ error: "overlapId et action valides requis" }, { status: 400 });
   }
 
@@ -280,8 +292,9 @@ Démarrer le serveur de dev (`npm run dev`), ouvrir la page des sections, avec u
 1. Cliquer « Découper A » sur un chevauchement → vérifier que la section A est bien découpée, la carte et la liste se rafraîchissent, toast de succès.
 2. Cliquer « Ignorer » sur un autre chevauchement → il disparaît de la liste `PENDING`, aucune géométrie ne change.
 3. Provoquer une erreur volontaire (ex. appeler l'API avec un `overlapId` inexistant via la console navigateur `fetch("/api/cadastre/sections/correct", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({overlapId: 999999999, action: "clip_a"})})`) → vérifier une réponse `404` avec `{"error":"Chevauchement introuvable"}`.
+4. Vérifier que `action: "auto"` est toujours REJETÉE par cette route (comme avant l'extraction) : `fetch("/api/cadastre/sections/correct", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({overlapId: <un id PENDING valide>, action: "auto"})})` → doit renvoyer `400 {"error":"overlapId et action valides requis"}`, PAS une correction appliquée. `"auto"` n'a de sens que comparé à un groupe (Task 3, `correct-batch`), pas ici.
 
-Expected: comportement identique à avant l'extraction (aucune régression visible).
+Expected: comportement identique à avant l'extraction (aucune régression visible), y compris le rejet de `"auto"`.
 
 - [ ] **Step 4: Commit**
 
