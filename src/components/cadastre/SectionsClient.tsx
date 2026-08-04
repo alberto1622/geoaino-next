@@ -20,6 +20,8 @@ import {
   ChevronsRight,
   Layers,
   ChevronDown,
+  Pencil,
+  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -184,11 +186,20 @@ export default function SectionsClient() {
   const [mergeSelection, setMergeSelection] = useState<number[]>([]);
   const mergeSelectionRef = useRef<number[]>([]);
   const [merging, setMerging] = useState(false);
+  // Attribution de numéro pour une section qui n'en a pas — édition inline
+  // partagée par la table et le popup carte (même handler performSetNumero).
+  const [numeroEditId, setNumeroEditId] = useState<number | null>(null);
+  const [numeroDraft, setNumeroDraft] = useState("");
+  const [savingNumero, setSavingNumero] = useState<number | null>(null);
+  // Filtre "Sans numéro" : restreint table ET carte aux sections numSection === null.
+  const [showUnnumberedOnly, setShowUnnumberedOnly] = useState(false);
   // Sélection multiple de chevauchements pour un traitement groupé (découpe
   // A/B, auto, ignorer) — même principe que `mergeSelection` mais restreinte
   // aux chevauchements PENDING (voir `activeOverlapSelection` plus bas).
   const [overlapSelection, setOverlapSelection] = useState<number[]>([]);
   const [batchCorrecting, setBatchCorrecting] = useState(false);
+  // Ref miroir pour lecture dans le popup carte (impératif, cf. mergeSelectionRef).
+  const batchCorrectingRef = useRef(false);
   // Recadrage global : uniquement quand la PORTÉE des données change (premier
   // chargement, changement de lot) — jamais après une correction, fusion ou
   // suppression, sinon l'utilisateur perd sa vue zoomée à chaque action.
@@ -485,6 +496,10 @@ export default function SectionsClient() {
     mergeSelectionRef.current = activeMergeSelection;
   }, [activeMergeSelection]);
 
+  useEffect(() => {
+    batchCorrectingRef.current = batchCorrecting;
+  }, [batchCorrecting]);
+
   // Sections impliquées dans au moins un chevauchement EN ATTENTE : colorées
   // en alerte (ambre) — toutes les autres partagent la couleur unique.
   const pendingSectionIds = useMemo(() => {
@@ -496,6 +511,46 @@ export default function SectionsClient() {
     }
     return ids;
   }, [overlaps]);
+
+  // ── Attribution d'un numéro à une section qui n'en a pas ────────────────────
+  // Handler partagé par la table (édition inline) et le popup carte (Task 4).
+  const performSetNumero = useCallback(async (sectionId: number, rawValue: string) => {
+    const numSection = rawValue.trim();
+    if (!numSection) {
+      toast.error("Le numéro ne peut pas être vide.");
+      return;
+    }
+    setSavingNumero(sectionId);
+    try {
+      const res = await fetch("/api/cadastre/sections/numero", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sectionId, numSection }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Attribution échouée");
+      setSections((prev) =>
+        prev.map((s) => (s.id === sectionId ? { ...s, numSection } : s)),
+      );
+      setNumeroEditId(null);
+      toast.success(`Numéro ${numSection} attribué.`);
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setSavingNumero(null);
+    }
+  }, []);
+
+  const unnumberedCount = useMemo(
+    () => sections.filter((s) => !s.numSection).length,
+    [sections],
+  );
+  // Sections effectivement dessinées/listées — restreintes aux non numérotées
+  // quand le filtre "Sans numéro" est actif.
+  const displayedSections = useMemo(
+    () => (showUnnumberedOnly ? sections.filter((s) => !s.numSection) : sections),
+    [sections, showUnnumberedOnly],
+  );
 
   // ── (Re)dessin des couches sections + chevauchements ───────────────────────
   useEffect(() => {
@@ -514,7 +569,7 @@ export default function SectionsClient() {
 
     const secGroup = L.featureGroup();
     sectionLayersRef.current.clear();
-    for (const s of sections) {
+    for (const s of displayedSections) {
       if (!s.geomGeoJson) continue;
       const hasError = pendingSectionIds.has(s.id);
       const color = sectionColor(hasError);
@@ -525,10 +580,12 @@ export default function SectionsClient() {
             : { color, weight: 1.2, fillColor: color, fillOpacity: 0.15 },
         });
         gj.bindTooltip(
-          `Section <b>${s.numSection ?? "—"}</b><br/>${s.commune ?? "—"}` +
+          `Section <b>${escHtml(s.numSection ?? "—")}</b><br/>${escHtml(s.commune ?? "—")}` +
             (hasError
               ? "<br/><span style='color:#b45309'>⚠ chevauchement à corriger — cliquer pour le sélectionner</span>"
-              : "<br/><span style='opacity:.7'>cliquer : détails / supprimer</span>"),
+              : !s.numSection
+                ? "<br/><span style='color:#f59e0b'>⚠ sans numéro — cliquer pour en attribuer un</span>"
+                : "<br/><span style='opacity:.7'>cliquer : détails / supprimer</span>"),
           { sticky: true },
         );
         // Popup au clic : identité de la zone + suppression directe depuis la
@@ -541,6 +598,44 @@ export default function SectionsClient() {
           (s.surfaceM2 != null
             ? `<br/>${Math.round(s.surfaceM2).toLocaleString("fr-FR")} m²`
             : "");
+        // Section sans numéro : champ d'attribution directement dans le popup.
+        let numeroWrap: HTMLDivElement | null = null;
+        if (!s.numSection) {
+          numeroWrap = document.createElement("div");
+          numeroWrap.style.cssText = "margin-top:6px;display:flex;gap:4px";
+          const numeroInput = document.createElement("input");
+          numeroInput.type = "text";
+          numeroInput.placeholder = "N° section";
+          numeroInput.style.cssText =
+            "flex:1;min-width:0;padding:3px 6px;font-size:11px;border-radius:6px;" +
+            "border:1px solid #f59e0b;background:transparent;color:inherit";
+          const numeroBtn = document.createElement("button");
+          numeroBtn.type = "button";
+          numeroBtn.textContent = "Attribuer";
+          numeroBtn.style.cssText =
+            "padding:3px 8px;font-size:11px;border-radius:6px;" +
+            "border:1px solid #f59e0b;color:#f59e0b;background:transparent;cursor:pointer";
+          const submitNumero = () => {
+            if (batchCorrectingRef.current) return;
+            const val = numeroInput.value.trim();
+            if (!val) return;
+            map.closePopup();
+            void performSetNumero(s.id, val);
+          };
+          numeroBtn.onclick = submitNumero;
+          numeroInput.onkeydown = (e: KeyboardEvent) => {
+            if (e.key === "Enter") submitNumero();
+          };
+          // Correction groupée en cours : ce bouton reste inerte (la réponse
+          // du batch écrase `sections` — cf. batchCorrecting).
+          const syncNumeroBtn = () => {
+            numeroBtn.disabled = batchCorrectingRef.current;
+          };
+          syncNumeroBtn();
+          gj.on("popupopen", syncNumeroBtn);
+          numeroWrap.appendChild(numeroInput);
+          numeroWrap.appendChild(numeroBtn);
+        }
         const mergeBtn = document.createElement("button");
         mergeBtn.type = "button";
         mergeBtn.style.cssText =
@@ -570,6 +665,7 @@ export default function SectionsClient() {
           void handleDeleteSection(s);
         };
         popup.appendChild(info);
+        if (numeroWrap) popup.appendChild(numeroWrap);
         popup.appendChild(mergeBtn);
         popup.appendChild(delBtn);
         gj.bindPopup(popup);
@@ -633,7 +729,7 @@ export default function SectionsClient() {
     // Cadrage global uniquement si un changement de portée est en attente
     // (premier chargement, changement de lot) — les corrections, fusions et
     // suppressions redessinent SANS toucher à la vue courante.
-    if (fitPendingRef.current && sections.length > 0) {
+    if (fitPendingRef.current && displayedSections.length > 0) {
       fitPendingRef.current = false;
       try {
         const b = secGroup.getBounds();
@@ -643,12 +739,13 @@ export default function SectionsClient() {
       }
     }
   }, [
-    sections,
+    displayedSections,
     overlaps,
     pendingSectionIds,
     mapReady,
     handleDeleteSection,
     toggleMergeSelection,
+    performSetNumero,
   ]);
 
   // ── Surbrillance des sections sélectionnées pour fusion (restylage seul) ───
@@ -675,7 +772,7 @@ export default function SectionsClient() {
         /* ignore */
       }
     }
-  }, [activeMergeSelection, sections, overlaps, pendingSectionIds, mapReady]);
+  }, [activeMergeSelection, displayedSections, overlaps, pendingSectionIds, mapReady]);
 
   // ── Mise en évidence du chevauchement sélectionné (restylage seul) ─────────
   // Dépend aussi de sections/overlaps pour rejouer après chaque reconstruction
@@ -1630,9 +1727,30 @@ export default function SectionsClient() {
                 {/* Table des sections */}
                 {sections.length > 0 && (
                   <div>
-                    <h3 className="mb-2 text-sm font-semibold">
-                      Sections ({sections.length})
-                    </h3>
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <h3 className="text-sm font-semibold">
+                        Sections ({displayedSections.length}
+                        {showUnnumberedOnly ? ` / ${sections.length}` : ""})
+                      </h3>
+                      {/* Toujours affiché quand le filtre est actif (même à 0 restant)
+                          pour que l'utilisateur puisse le désactiver ; sinon affiché
+                          seulement s'il reste des sections sans numéro à filtrer. */}
+                      {(unnumberedCount > 0 || showUnnumberedOnly) && (
+                        <button
+                          onClick={() => setShowUnnumberedOnly((v) => !v)}
+                          title="Afficher uniquement les sections sans numéro"
+                          className={[
+                            "flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors",
+                            showUnnumberedOnly
+                              ? "bg-amber-500/20 text-amber-500"
+                              : "bg-secondary text-muted-foreground hover:bg-secondary/70",
+                          ].join(" ")}
+                        >
+                          <Pencil className="h-3 w-3" />
+                          Sans numéro ({unnumberedCount})
+                        </button>
+                      )}
+                    </div>
                     <div className="max-h-70 overflow-auto">
                       <table className="w-full border-collapse text-[11px]">
                         <thead className="sticky top-0 bg-card">
@@ -1655,7 +1773,7 @@ export default function SectionsClient() {
                           </tr>
                         </thead>
                         <tbody>
-                          {sections.map((s) => (
+                          {displayedSections.map((s) => (
                             <tr
                               key={s.id}
                               onClick={() => zoomToSection(s)}
@@ -1673,17 +1791,72 @@ export default function SectionsClient() {
                                 />
                               </td>
                               <td className="py-1 pr-2">
-                                <span className="inline-flex items-center gap-1.5">
+                                {numeroEditId === s.id ? (
                                   <span
-                                    className="h-2.5 w-2.5 rounded-sm"
-                                    style={{
-                                      background: sectionColor(
-                                        pendingSectionIds.has(s.id),
-                                      ),
-                                    }}
-                                  />
-                                  {s.numSection ?? "—"}
-                                </span>
+                                    className="inline-flex items-center gap-1"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <input
+                                      autoFocus
+                                      value={numeroDraft}
+                                      onChange={(e) => setNumeroDraft(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          if (batchCorrecting) return;
+                                          void performSetNumero(s.id, numeroDraft);
+                                        } else if (e.key === "Escape") {
+                                          setNumeroEditId(null);
+                                        }
+                                      }}
+                                      placeholder="N°"
+                                      className="h-5 w-14 rounded border border-border bg-background px-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-ring"
+                                    />
+                                    <button
+                                      onClick={() => void performSetNumero(s.id, numeroDraft)}
+                                      disabled={savingNumero === s.id || batchCorrecting}
+                                      title="Enregistrer le numéro"
+                                      className="rounded p-0.5 text-green-500 transition-colors hover:bg-green-500/10 disabled:opacity-40"
+                                    >
+                                      {savingNumero === s.id ? (
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                      ) : (
+                                        <Check className="h-3 w-3" />
+                                      )}
+                                    </button>
+                                    <button
+                                      onClick={() => setNumeroEditId(null)}
+                                      title="Annuler"
+                                      className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-secondary"
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1.5">
+                                    <span
+                                      className="h-2.5 w-2.5 rounded-sm"
+                                      style={{
+                                        background: sectionColor(
+                                          pendingSectionIds.has(s.id),
+                                        ),
+                                      }}
+                                    />
+                                    {s.numSection ?? (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setNumeroEditId(s.id);
+                                          setNumeroDraft("");
+                                        }}
+                                        disabled={batchCorrecting}
+                                        title="Attribuer un numéro de section"
+                                        className="inline-flex items-center gap-1 text-amber-500 hover:underline disabled:opacity-40"
+                                      >
+                                        <Pencil className="h-3 w-3" />—
+                                      </button>
+                                    )}
+                                  </span>
+                                )}
                               </td>
                               <td className="py-1 pr-2 truncate max-w-27.5">
                                 {s.commune ?? "—"}

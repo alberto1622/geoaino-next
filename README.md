@@ -87,12 +87,6 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 
 - ✅Ajouter l'ajout de section à partir de shape file
 - ✅Appliquer la polygonisation lors de la construction des sections
+- Appliquer la possibilité de mise à jour automatique des nicad d'une numero de section ajouter ou modifier
 
 Qiusheng Wu - Building open-source tools for geospatial data science and GeoAI
-
-┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-│ 📥 SOURCES │ │ ⚙️ PROCESSING │ │ 💾 STOCKAGE │ │📊 DASHBOARD │
-├──────────────┤ ├──────────────┤ ├──────────────┤ ├──────────────┤
-│ Kaggle CSV │─────▶│ Pandas │─────▶│ DuckDB │─────▶│ FastAPI │
-│ Web Scraping │ │ PySpark │ │Elasticsearch │ │ Streamlit │
-└──────────────┘ └──────────────┘ └──────────────┘ └──────────────┘
