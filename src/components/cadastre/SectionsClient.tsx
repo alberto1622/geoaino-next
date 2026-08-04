@@ -183,6 +183,8 @@ export default function SectionsClient() {
   const [numeroEditId, setNumeroEditId] = useState<number | null>(null);
   const [numeroDraft, setNumeroDraft] = useState("");
   const [savingNumero, setSavingNumero] = useState<number | null>(null);
+  // Filtre "Sans numéro" : restreint table ET carte aux sections numSection === null.
+  const [showUnnumberedOnly, setShowUnnumberedOnly] = useState(false);
   // Sélection multiple de chevauchements pour un traitement groupé (découpe
   // A/B, auto, ignorer) — même principe que `mergeSelection` mais restreinte
   // aux chevauchements PENDING (voir `activeOverlapSelection` plus bas).
@@ -486,6 +488,17 @@ export default function SectionsClient() {
     }
   }, []);
 
+  const unnumberedCount = useMemo(
+    () => sections.filter((s) => !s.numSection).length,
+    [sections],
+  );
+  // Sections effectivement dessinées/listées — restreintes aux non numérotées
+  // quand le filtre "Sans numéro" est actif.
+  const displayedSections = useMemo(
+    () => (showUnnumberedOnly ? sections.filter((s) => !s.numSection) : sections),
+    [sections, showUnnumberedOnly],
+  );
+
   // ── (Re)dessin des couches sections + chevauchements ───────────────────────
   useEffect(() => {
     const L = LRef.current;
@@ -503,7 +516,7 @@ export default function SectionsClient() {
 
     const secGroup = L.featureGroup();
     sectionLayersRef.current.clear();
-    for (const s of sections) {
+    for (const s of displayedSections) {
       if (!s.geomGeoJson) continue;
       const hasError = pendingSectionIds.has(s.id);
       const color = sectionColor(hasError);
@@ -655,7 +668,7 @@ export default function SectionsClient() {
     // Cadrage global uniquement si un changement de portée est en attente
     // (premier chargement, changement de lot) — les corrections, fusions et
     // suppressions redessinent SANS toucher à la vue courante.
-    if (fitPendingRef.current && sections.length > 0) {
+    if (fitPendingRef.current && displayedSections.length > 0) {
       fitPendingRef.current = false;
       try {
         const b = secGroup.getBounds();
@@ -665,7 +678,7 @@ export default function SectionsClient() {
       }
     }
   }, [
-    sections,
+    displayedSections,
     overlaps,
     pendingSectionIds,
     mapReady,
@@ -698,7 +711,7 @@ export default function SectionsClient() {
         /* ignore */
       }
     }
-  }, [activeMergeSelection, sections, overlaps, pendingSectionIds, mapReady]);
+  }, [activeMergeSelection, displayedSections, overlaps, pendingSectionIds, mapReady]);
 
   // ── Mise en évidence du chevauchement sélectionné (restylage seul) ─────────
   // Dépend aussi de sections/overlaps pour rejouer après chaque reconstruction
@@ -1623,9 +1636,27 @@ export default function SectionsClient() {
                 {/* Table des sections */}
                 {sections.length > 0 && (
                   <div>
-                    <h3 className="mb-2 text-sm font-semibold">
-                      Sections ({sections.length})
-                    </h3>
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <h3 className="text-sm font-semibold">
+                        Sections ({displayedSections.length}
+                        {showUnnumberedOnly ? ` / ${sections.length}` : ""})
+                      </h3>
+                      {unnumberedCount > 0 && (
+                        <button
+                          onClick={() => setShowUnnumberedOnly((v) => !v)}
+                          title="Afficher uniquement les sections sans numéro"
+                          className={[
+                            "flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors",
+                            showUnnumberedOnly
+                              ? "bg-amber-500/20 text-amber-500"
+                              : "bg-secondary text-muted-foreground hover:bg-secondary/70",
+                          ].join(" ")}
+                        >
+                          <Pencil className="h-3 w-3" />
+                          Sans numéro ({unnumberedCount})
+                        </button>
+                      )}
+                    </div>
                     <div className="max-h-70 overflow-auto">
                       <table className="w-full border-collapse text-[11px]">
                         <thead className="sticky top-0 bg-card">
@@ -1648,7 +1679,7 @@ export default function SectionsClient() {
                           </tr>
                         </thead>
                         <tbody>
-                          {sections.map((s) => (
+                          {displayedSections.map((s) => (
                             <tr
                               key={s.id}
                               onClick={() => zoomToSection(s)}
