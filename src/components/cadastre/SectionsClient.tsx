@@ -1641,7 +1641,10 @@ export default function SectionsClient() {
                         Sections ({displayedSections.length}
                         {showUnnumberedOnly ? ` / ${sections.length}` : ""})
                       </h3>
-                      {unnumberedCount > 0 && (
+                      {/* Toujours affiché quand le filtre est actif (même à 0 restant)
+                          pour que l'utilisateur puisse le désactiver ; sinon affiché
+                          seulement s'il reste des sections sans numéro à filtrer. */}
+                      {(unnumberedCount > 0 || showUnnumberedOnly) && (
                         <button
                           onClick={() => setShowUnnumberedOnly((v) => !v)}
                           title="Afficher uniquement les sections sans numéro"
