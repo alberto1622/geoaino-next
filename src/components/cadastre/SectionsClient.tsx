@@ -18,6 +18,8 @@ import {
   X,
   ChevronsLeft,
   ChevronsRight,
+  Pencil,
+  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -176,6 +178,11 @@ export default function SectionsClient() {
   const [mergeSelection, setMergeSelection] = useState<number[]>([]);
   const mergeSelectionRef = useRef<number[]>([]);
   const [merging, setMerging] = useState(false);
+  // Attribution de numéro pour une section qui n'en a pas — édition inline
+  // partagée par la table et le popup carte (même handler performSetNumero).
+  const [numeroEditId, setNumeroEditId] = useState<number | null>(null);
+  const [numeroDraft, setNumeroDraft] = useState("");
+  const [savingNumero, setSavingNumero] = useState<number | null>(null);
   // Sélection multiple de chevauchements pour un traitement groupé (découpe
   // A/B, auto, ignorer) — même principe que `mergeSelection` mais restreinte
   // aux chevauchements PENDING (voir `activeOverlapSelection` plus bas).
@@ -449,6 +456,35 @@ export default function SectionsClient() {
     }
     return ids;
   }, [overlaps]);
+
+  // ── Attribution d'un numéro à une section qui n'en a pas ────────────────────
+  // Handler partagé par la table (édition inline) et le popup carte (Task 4).
+  const performSetNumero = useCallback(async (sectionId: number, rawValue: string) => {
+    const numSection = rawValue.trim();
+    if (!numSection) {
+      toast.error("Le numéro ne peut pas être vide.");
+      return;
+    }
+    setSavingNumero(sectionId);
+    try {
+      const res = await fetch("/api/cadastre/sections/numero", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sectionId, numSection }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Attribution échouée");
+      setSections((prev) =>
+        prev.map((s) => (s.id === sectionId ? { ...s, numSection } : s)),
+      );
+      setNumeroEditId(null);
+      toast.success(`Numéro ${numSection} attribué.`);
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setSavingNumero(null);
+    }
+  }, []);
 
   // ── (Re)dessin des couches sections + chevauchements ───────────────────────
   useEffect(() => {
@@ -1596,17 +1632,70 @@ export default function SectionsClient() {
                                 />
                               </td>
                               <td className="py-1 pr-2">
-                                <span className="inline-flex items-center gap-1.5">
+                                {numeroEditId === s.id ? (
                                   <span
-                                    className="h-2.5 w-2.5 rounded-sm"
-                                    style={{
-                                      background: sectionColor(
-                                        pendingSectionIds.has(s.id),
-                                      ),
-                                    }}
-                                  />
-                                  {s.numSection ?? "—"}
-                                </span>
+                                    className="inline-flex items-center gap-1"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <input
+                                      autoFocus
+                                      value={numeroDraft}
+                                      onChange={(e) => setNumeroDraft(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          void performSetNumero(s.id, numeroDraft);
+                                        } else if (e.key === "Escape") {
+                                          setNumeroEditId(null);
+                                        }
+                                      }}
+                                      placeholder="N°"
+                                      className="h-5 w-14 rounded border border-border bg-background px-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-ring"
+                                    />
+                                    <button
+                                      onClick={() => void performSetNumero(s.id, numeroDraft)}
+                                      disabled={savingNumero === s.id}
+                                      title="Enregistrer le numéro"
+                                      className="rounded p-0.5 text-green-500 transition-colors hover:bg-green-500/10 disabled:opacity-40"
+                                    >
+                                      {savingNumero === s.id ? (
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                      ) : (
+                                        <Check className="h-3 w-3" />
+                                      )}
+                                    </button>
+                                    <button
+                                      onClick={() => setNumeroEditId(null)}
+                                      title="Annuler"
+                                      className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-secondary"
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1.5">
+                                    <span
+                                      className="h-2.5 w-2.5 rounded-sm"
+                                      style={{
+                                        background: sectionColor(
+                                          pendingSectionIds.has(s.id),
+                                        ),
+                                      }}
+                                    />
+                                    {s.numSection ?? (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setNumeroEditId(s.id);
+                                          setNumeroDraft("");
+                                        }}
+                                        title="Attribuer un numéro de section"
+                                        className="inline-flex items-center gap-1 text-amber-500 hover:underline"
+                                      >
+                                        <Pencil className="h-3 w-3" />—
+                                      </button>
+                                    )}
+                                  </span>
+                                )}
                               </td>
                               <td className="py-1 pr-2 truncate max-w-27.5">
                                 {s.commune ?? "—"}
