@@ -517,7 +517,9 @@ export default function SectionsClient() {
           `Section <b>${s.numSection ?? "—"}</b><br/>${s.commune ?? "—"}` +
             (hasError
               ? "<br/><span style='color:#b45309'>⚠ chevauchement à corriger — cliquer pour le sélectionner</span>"
-              : "<br/><span style='opacity:.7'>cliquer : détails / supprimer</span>"),
+              : !s.numSection
+                ? "<br/><span style='color:#f59e0b'>⚠ sans numéro — cliquer pour en attribuer un</span>"
+                : "<br/><span style='opacity:.7'>cliquer : détails / supprimer</span>"),
           { sticky: true },
         );
         // Popup au clic : identité de la zone + suppression directe depuis la
@@ -530,6 +532,36 @@ export default function SectionsClient() {
           (s.surfaceM2 != null
             ? `<br/>${Math.round(s.surfaceM2).toLocaleString("fr-FR")} m²`
             : "");
+        // Section sans numéro : champ d'attribution directement dans le popup.
+        let numeroWrap: HTMLDivElement | null = null;
+        if (!s.numSection) {
+          numeroWrap = document.createElement("div");
+          numeroWrap.style.cssText = "margin-top:6px;display:flex;gap:4px";
+          const numeroInput = document.createElement("input");
+          numeroInput.type = "text";
+          numeroInput.placeholder = "N° section";
+          numeroInput.style.cssText =
+            "flex:1;min-width:0;padding:3px 6px;font-size:11px;border-radius:6px;" +
+            "border:1px solid #f59e0b;background:transparent;color:inherit";
+          const numeroBtn = document.createElement("button");
+          numeroBtn.type = "button";
+          numeroBtn.textContent = "Attribuer";
+          numeroBtn.style.cssText =
+            "padding:3px 8px;font-size:11px;border-radius:6px;" +
+            "border:1px solid #f59e0b;color:#f59e0b;background:transparent;cursor:pointer";
+          const submitNumero = () => {
+            const val = numeroInput.value.trim();
+            if (!val) return;
+            map.closePopup();
+            void performSetNumero(s.id, val);
+          };
+          numeroBtn.onclick = submitNumero;
+          numeroInput.onkeydown = (e: KeyboardEvent) => {
+            if (e.key === "Enter") submitNumero();
+          };
+          numeroWrap.appendChild(numeroInput);
+          numeroWrap.appendChild(numeroBtn);
+        }
         const mergeBtn = document.createElement("button");
         mergeBtn.type = "button";
         mergeBtn.style.cssText =
@@ -559,6 +591,7 @@ export default function SectionsClient() {
           void handleDeleteSection(s);
         };
         popup.appendChild(info);
+        if (numeroWrap) popup.appendChild(numeroWrap);
         popup.appendChild(mergeBtn);
         popup.appendChild(delBtn);
         gj.bindPopup(popup);
@@ -638,6 +671,7 @@ export default function SectionsClient() {
     mapReady,
     handleDeleteSection,
     toggleMergeSelection,
+    performSetNumero,
   ]);
 
   // ── Surbrillance des sections sélectionnées pour fusion (restylage seul) ───
