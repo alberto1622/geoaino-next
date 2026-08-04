@@ -19,17 +19,17 @@ function applyAndPersist(t: Theme) {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  // Fixed "dark" on SSR — server and client first render match, no hydration mismatch.
+  // Fixed "light" on SSR — server and client first render match, no hydration mismatch.
   // The inline <script> in layout.tsx already applied the right class before first paint.
-  const [theme, setTheme] = useState<Theme>("dark");
+  const [theme, setTheme] = useState<Theme>("light");
 
   // Single mount-only effect: sync React state with the real preference.
   // No [theme] effect — DOM is managed here and in toggleTheme to avoid
-  // the flash that would occur if a [theme] effect fired with the stale "dark" state.
+  // the flash that would occur if a [theme] effect fired with the stale "light" state.
   useEffect(() => {
     const stored = window.localStorage.getItem(STORAGE_KEY) as Theme | null;
     const resolved =
-      stored ?? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      stored ?? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
     applyAndPersist(resolved);
     setTheme(resolved);
   }, []);

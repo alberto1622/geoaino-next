@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { loadGeoJsonFromKey } from "@/lib/geo-storage";
 import { extractNicad, type GeoFeature as GeoEngineFeature } from "@/lib/geo-engine";
 import { findBestNeighborMerge } from "@/lib/sliver-correction";
+import { requireSession } from "@/lib/analyses/require-session";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -140,6 +141,9 @@ function generateAutoNicad(features: GeoFeature[]): string {
 }
 
 export async function POST(req: NextRequest, { params }: { params: Params }) {
+  const unauthorized = await requireSession();
+  if (unauthorized) return unauthorized;
+
   const { id, errorId } = await params;
   const analysisId = parseInt(id);
   const errorIdNum = parseInt(errorId);

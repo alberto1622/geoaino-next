@@ -9,7 +9,7 @@
  * `assign-nicad-2026.ts` (étape DB isolée de l'ingestion géométrique pure).
  */
 import * as turf from "@turf/turf";
-import type { DxfIngestionResult } from "@/lib/parcelle-ingestion";
+import type { SectionCandidate } from "@/lib/parcelle-ingestion";
 import { getCommuneInfo2026ForPoints } from "./data";
 import {
   deleteSectionsBySource,
@@ -166,10 +166,12 @@ function absorbResidus(
 /**
  * Construit / rafraîchit la table `limite_section` pour un fichier source :
  * remplace le lot précédent, insère les sections dissoutes + rattachées à leur
- * commune, puis (re)détecte les chevauchements.
+ * commune, puis (re)détecte les chevauchements. `result.sections` peut venir
+ * d'une ingestion DXF (`DxfIngestionResult`) ou directement d'un shapefile
+ * (cf. sections-from-shapefile.ts) — seules les candidates comptent ici.
  */
 export async function buildLimiteSections(
-  result: DxfIngestionResult,
+  result: { sections: SectionCandidate[] },
   sourceFichier: string,
 ): Promise<BuildSectionsResult> {
   const rawCandidates = result.sections;

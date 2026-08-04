@@ -1,5 +1,6 @@
 import * as turf from "@turf/turf";
 import type { Feature, FeatureCollection, Polygon, MultiPolygon } from "geojson";
+import { BBoxGridIndex, bboxIntersects, type BBox } from "./parcelle-ingestion";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -271,9 +272,11 @@ export function analyzeGeoJSON(
     }
   });
 
-  // 3. Overlaps with Turf.js
-  const MAX_OVERLAP_CHECK = 500;
-  const overlapFeatures = features.slice(0, MAX_OVERLAP_CHECK);
+  // 3. Overlaps with Turf.js — la totalité des features est vérifiée (plus de
+  // troncature aux 500 premières) via un index spatial en grille (BBoxGridIndex,
+  // cf. parcelle-ingestion.ts) : sur un gros lot, la comparaison exhaustive par
+  // paires resterait O(n²), l'index ne compare que les voisins de bbox proches.
+  const overlapFeatures = features;
   const firstCoords0 = overlapFeatures[0] ? getPolygonCoords(overlapFeatures[0]) : null;
   const coordsAreUtm = firstCoords0 ? Math.abs(firstCoords0[0][0]) > 180 : false;
 
@@ -308,23 +311,42 @@ export function analyzeGeoJSON(
   };
 
   const turfFeatures = overlapFeatures.map(toWgs84Feature);
-  const turfBboxes = turfFeatures.map((f) => {
-    try { return f ? turf.bbox(f) : null; } catch { return null; }
+  const turfBboxes: (BBox | null)[] = turfFeatures.map((f) => {
+    try { return f ? (turf.bbox(f) as BBox) : null; } catch { return null; }
   });
 
+  // Index spatial construit uniquement sur les bbox valides ; `validIdx[pos]`
+  // retrouve l'index d'origine (dans `turfFeatures`/`overlapFeatures`) d'une
+  // position dans l'index.
+  const validIdx: number[] = [];
+  const validBboxes: BBox[] = [];
+  turfBboxes.forEach((bb, i) => {
+    if (!bb) return;
+    validIdx.push(i);
+    validBboxes.push(bb);
+  });
+  const overlapIndex = new BBoxGridIndex(validBboxes);
+
   let overlapCount = 0;
-  const MAX_OVERLAP_ERRORS = 200;
+  // Garde-fou contre un lot pathologique (ex. correction à l'ingestion
+  // désactivée) plutôt qu'une vraie limite métier — un chevauchement réel
+  // devrait rester rare après le retaillage fait à l'ingestion.
+  const MAX_OVERLAP_ERRORS = 5000;
 
-  for (let i = 0; i < turfFeatures.length && overlapCount < MAX_OVERLAP_ERRORS; i++) {
+  outer:
+  for (let pos = 0; pos < validIdx.length; pos++) {
+    const i = validIdx[pos];
     const fA = turfFeatures[i];
-    const bbA = turfBboxes[i];
-    if (!fA || !bbA) continue;
+    const bbA = validBboxes[pos];
+    if (!fA) continue;
 
-    for (let j = i + 1; j < turfFeatures.length && overlapCount < MAX_OVERLAP_ERRORS; j++) {
+    for (const cand of overlapIndex.queryRange(bbA)) {
+      const j = validIdx[cand];
+      if (j <= i) continue;
+      if (overlapCount >= MAX_OVERLAP_ERRORS) break outer;
       const fB = turfFeatures[j];
-      const bbB = turfBboxes[j];
-      if (!fB || !bbB) continue;
-      if (bbA[2] <= bbB[0] || bbB[2] <= bbA[0] || bbA[3] <= bbB[1] || bbB[3] <= bbA[1]) continue;
+      const bbB = validBboxes[cand];
+      if (!fB || !bboxIntersects(bbA, bbB)) continue;
 
       const propsA = overlapFeatures[i].properties || {};
       const propsB = overlapFeatures[j].properties || {};

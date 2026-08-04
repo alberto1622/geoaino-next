@@ -5,11 +5,35 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  AlertTriangle, CheckCircle, Brain, FileText,
-  Download, Wrench, ChevronRight, MapPin, X, Trash2, Table2,
-  ChevronDown, ChevronUp, RefreshCw, Copy, Search, Layers,
+  AlertTriangle,
+  CheckCircle,
+  Brain,
+  FileText,
+  Download,
+  Wrench,
+  ChevronRight,
+  MapPin,
+  X,
+  Trash2,
+  Table2,
+  ChevronDown,
+  ChevronUp,
+  RefreshCw,
+  Copy,
+  Search,
+  Layers,
+  Undo2,
+  Redo2,
+  ChevronLeft,
 } from "lucide-react";
+import { useUndoHistory, useUndoRedoShortcuts } from "@/hooks/use-undo-history";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+} from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -19,7 +43,19 @@ import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 import { toNum, errorTypeColor } from "@/lib/utils";
 
-const MapLibreMap = dynamic(() => import("@/components/MapLibreMap"), { ssr: false });
+// ── Limites administratives (régions / départements / communes) ──────────────
+// Mêmes contours nationaux (cad_communes_2026) que la page /cadastre/sections.
+type AdminLevel = "regions" | "departements" | "communes";
+const ADMIN_LEVELS: AdminLevel[] = ["regions", "departements", "communes"];
+const ADMIN_STYLES: Record<AdminLevel, { label: string; color: string }> = {
+  regions: { label: "Régions", color: "#b91c1c" },
+  departements: { label: "Départements", color: "#b45309" },
+  communes: { label: "Communes", color: "#0f766e" },
+};
+
+const MapLibreMap = dynamic(() => import("@/components/MapLibreMap"), {
+  ssr: false,
+});
 
 interface GeoError {
   id: number;
@@ -60,12 +96,27 @@ interface Props {
   analysis: Analysis;
 }
 
-const SEVERITY_ORDER: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+const SEVERITY_ORDER: Record<string, number> = {
+  CRITICAL: 0,
+  HIGH: 1,
+  MEDIUM: 2,
+  LOW: 3,
+};
 
 // Réplique du critère moteur (geo-engine.isMissingNicadValue + longueur < 8) pour
 // le calcul de repli des parcelles conformes côté client.
 const MISSING_NICAD_VALUES = new Set([
-  "", "null", "undefined", "na", "n/a", "néant", "neant", "aucun", "sans nicad", "0", "-",
+  "",
+  "null",
+  "undefined",
+  "na",
+  "n/a",
+  "néant",
+  "neant",
+  "aucun",
+  "sans nicad",
+  "0",
+  "-",
 ]);
 function isNicadProblematic(nicad: string): boolean {
   const v = nicad.trim().toLowerCase();
@@ -75,9 +126,38 @@ function isNicadProblematic(nicad: string): boolean {
 
 type BBox = [number, number, number, number];
 
+// ── Historique annuler/rétablir (page /map) ─────────────────────────────────
+// Instantané complet de l'état affecté par une édition (suppression de
+// parcelle(s) ou renommage NICAD) : suffit à la fois pour ré-écrire le serveur
+// (correctedGeoJson + flags corrected) et pour ré-afficher la table/sélection
+// exactement comme elles étaient à ce moment.
+type MapSnapshot = {
+  correctedGeoJson: string;
+  errorPatches: { errorId: number; corrected: boolean }[];
+  tableRows: Record<string, unknown>[];
+  selectedRows: Set<number>;
+  deletedNicads: string[];
+};
+type MapHistoryEntry = {
+  kind: "delete" | "rename";
+  before: MapSnapshot;
+  after: MapSnapshot;
+};
+
 // Clés de propriété portant le NICAD (alignées sur geo-engine.extractNicad et
 // feature-locator.NICAD_KEYS côté serveur).
-const NICAD_KEYS = ["nicad", "NICAD", "Nicad", "NIC", "NUM_NICAD", "num_nicad", "CODE_NICAD", "code_nicad", "CODIF", "codif"];
+const NICAD_KEYS = [
+  "nicad",
+  "NICAD",
+  "Nicad",
+  "NIC",
+  "NUM_NICAD",
+  "num_nicad",
+  "CODE_NICAD",
+  "code_nicad",
+  "CODIF",
+  "codif",
+];
 
 /** NICAD affiché d'une ligne de la table (ordre de repli des variantes usuelles). */
 function rowNicad(r: Record<string, unknown>): string {
@@ -85,7 +165,10 @@ function rowNicad(r: Record<string, unknown>): string {
 }
 
 /** Réécrit le NICAD d'une ligne sur toutes ses clés porteuses (+ `nicad`). */
-function withRowNicad(r: Record<string, unknown>, nicad: string): Record<string, unknown> {
+function withRowNicad(
+  r: Record<string, unknown>,
+  nicad: string,
+): Record<string, unknown> {
   const next = { ...r };
   for (const k of NICAD_KEYS) if (k in next) next[k] = nicad;
   next.nicad = nicad;
@@ -95,18 +178,26 @@ function withRowNicad(r: Record<string, unknown>, nicad: string): Record<string,
 // Emprise [w,s,e,n] d'une géométrie GeoJSON (WGS84). Sert à annoter/zoomer les
 // occurrences d'un doublon quand le GeoJSON complet est chargé côté client.
 function geomBbox(geom: unknown): BBox | null {
-  let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+  let w = Infinity,
+    s = Infinity,
+    e = -Infinity,
+    n = -Infinity;
   let found = false;
   const walk = (c: unknown): void => {
     if (!Array.isArray(c)) return;
     if (typeof c[0] === "number" && typeof c[1] === "number") {
-      const lng = c[0] as number, lat = c[1] as number;
+      const lng = c[0] as number,
+        lat = c[1] as number;
       if (Number.isFinite(lng) && Number.isFinite(lat)) {
         found = true;
-        if (lng < w) w = lng; if (lat < s) s = lat;
-        if (lng > e) e = lng; if (lat > n) n = lat;
+        if (lng < w) w = lng;
+        if (lat < s) s = lat;
+        if (lng > e) e = lng;
+        if (lat > n) n = lat;
       }
-    } else { for (const i of c) walk(i); }
+    } else {
+      for (const i of c) walk(i);
+    }
   };
   const g = geom as { coordinates?: unknown } | null;
   if (g?.coordinates) walk(g.coordinates);
@@ -116,26 +207,40 @@ function geomBbox(geom: unknown): BBox | null {
 // Dérive les centroïdes numérotés + l'emprise englobante des occurrences d'un
 // doublon à partir de leurs `_bbox`. Ignore les occurrences sans géométrie
 // ([0,0,0,0], marqueur « absent » posé côté serveur).
-function occurrencesFromMembers(
-  members: Record<string, unknown>[]
-): { occ: { lng: number; lat: number; label: string }[]; bounds: BBox | null } {
+function occurrencesFromMembers(members: Record<string, unknown>[]): {
+  occ: { lng: number; lat: number; label: string }[];
+  bounds: BBox | null;
+} {
   const occ: { lng: number; lat: number; label: string }[] = [];
   let bounds: BBox | null = null;
   members.forEach((m, i) => {
     const b = m._bbox as BBox | undefined;
-    if (!Array.isArray(b) || b.length !== 4 || !b.every((x) => Number.isFinite(x))) return;
+    if (
+      !Array.isArray(b) ||
+      b.length !== 4 ||
+      !b.every((x) => Number.isFinite(x))
+    )
+      return;
     const [w, s, e, n] = b;
     if (w === 0 && s === 0 && e === 0 && n === 0) return;
     occ.push({ lng: (w + e) / 2, lat: (s + n) / 2, label: String(i + 1) });
     bounds = bounds
-      ? [Math.min(bounds[0], w), Math.min(bounds[1], s), Math.max(bounds[2], e), Math.max(bounds[3], n)]
+      ? [
+          Math.min(bounds[0], w),
+          Math.min(bounds[1], s),
+          Math.max(bounds[2], e),
+          Math.max(bounds[3], n),
+        ]
       : [w, s, e, n];
   });
   return { occ, bounds };
 }
 
 const SEVERITY_LABELS: Record<string, string> = {
-  CRITICAL: "Critique", HIGH: "Élevé", MEDIUM: "Moyen", LOW: "Faible",
+  CRITICAL: "Critique",
+  HIGH: "Élevé",
+  MEDIUM: "Moyen",
+  LOW: "Faible",
 };
 
 // Cellule d'action « mode édition doublon » : réassigner le NICAD de cette
@@ -161,7 +266,10 @@ function OccurrenceEditActions({
       <input
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter" && trimmed && trimmed !== current) onRename?.(index, trimmed); }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && trimmed && trimmed !== current)
+            onRename?.(index, trimmed);
+        }}
         placeholder="Nouveau NICAD"
         className="w-28 h-6 rounded border border-border bg-background px-1.5 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-ring"
         title="Nouveau NICAD pour cette occurrence"
@@ -190,6 +298,7 @@ function AttributeTable({
   selectable = false,
   selectedKeys,
   onToggle,
+  onToggleAll,
   editMode = false,
   onKeepOnly,
   onRename,
@@ -200,6 +309,8 @@ function AttributeTable({
   /** Index (dans `rows`) des lignes cochées. */
   selectedKeys?: Set<number>;
   onToggle?: (index: number) => void;
+  /** Coche/décoche toutes les lignes (case à cocher d'en-tête). */
+  onToggleAll?: () => void;
   /** Mode édition doublons : ajoute une colonne d'actions (renommer / conserver) par occurrence. */
   editMode?: boolean;
   /** Conserve l'occurrence `index` et supprime les autres du même NICAD. */
@@ -213,14 +324,31 @@ function AttributeTable({
     ...allKeys.filter((k) => !k.startsWith("_")),
   ];
   const isDiff = (col: string) =>
-    rows.length === 2 && String(rows[0][col] ?? "") !== String(rows[1][col] ?? "");
+    rows.length === 2 &&
+    String(rows[0][col] ?? "") !== String(rows[1][col] ?? "");
 
   return (
     <table className="text-[11px] w-full border-collapse">
       <thead className="sticky top-0 bg-card z-10">
         <tr>
           {selectable && (
-            <th className="px-2 py-1.5 border-b border-border bg-card w-8" />
+            <th className="px-2 py-1.5 border-b border-border bg-card w-8 text-center">
+              <input
+                type="checkbox"
+                className="cursor-pointer accent-red-500"
+                checked={
+                  rows.length > 0 && (selectedKeys?.size ?? 0) === rows.length
+                }
+                ref={(el) => {
+                  if (el)
+                    el.indeterminate =
+                      (selectedKeys?.size ?? 0) > 0 &&
+                      (selectedKeys?.size ?? 0) < rows.length;
+                }}
+                onChange={() => onToggleAll?.()}
+                title="Tout sélectionner / tout désélectionner"
+              />
+            </th>
           )}
           {editMode && (
             <th className="px-2 py-1.5 border-b border-border bg-card text-center font-medium text-muted-foreground whitespace-nowrap">
@@ -269,7 +397,9 @@ function AttributeTable({
                   className={[
                     "px-2.5 py-1 border-b border-border/40 whitespace-nowrap",
                     col === "_role" ? "font-medium text-primary" : "font-mono",
-                    isDiff(col) ? "bg-yellow-500/15 text-yellow-300 font-semibold" : "",
+                    isDiff(col)
+                      ? "bg-yellow-500/15 text-yellow-300 font-semibold"
+                      : "",
                   ].join(" ")}
                 >
                   {String(row[col] ?? "")}
@@ -292,7 +422,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   const [dupEditMode, setDupEditMode] = useState(false);
   // Annotations d'occurrences (centroïdes numérotés) + emprise englobante pour le
   // zoom, alimentées au clic sur une doublure.
-  const [dupOccurrences, setDupOccurrences] = useState<{ lng: number; lat: number; label: string }[]>([]);
+  const [dupOccurrences, setDupOccurrences] = useState<
+    { lng: number; lat: number; label: string }[]
+  >([]);
   const [dupBounds, setDupBounds] = useState<BBox | null>(null);
   // Garde anti double-soumission d'une réassignation de NICAD en cours.
   const renamingRef = useRef(false);
@@ -306,26 +438,42 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     run: () => void;
   } | null>(null);
   const [deletingRows, setDeletingRows] = useState(false);
-  const [selectedParcel, setSelectedParcel] = useState<Record<string, unknown> | null>(null);
+  const [selectedParcel, setSelectedParcel] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
   const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set());
-  const [chatMessages, setChatMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
+  const [chatMessages, setChatMessages] = useState<
+    Array<{ role: "user" | "assistant"; content: string }>
+  >([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
-  const [correctedData, setCorrectedData] = useState<string | null>(analysis.correctedData);
+  const [correctedData, setCorrectedData] = useState<string | null>(
+    analysis.correctedData,
+  );
   // Tier 2 : GeoJSON récupéré via API et parsé une seule fois (objet partagé
   // entre la carte, la table attributaire et la recherche NICAD).
-  const [displayFc, setDisplayFc] = useState<GeoJSON.FeatureCollection | null>(null);
+  const [displayFc, setDisplayFc] = useState<GeoJSON.FeatureCollection | null>(
+    null,
+  );
   // Jeu volumineux : pas de chargement du FC complet → pas d'état « en cours ».
-  const [geoLoading, setGeoLoading] = useState(() => (analysis.totalFeatures ?? 0) <= 20000);
-  // Parcelles intactes (conformes) affichées en vert dès le chargement de la
-  // carte : erreurs colorées par type (couleurs de l'accueil) + intactes en vert.
-  const [showConforme, setShowConforme] = useState(true);
+  const [geoLoading, setGeoLoading] = useState(
+    () => (analysis.totalFeatures ?? 0) <= 20000,
+  );
   // Limites de sections (table limite_section) + numéros affichées sur la carte.
-  const [showSections, setShowSections] = useState(true);
+  const [showSections, setShowSections] = useState(false);
   // Parcelles SANS section rattachée (numero_section absent/« 000 ») colorées
   // en orange : leur NICAD porte une section indéterminée.
   const [showSansSection, setShowSansSection] = useState(true);
   const [sansSectionCount, setSansSectionCount] = useState<number | null>(null);
+  // Limites administratives (référentiel national, mêmes contours que /cadastre/sections).
+  const [adminShow, setAdminShow] = useState<Record<AdminLevel, boolean>>({
+    regions: false,
+    departements: false,
+    communes: false,
+  });
+  // Masque/affiche le panneau latéral gauche pour libérer de l'espace carte.
+  const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [isSavingReport, setIsSavingReport] = useState(false);
   const [isRegeneratingReport, setIsRegeneratingReport] = useState(false);
   const [aiReport, setAiReport] = useState<string | null>(analysis.aiReport);
@@ -334,14 +482,30 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   const [tableRows, setTableRows] = useState<Record<string, unknown>[]>([]);
   const [tableOpen, setTableOpen] = useState(false);
   const [nicadSearch, setNicadSearch] = useState("");
-  const [focusTarget, setFocusTarget] = useState<{ nicad: string; key: number } | null>(null);
+  const [focusTarget, setFocusTarget] = useState<{
+    nicad: string;
+    key: number;
+  } | null>(null);
   const [searchedNicad, setSearchedNicad] = useState<string | null>(null);
-  const [correctingErrorId, setCorrectingErrorId] = useState<number | null>(null);
-  const [correctedErrorIds, setCorrectedErrorIds] = useState<Set<number>>(new Set());
+  const [correctingErrorId, setCorrectingErrorId] = useState<number | null>(
+    null,
+  );
+  const [correctedErrorIds, setCorrectedErrorIds] = useState<Set<number>>(
+    new Set(),
+  );
+  // NICAD supprimés récemment : masqués immédiatement sur la carte (filtre vecteur)
+  // en attendant que les tuiles MVT se resynchronisent (tilesVersion) sans reload visible.
+  const [deletedNicads, setDeletedNicads] = useState<string[]>([]);
   const [nicadAssignValue, setNicadAssignValue] = useState("");
+  // Historique annuler/rétablir des éditions de la table attributaire (suppression
+  // de parcelle(s), renommage NICAD) — cf. type MapHistoryEntry.
+  const mapHistory = useUndoHistory<MapHistoryEntry>();
+  const [restoringHistory, setRestoringHistory] = useState(false);
   // Rendu par tuiles vectorielles (MVT) : emprise globale pour le fit initial,
   // et version incrémentée à chaque correction pour invalider le cache des tuiles.
-  const [initialBounds, setInitialBounds] = useState<[number, number, number, number] | null>(null);
+  const [initialBounds, setInitialBounds] = useState<
+    [number, number, number, number] | null
+  >(null);
   const [tileVersion, setTileVersion] = useState(0);
 
   // Au-delà de ce seuil, on ne charge PAS tout le GeoJSON côté client (OOM
@@ -350,18 +514,25 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   const LARGE_DATASET = (analysis.totalFeatures ?? 0) > 20000;
 
   const sortedErrors = useMemo(
-    () => [...analysis.errors].sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 4) - (SEVERITY_ORDER[b.severity] ?? 4)),
-    [analysis.errors]
+    () =>
+      [...analysis.errors].sort(
+        (a, b) =>
+          (SEVERITY_ORDER[a.severity] ?? 4) - (SEVERITY_ORDER[b.severity] ?? 4),
+      ),
+    [analysis.errors],
   );
 
   const filteredErrors = useMemo(
-    () => activeFilters.size > 0 ? sortedErrors.filter((e) => activeFilters.has(e.errorType)) : sortedErrors,
-    [sortedErrors, activeFilters]
+    () =>
+      activeFilters.size > 0
+        ? sortedErrors.filter((e) => activeFilters.has(e.errorType))
+        : sortedErrors,
+    [sortedErrors, activeFilters],
   );
 
   const errorTypeGroups = useMemo(
     () => Array.from(new Set(analysis.errors.map((e) => e.errorType))),
-    [analysis.errors]
+    [analysis.errors],
   );
 
   // NICAD distincts impliqués dans au moins une erreur (= parcelles non conformes).
@@ -404,13 +575,17 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         };
         if (!cancelled) {
           setInitialBounds(meta.bbox);
-          setSansSectionCount(typeof meta.sansSection === "number" ? meta.sansSection : null);
+          setSansSectionCount(
+            typeof meta.sansSection === "number" ? meta.sansSection : null,
+          );
         }
       } catch {
         /* le fit initial est optionnel */
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [analysis.id, tileVersion]);
 
   // Avertit quand la liste d'erreurs est tronquée (jeu très volumineux) : le
@@ -456,7 +631,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       }
     }
     load();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [analysis.id, correctedData, LARGE_DATASET]);
 
   // Lookup map: NICAD → first feature properties
@@ -474,7 +651,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   // On attache `_bbox` (emprise WGS84 dérivée de la géométrie) pour permettre le
   // zoom/annotation des occurrences et leur localisation précise à la suppression,
   // de la même façon que les membres servis par l'endpoint `nicad-group`.
-  const nicadToAllFeatures = useMemo<Map<string, Record<string, unknown>[]>>(() => {
+  const nicadToAllFeatures = useMemo<
+    Map<string, Record<string, unknown>[]>
+  >(() => {
     const m = new Map<string, Record<string, unknown>[]>();
     for (const feat of displayFc?.features ?? []) {
       const p = (feat.properties ?? {}) as Record<string, unknown>;
@@ -491,25 +670,31 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   // Duplicate groups: one entry per unique NICAD with multiple occurrences.
   // (errorType est stocké en MAJUSCULES côté DB — comparaison insensible à la casse.)
   const duplicateGroups = useMemo(() => {
-    const grouped = new Map<string, { errors: GeoError[]; objectIds: string[] }>();
+    const grouped = new Map<
+      string,
+      { errors: GeoError[]; objectIds: string[] }
+    >();
     for (const e of analysis.errors) {
       if (e.errorType?.toUpperCase() !== "DUPLICATE" || !e.nicad1) continue;
-      if (!grouped.has(e.nicad1)) grouped.set(e.nicad1, { errors: [], objectIds: [] });
+      if (!grouped.has(e.nicad1))
+        grouped.set(e.nicad1, { errors: [], objectIds: [] });
       grouped.get(e.nicad1)!.errors.push(e);
       if (e.nicad2) grouped.get(e.nicad1)!.objectIds.push(e.nicad2);
     }
-    return Array.from(grouped.entries()).map(([nicad, { errors, objectIds }]) => ({
-      nicad,
-      errors,
-      objectIds,
-      count: errors.length,
-    }));
+    return Array.from(grouped.entries()).map(
+      ([nicad, { errors, objectIds }]) => ({
+        nicad,
+        errors,
+        objectIds,
+        count: errors.length,
+      }),
+    );
   }, [analysis.errors]);
 
   // NICAD dupliqués (lookup O(1)) pour déclencher l'affichage du groupe au clic.
   const duplicateNicadSet = useMemo(
     () => new Set(duplicateGroups.map((g) => g.nicad)),
-    [duplicateGroups]
+    [duplicateGroups],
   );
 
   // Récupère toutes les parcelles d'un même NICAD : cache local (petits jeux) ou
@@ -519,25 +704,32 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       const local = nicadToAllFeatures.get(nicad);
       if (local && local.length) return local;
       try {
-        const res = await fetch(`/api/analyses/${analysis.id}/nicad-group?nicad=${encodeURIComponent(nicad)}`);
+        const res = await fetch(
+          `/api/analyses/${analysis.id}/nicad-group?nicad=${encodeURIComponent(nicad)}`,
+        );
         if (!res.ok) return [];
-        const data = (await res.json()) as { members: Record<string, unknown>[] };
+        const data = (await res.json()) as {
+          members: Record<string, unknown>[];
+        };
         return data.members ?? [];
       } catch {
         return [];
       }
     },
-    [analysis.id, nicadToAllFeatures]
+    [analysis.id, nicadToAllFeatures],
   );
 
   // Pose les annotations d'occurrences + l'emprise de zoom à partir des membres
   // d'un doublon (chacun porte `_bbox`). Les labels suivent l'ordre des lignes de
   // la table (« Occurrence N »).
-  const applyOccurrenceMarkers = useCallback((members: Record<string, unknown>[]) => {
-    const { occ, bounds } = occurrencesFromMembers(members);
-    setDupOccurrences(occ);
-    setDupBounds(bounds);
-  }, []);
+  const applyOccurrenceMarkers = useCallback(
+    (members: Record<string, unknown>[]) => {
+      const { occ, bounds } = occurrencesFromMembers(members);
+      setDupOccurrences(occ);
+      setDupBounds(bounds);
+    },
+    [],
+  );
 
   // Sort du contexte « doublon » : efface la sélection de groupe et ses annotations.
   const clearDuplicateFocus = useCallback(() => {
@@ -546,51 +738,76 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     setDupBounds(null);
   }, []);
 
-  const handleFeatureClick = useCallback((props: Record<string, unknown>, point?: { lng: number; lat: number }) => {
-    setSelectedParcel(props);
-    setSearchedNicad(null);
-    const clean = Object.fromEntries(Object.entries(props).filter(([k]) => !k.startsWith("_")));
-    // Point intérieur (clic carte) conservé comme localisateur fiable pour la
-    // suppression de cette parcelle depuis la table attributaire.
-    if (point) clean._point = [point.lng, point.lat];
-    const nicad = String(clean.NICAD ?? clean.nicad ?? clean.NIC ?? clean.Nicad ?? "");
-    // Pont carte → panneau de correction : si la parcelle cliquée est impliquée
-    // dans une erreur non corrigée, on la sélectionne pour ouvrir les actions.
-    if (nicad) {
-      const match = analysis.errors.find(
-        (e) => !e.corrected && !correctedErrorIds.has(e.id) && (e.nicad1 === nicad || e.nicad2 === nicad)
+  const handleFeatureClick = useCallback(
+    (props: Record<string, unknown>, point?: { lng: number; lat: number }) => {
+      setSelectedParcel(props);
+      setSearchedNicad(null);
+      const clean = Object.fromEntries(
+        Object.entries(props).filter(([k]) => !k.startsWith("_")),
       );
-      if (match) setSelectedError(match);
+      // Point intérieur (clic carte) conservé comme localisateur fiable pour la
+      // suppression de cette parcelle depuis la table attributaire.
+      if (point) clean._point = [point.lng, point.lat];
+      const nicad = String(
+        clean.NICAD ?? clean.nicad ?? clean.NIC ?? clean.Nicad ?? "",
+      );
+      // Pont carte → panneau de correction : si la parcelle cliquée est impliquée
+      // dans une erreur non corrigée, on la sélectionne pour ouvrir les actions.
+      if (nicad) {
+        const match = analysis.errors.find(
+          (e) =>
+            !e.corrected &&
+            !correctedErrorIds.has(e.id) &&
+            (e.nicad1 === nicad || e.nicad2 === nicad),
+        );
+        if (match) setSelectedError(match);
 
-      // Parcelle à NICAD dupliqué : afficher TOUTES les occurrences de ce NICAD
-      // dans la table attributaire (récupérées côté serveur si nécessaire). Le
-      // clignotement s'intensifie automatiquement (selectedError = DUPLICATE).
-      if (duplicateNicadSet.has(nicad)) {
-        setSelectedDupNicad(nicad);
-        setSelectedRows(new Set());
-        setDupOccurrences([]);
-        setDupBounds(null);
-        setTableOpen(true);
-        void fetchNicadGroup(nicad).then((members) => {
-          if (members.length > 1) {
-            setTableRows(members.map((p, i) => ({ _role: `Occurrence ${i + 1}`, ...p })));
-            applyOccurrenceMarkers(members);
-          }
-        });
-        return;
+        // Parcelle à NICAD dupliqué : afficher TOUTES les occurrences de ce NICAD
+        // dans la table attributaire (récupérées côté serveur si nécessaire). Le
+        // clignotement s'intensifie automatiquement (selectedError = DUPLICATE).
+        if (duplicateNicadSet.has(nicad)) {
+          setSelectedDupNicad(nicad);
+          setSelectedRows(new Set());
+          setDupOccurrences([]);
+          setDupBounds(null);
+          setTableOpen(true);
+          void fetchNicadGroup(nicad).then((members) => {
+            if (members.length > 1) {
+              setTableRows(
+                members.map((p, i) => ({ _role: `Occurrence ${i + 1}`, ...p })),
+              );
+              applyOccurrenceMarkers(members);
+            }
+          });
+          return;
+        }
       }
-    }
 
-    clearDuplicateFocus();
-    setTableRows((prev) => {
-      const idx = prev.findIndex(
-        (r) => String(r.NICAD ?? r.nicad ?? r.NIC ?? r.Nicad ?? "") === nicad && nicad !== ""
-      );
-      const next = idx >= 0 ? prev.filter((_, i) => i !== idx) : [...prev, clean];
-      return next.map((r, i) => ({ ...r, _role: next.length === 1 ? "Sélectionné" : `P${i + 1}` }));
-    });
-    setTableOpen(true);
-  }, [analysis.errors, correctedErrorIds, duplicateNicadSet, fetchNicadGroup, applyOccurrenceMarkers, clearDuplicateFocus]);
+      clearDuplicateFocus();
+      setTableRows((prev) => {
+        const idx = prev.findIndex(
+          (r) =>
+            String(r.NICAD ?? r.nicad ?? r.NIC ?? r.Nicad ?? "") === nicad &&
+            nicad !== "",
+        );
+        const next =
+          idx >= 0 ? prev.filter((_, i) => i !== idx) : [...prev, clean];
+        return next.map((r, i) => ({
+          ...r,
+          _role: next.length === 1 ? "Sélectionné" : `P${i + 1}`,
+        }));
+      });
+      setTableOpen(true);
+    },
+    [
+      analysis.errors,
+      correctedErrorIds,
+      duplicateNicadSet,
+      fetchNicadGroup,
+      applyOccurrenceMarkers,
+      clearDuplicateFocus,
+    ],
+  );
 
   // Select a duplicate group → zoom sur toutes les occurrences + annotations +
   // table de comparaison. Le blink intense reste piloté par `selectedError`.
@@ -605,12 +822,14 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       setDupBounds(null);
       void fetchNicadGroup(group.nicad).then((members) => {
         if (members.length > 0) {
-          setTableRows(members.map((p, i) => ({ _role: `Occurrence ${i + 1}`, ...p })));
+          setTableRows(
+            members.map((p, i) => ({ _role: `Occurrence ${i + 1}`, ...p })),
+          );
           applyOccurrenceMarkers(members);
         }
       });
     },
-    [fetchNicadGroup, applyOccurrenceMarkers]
+    [fetchNicadGroup, applyOccurrenceMarkers],
   );
 
   const toggleRow = useCallback((index: number) => {
@@ -622,64 +841,131 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     });
   }, []);
 
+  // Coche/décoche toutes les lignes de la table attributaire. Décoche tout si
+  // déjà toutes sélectionnées, sinon sélectionne l'ensemble des lignes.
+  const toggleAllRows = useCallback(() => {
+    setSelectedRows((prev) =>
+      prev.size === tableRows.length
+        ? new Set()
+        : new Set(tableRows.map((_, i) => i)),
+    );
+  }, [tableRows]);
+
   // Supprime les lignes `indices` de la table attributaire. Chaque ligne est
   // localisée de façon fiable : point intérieur (clic carte), emprise
   // (occurrence d'un groupe NICAD) ou NICAD (repli). L'édition est écrite dans
   // `correctedData` côté serveur ; les erreurs de topologie rattachées
-  // (`_errorId`) sont marquées corrigées. Action irréversible → confirmation.
-  const performDeleteRows = useCallback(async (indices: number[]) => {
-    const sorted = [...indices].sort((a, b) => a - b);
-    const rows = sorted.map((i) => tableRows[i]).filter(Boolean);
-    if (rows.length === 0) return;
+  // (`_errorId`) sont marquées corrigées. Confirmation requise, annulable via
+  // l'historique (Ctrl+Z / mapHistory).
+  const performDeleteRows = useCallback(
+    async (indices: number[]) => {
+      const sorted = [...indices].sort((a, b) => a - b);
+      const rows = sorted.map((i) => tableRows[i]).filter(Boolean);
+      if (rows.length === 0) return;
 
-    const locators = rows.map((r) => ({
-      point: Array.isArray(r._point) ? (r._point as [number, number]) : undefined,
-      bbox:
-        Array.isArray(r._bbox) && r._bbox.length === 4
-          ? (r._bbox as [number, number, number, number])
+      const locators = rows.map((r) => ({
+        point: Array.isArray(r._point)
+          ? (r._point as [number, number])
           : undefined,
-      nicad: String(r.NICAD ?? r.nicad ?? r.NIC ?? r.Nicad ?? "").trim() || undefined,
-    }));
-    const errorIds = rows
-      .map((r) => (typeof r._errorId === "number" ? r._errorId : null))
-      .filter((x): x is number => x !== null);
+        bbox:
+          Array.isArray(r._bbox) && r._bbox.length === 4
+            ? (r._bbox as [number, number, number, number])
+            : undefined,
+        nicad:
+          String(r.NICAD ?? r.nicad ?? r.NIC ?? r.Nicad ?? "").trim() ||
+          undefined,
+      }));
+      const nicadsToHide = locators
+        .map((l) => l.nicad)
+        .filter((n): n is string => !!n);
+      const errorIds = rows
+        .map((r) => (typeof r._errorId === "number" ? r._errorId : null))
+        .filter((x): x is number => x !== null);
 
-    setDeletingRows(true);
-    try {
-      const res = await fetch(`/api/analyses/${analysis.id}/features/delete`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ locators, errorIds }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Suppression échouée");
-      if (data.correctedGeoJson) setCorrectedData(data.correctedGeoJson);
-      setTileVersion((v) => v + 1); // rafraîchit les tuiles (parcelles retirées)
-      for (const eid of errorIds) setCorrectedErrorIds((prev) => new Set(prev).add(eid));
-      const removeSet = new Set(sorted);
-      const remainingCount = tableRows.length - removeSet.size;
-      const remaining = tableRows
-        .filter((_, i) => !removeSet.has(i))
-        .map((r, i) => ({
-          ...r,
-          _role: String(r._role ?? "").startsWith("Occurrence")
-            ? `Occurrence ${i + 1}`
-            : remainingCount === 1
-              ? "Sélectionné"
-              : `P${i + 1}`,
-        }));
-      setTableRows(remaining);
-      setSelectedRows(new Set());
-      // Réaligne les annotations d'occurrences sur ce qui reste du doublon.
-      if (selectedDupNicad) applyOccurrenceMarkers(remaining);
-      toast.success(`${data.deleted} parcelle(s) supprimée(s)`);
-      if (data.notFound > 0) toast.warning(`${data.notFound} parcelle(s) non localisée(s) — ignorée(s)`);
-    } catch (err) {
-      toast.error(String(err));
-    } finally {
-      setDeletingRows(false);
-    }
-  }, [tableRows, analysis.id, selectedDupNicad, applyOccurrenceMarkers]);
+      setDeletingRows(true);
+      try {
+        const res = await fetch(
+          `/api/analyses/${analysis.id}/features/delete`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ locators, errorIds }),
+          },
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Suppression échouée");
+        const beforeSnapshot: MapSnapshot = {
+          correctedGeoJson:
+            data.previousCorrectedGeoJson ?? correctedData ?? "",
+          errorPatches: errorIds.map((eid) => ({
+            errorId: eid,
+            corrected: correctedErrorIds.has(eid),
+          })),
+          tableRows,
+          selectedRows: new Set(selectedRows),
+          deletedNicads,
+        };
+        if (data.correctedGeoJson) setCorrectedData(data.correctedGeoJson);
+        if (nicadsToHide.length > 0) {
+          setDeletedNicads((prev) => [...prev, ...nicadsToHide]);
+        }
+        setTileVersion((v) => v + 1); // rafraîchit les tuiles (parcelles retirées)
+        for (const eid of errorIds)
+          setCorrectedErrorIds((prev) => new Set(prev).add(eid));
+        const removeSet = new Set(sorted);
+        const remainingCount = tableRows.length - removeSet.size;
+        const remaining = tableRows
+          .filter((_, i) => !removeSet.has(i))
+          .map((r, i) => ({
+            ...r,
+            _role: String(r._role ?? "").startsWith("Occurrence")
+              ? `Occurrence ${i + 1}`
+              : remainingCount === 1
+                ? "Sélectionné"
+                : `P${i + 1}`,
+          }));
+        setTableRows(remaining);
+        setSelectedRows(new Set());
+        mapHistory.push({
+          kind: "delete",
+          before: beforeSnapshot,
+          after: {
+            correctedGeoJson:
+              data.correctedGeoJson ?? beforeSnapshot.correctedGeoJson,
+            errorPatches: errorIds.map((eid) => ({
+              errorId: eid,
+              corrected: true,
+            })),
+            tableRows: remaining,
+            selectedRows: new Set(),
+            deletedNicads: [...deletedNicads, ...nicadsToHide],
+          },
+        });
+        // Réaligne les annotations d'occurrences sur ce qui reste du doublon.
+        if (selectedDupNicad) applyOccurrenceMarkers(remaining);
+        toast.success(`${data.deleted} parcelle(s) supprimée(s)`);
+        if (data.notFound > 0)
+          toast.warning(
+            `${data.notFound} parcelle(s) non localisée(s) — ignorée(s)`,
+          );
+      } catch (err) {
+        toast.error(String(err));
+      } finally {
+        setDeletingRows(false);
+      }
+    },
+    [
+      tableRows,
+      analysis.id,
+      selectedDupNicad,
+      applyOccurrenceMarkers,
+      correctedData,
+      correctedErrorIds,
+      selectedRows,
+      deletedNicads,
+      mapHistory,
+    ],
+  );
 
   const deleteRows = useCallback(
     (indices: number[], confirmMsg?: string) => {
@@ -689,7 +975,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         title: "Supprimer des parcelles",
         description:
           confirmMsg ??
-          `Supprimer ${count} parcelle${count > 1 ? "s" : ""} ?\nCette action modifie les données de l'analyse et est irréversible.`,
+          `Supprimer ${count} parcelle${count > 1 ? "s" : ""} ?\nCette action modifie les données de l'analyse (annulable avec Ctrl+Z).`,
         confirmLabel: "Supprimer",
         run: () => void performDeleteRows(indices),
       });
@@ -699,7 +985,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
 
   const handleDeleteSelectedParcels = useCallback(
     () => deleteRows(Array.from(selectedRows)),
-    [deleteRows, selectedRows]
+    [deleteRows, selectedRows],
   );
 
   // Mode édition doublons : conserve l'occurrence `keepIndex` et supprime toutes
@@ -711,14 +997,16 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         toast.info("Une seule occurrence — rien à supprimer.");
         return;
       }
-      const keptRole = String(tableRows[keepIndex]?._role ?? `Occurrence ${keepIndex + 1}`);
+      const keptRole = String(
+        tableRows[keepIndex]?._role ?? `Occurrence ${keepIndex + 1}`,
+      );
       deleteRows(
         others,
         `Conserver « ${keptRole} » et supprimer les ${others.length} autre(s) occurrence(s) de ce NICAD ?\n` +
-          "Action irréversible.",
+          "Annulable avec Ctrl+Z.",
       );
     },
-    [tableRows, deleteRows]
+    [tableRows, deleteRows],
   );
 
   // Mode édition doublons : réassigne un NICAD distinct à l'occurrence `index`
@@ -733,25 +1021,61 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       if (target === current) return;
       if (renamingRef.current) return;
       const locator = {
-        point: Array.isArray(row._point) ? (row._point as [number, number]) : undefined,
-        bbox: Array.isArray(row._bbox) && row._bbox.length === 4 ? (row._bbox as BBox) : undefined,
+        point: Array.isArray(row._point)
+          ? (row._point as [number, number])
+          : undefined,
+        bbox:
+          Array.isArray(row._bbox) && row._bbox.length === 4
+            ? (row._bbox as BBox)
+            : undefined,
         nicad: current || undefined,
       };
-      const errorId = typeof row._errorId === "number" ? row._errorId : undefined;
+      const errorId =
+        typeof row._errorId === "number" ? row._errorId : undefined;
       renamingRef.current = true;
       try {
-        const res = await fetch(`/api/analyses/${analysis.id}/features/update-nicad`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ locator, nicad: target, errorId }),
-        });
+        const res = await fetch(
+          `/api/analyses/${analysis.id}/features/update-nicad`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ locator, nicad: target, errorId }),
+          },
+        );
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Réassignation échouée");
+        const beforeSnapshot: MapSnapshot = {
+          correctedGeoJson:
+            data.previousCorrectedGeoJson ?? correctedData ?? "",
+          errorPatches:
+            errorId != null
+              ? [{ errorId, corrected: correctedErrorIds.has(errorId) }]
+              : [],
+          tableRows,
+          selectedRows: new Set(selectedRows),
+          deletedNicads,
+        };
         if (data.correctedGeoJson) setCorrectedData(data.correctedGeoJson);
         setTileVersion((v) => v + 1); // rafraîchit les tuiles (nouveau NICAD)
-        if (errorId != null) setCorrectedErrorIds((prev) => new Set(prev).add(errorId));
+        if (errorId != null)
+          setCorrectedErrorIds((prev) => new Set(prev).add(errorId));
         // Reflète le nouveau NICAD dans la table (l'occurrence sort du doublon).
-        setTableRows((prev) => prev.map((r, i) => (i === index ? withRowNicad(r, target) : r)));
+        const renamed = tableRows.map((r, i) =>
+          i === index ? withRowNicad(r, target) : r,
+        );
+        setTableRows(renamed);
+        mapHistory.push({
+          kind: "rename",
+          before: beforeSnapshot,
+          after: {
+            correctedGeoJson:
+              data.correctedGeoJson ?? beforeSnapshot.correctedGeoJson,
+            errorPatches: errorId != null ? [{ errorId, corrected: true }] : [],
+            tableRows: renamed,
+            selectedRows: new Set(selectedRows),
+            deletedNicads,
+          },
+        });
         toast.success(`NICAD réassigné : ${target}`);
       } catch (err) {
         toast.error(String(err));
@@ -759,7 +1083,15 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         renamingRef.current = false;
       }
     },
-    [tableRows, analysis.id]
+    [
+      tableRows,
+      analysis.id,
+      correctedData,
+      correctedErrorIds,
+      selectedRows,
+      deletedNicads,
+      mapHistory,
+    ],
   );
 
   const handleRenameOccurrence = useCallback(
@@ -779,13 +1111,81 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     [tableRows, performRenameOccurrence],
   );
 
+  // Réapplique un instantané (avant ou après une édition) : ré-écrit le serveur
+  // (correctedData + flags corrected fusionnés, jamais remplacés en bloc — un
+  // instantané ne porte que les erreurs de SA propre action) puis l'affichage local.
+  const applyMapSnapshot = useCallback(
+    async (snap: MapSnapshot) => {
+      const res = await fetch(`/api/analyses/${analysis.id}/history/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          correctedGeoJson: snap.correctedGeoJson,
+          errorPatches: snap.errorPatches,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Restauration échouée");
+      setCorrectedData(snap.correctedGeoJson);
+      setTileVersion((v) => v + 1);
+      setCorrectedErrorIds((prev) => {
+        const next = new Set(prev);
+        for (const p of snap.errorPatches) {
+          if (p.corrected) next.add(p.errorId);
+          else next.delete(p.errorId);
+        }
+        return next;
+      });
+      setTableRows(snap.tableRows);
+      setSelectedRows(new Set(snap.selectedRows));
+      setDeletedNicads(snap.deletedNicads);
+    },
+    [analysis.id],
+  );
+
+  const performUndo = useCallback(async () => {
+    const entry = mapHistory.peekUndo();
+    if (!entry || restoringHistory) return;
+    setRestoringHistory(true);
+    try {
+      await applyMapSnapshot(entry.before);
+      mapHistory.commitUndo();
+      toast.success(
+        entry.kind === "delete" ? "Suppression annulée" : "Renommage annulé",
+      );
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setRestoringHistory(false);
+    }
+  }, [mapHistory, restoringHistory, applyMapSnapshot]);
+
+  const performRedo = useCallback(async () => {
+    const entry = mapHistory.peekRedo();
+    if (!entry || restoringHistory) return;
+    setRestoringHistory(true);
+    try {
+      await applyMapSnapshot(entry.after);
+      mapHistory.commitRedo();
+      toast.success(
+        entry.kind === "delete" ? "Suppression rétablie" : "Renommage rétabli",
+      );
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setRestoringHistory(false);
+    }
+  }, [mapHistory, restoringHistory, applyMapSnapshot]);
+
+  useUndoRedoShortcuts(performUndo, performRedo);
+
   // NiCADs of all selected table rows (drives map highlight)
   const selectedNicads = useMemo(
     () =>
       tableRows
         .map((r) => String(r.NICAD ?? r.nicad ?? r.NIC ?? r.Nicad ?? ""))
         .filter(Boolean),
-    [tableRows]
+    [tableRows],
   );
 
   // La table attributaire est éditable dès qu'elle contient des parcelles.
@@ -806,7 +1206,10 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       const p = nicadToProps.get(selectedError.nicad2);
       if (p) rows.push({ _role: "Parcelle 2", ...p });
     }
-    if (rows.length > 0) { setTableRows(rows); setTableOpen(true); }
+    if (rows.length > 0) {
+      setTableRows(rows);
+      setTableOpen(true);
+    }
   }, [selectedError, nicadToProps]);
 
   const handleSearchNicad = useCallback(() => {
@@ -824,7 +1227,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         setSearchedNicad(query);
         return;
       }
-      toast.error("NICAD introuvable", { description: `Aucune parcelle trouvée pour "${query}"` });
+      toast.error("NICAD introuvable", {
+        description: `Aucune parcelle trouvée pour "${query}"`,
+      });
       return;
     }
     setSelectedError(null);
@@ -834,7 +1239,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       feats.map((p, i) => ({
         _role: feats.length > 1 ? `Occurrence ${i + 1}` : "Résultat",
         ...p,
-      }))
+      })),
     );
     setTableOpen(true);
     setFocusTarget({ nicad: query, key: Date.now() });
@@ -853,7 +1258,8 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
 
   const toggleFilter = (type: string) => {
     const next = new Set(activeFilters);
-    if (next.has(type)) next.delete(type); else next.add(type);
+    if (next.has(type)) next.delete(type);
+    else next.add(type);
     setActiveFilters(next);
   };
 
@@ -871,15 +1277,20 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         body: JSON.stringify({
           message: msg,
           analysisId: analysis.id,
-          parcelleContext: selectedParcel ? {
-            nicad: selectedParcel.NICAD || selectedParcel.nicad,
-            properties: selectedParcel,
-          } : undefined,
+          parcelleContext: selectedParcel
+            ? {
+                nicad: selectedParcel.NICAD || selectedParcel.nicad,
+                properties: selectedParcel,
+              }
+            : undefined,
           conversationHistory: chatMessages,
         }),
       });
       const data = await res.json();
-      setChatMessages((prev) => [...prev, { role: "assistant", content: data.message }]);
+      setChatMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: data.message },
+      ]);
     } catch (err) {
       toast.error("Erreur IA", { description: String(err) });
     } finally {
@@ -891,13 +1302,17 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     async (errorId: number, action: string, targetNicad?: string) => {
       setCorrectingErrorId(errorId);
       try {
-        const res = await fetch(`/api/analyses/${analysis.id}/errors/${errorId}/correct`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, targetNicad }),
-        });
+        const res = await fetch(
+          `/api/analyses/${analysis.id}/errors/${errorId}/correct`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action, targetNicad }),
+          },
+        );
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Erreur lors de la correction");
+        if (!res.ok)
+          throw new Error(data.error || "Erreur lors de la correction");
         if (data.correctedGeoJson) setCorrectedData(data.correctedGeoJson);
         // Invalide le cache des tuiles vectorielles (la carte reflète la correction).
         setTileVersion((v) => v + 1);
@@ -910,7 +1325,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         setCorrectingErrorId(null);
       }
     },
-    [analysis.id]
+    [analysis.id],
   );
 
   const handleSaveReport = async () => {
@@ -919,10 +1334,15 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       const res = await fetch("/api/reports", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ analysisId: analysis.id, reportType: "DETAILED" }),
+        body: JSON.stringify({
+          analysisId: analysis.id,
+          reportType: "DETAILED",
+        }),
       });
       if (!res.ok) throw new Error("Erreur lors de la sauvegarde");
-      toast.success("Rapport sauvegardé", { description: "Consultez la page Rapports pour le télécharger." });
+      toast.success("Rapport sauvegardé", {
+        description: "Consultez la page Rapports pour le télécharger.",
+      });
     } catch (err) {
       toast.error(String(err));
     } finally {
@@ -933,9 +1353,13 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   const handleRegenerateReport = async () => {
     setIsRegeneratingReport(true);
     try {
-      const res = await fetch(`/api/analyses/${analysis.id}/regenerate-report`, { method: "POST" });
+      const res = await fetch(
+        `/api/analyses/${analysis.id}/regenerate-report`,
+        { method: "POST" },
+      );
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Erreur lors de la génération");
+      if (!res.ok)
+        throw new Error(data.error || "Erreur lors de la génération");
       setAiReport(data.aiReport);
       toast.success("Rapport régénéré avec succès");
     } catch (err) {
@@ -948,9 +1372,12 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   const handleDelete = async () => {
     setIsDeleting(true);
     try {
-      const res = await fetch(`/api/analyses/${analysis.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/analyses/${analysis.id}`, {
+        method: "DELETE",
+      });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Erreur lors de la suppression");
+      if (!res.ok)
+        throw new Error(data.error || "Erreur lors de la suppression");
       toast.success("Analyse supprimée", {
         description: `${data.deleted.fileName} — ${data.deleted.errors} erreurs, ${data.deleted.reports} rapport(s) supprimés`,
       });
@@ -962,7 +1389,10 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   };
 
   const handleDownloadCorrected = () => {
-    if (!correctedData) { toast.error("Aucune correction disponible"); return; }
+    if (!correctedData) {
+      toast.error("Aucune correction disponible");
+      return;
+    }
     const blob = new Blob([correctedData], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -978,26 +1408,48 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
 
       <div className="flex flex-1 overflow-hidden">
         {/* Left panel */}
-        <div className="w-96 border-r border-border flex flex-col bg-card shrink-0">
+        <div
+          className={`border-border flex flex-col bg-card shrink-0 overflow-hidden transition-[width,border-width] duration-300 ease-in-out ${
+            leftPanelOpen ? "w-96 border-r" : "w-0 border-r-0"
+          }`}
+        >
           <div className="p-4 border-b border-border">
             <div className="flex items-center justify-between mb-2">
-              <h2 className="text-sm font-semibold truncate">{analysis.fileName}</h2>
-              <Badge variant={analysis.conformityScore >= 70 ? "default" : "destructive"} className="text-xs shrink-0 ml-2">
+              <h2 className="text-sm font-semibold truncate">
+                {analysis.fileName}
+              </h2>
+              <Badge
+                variant={
+                  analysis.conformityScore >= 70 ? "default" : "destructive"
+                }
+                className="text-xs shrink-0 ml-2"
+              >
                 {toNum(analysis.conformityScore).toFixed(0)}%
               </Badge>
             </div>
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <span>{(analysis.totalFeatures ?? 0).toLocaleString()} parcelles</span>
-              <span>·</span>
-              <span className="text-green-400" title="Parcelles sans erreur topologique">
-                {conformeCount != null ? conformeCount.toLocaleString() : "…"} conformes
+              <span>
+                {(analysis.totalFeatures ?? 0).toLocaleString()} parcelles
               </span>
               <span>·</span>
-              <span className="text-red-400">{analysis.errorCount ?? 0} erreurs</span>
+              <span
+                className="text-green-400"
+                title="Parcelles sans erreur topologique"
+              >
+                {conformeCount != null ? conformeCount.toLocaleString() : "…"}{" "}
+                conformes
+              </span>
+              <span>·</span>
+              <span className="text-red-400">
+                {analysis.errorCount ?? 0} erreurs
+              </span>
               {(analysis.outOfSenegalCount ?? 0) > 0 && (
                 <>
                   <span>·</span>
-                  <span className="text-amber-400" title="Entités hors des limites du Sénégal, écartées de l'affichage">
+                  <span
+                    className="text-amber-400"
+                    title="Entités hors des limites du Sénégal, écartées de l'affichage"
+                  >
                     {analysis.outOfSenegalCount} hors Sénégal
                   </span>
                 </>
@@ -1007,7 +1459,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                   <span>·</span>
                   <span className="flex items-center gap-1">
                     <MapPin className="w-3 h-3" />
-                    {[analysis.commune, analysis.region].filter(Boolean).join(", ")}
+                    {[analysis.commune, analysis.region]
+                      .filter(Boolean)
+                      .join(", ")}
                   </span>
                 </>
               )}
@@ -1021,7 +1475,12 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                   type="text"
                   value={nicadSearch}
                   onChange={(e) => setNicadSearch(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleSearchNicad(); } }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleSearchNicad();
+                    }
+                  }}
                   placeholder="Rechercher par NICAD…"
                   className="w-full text-xs pl-8 pr-7 py-1.5 rounded-md border border-border bg-transparent focus:outline-none focus:ring-1 focus:ring-primary"
                 />
@@ -1035,23 +1494,19 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                   </button>
                 )}
               </div>
-              <Button size="sm" variant="outline" className="h-8 px-3 text-xs" onClick={handleSearchNicad} disabled={!nicadSearch.trim()}>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 px-3 text-xs"
+                onClick={handleSearchNicad}
+                disabled={!nicadSearch.trim()}
+              >
                 Chercher
               </Button>
             </div>
 
             {/* Action buttons */}
             <div className="flex gap-2 mt-3">
-              <Button
-                size="sm"
-                variant={showConforme ? "default" : "outline"}
-                className="gap-1.5 flex-1 h-8 text-xs"
-                onClick={() => setShowConforme((v) => !v)}
-                title="Mettre en évidence les parcelles conformes sur la carte"
-              >
-                <CheckCircle className="w-3 h-3" />
-                {showConforme ? "Conformes affichées" : "Conformes"}
-              </Button>
               <Button
                 size="sm"
                 variant={showSections ? "default" : "outline"}
@@ -1069,11 +1524,22 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 onClick={() => setShowSansSection((v) => !v)}
                 title="Colorer en orange les parcelles sans section rattachée (composante section du NICAD indéterminée)"
               >
-                <AlertTriangle className="w-3 h-3" style={{ color: showSansSection ? undefined : "#f97316" }} />
-                Sans section{sansSectionCount != null ? ` (${sansSectionCount.toLocaleString("fr-FR")})` : ""}
+                <AlertTriangle
+                  className="w-3 h-3"
+                  style={{ color: showSansSection ? undefined : "#f97316" }}
+                />
+                Sans section
+                {sansSectionCount != null
+                  ? ` (${sansSectionCount.toLocaleString("fr-FR")})`
+                  : ""}
               </Button>
               {correctedData && (
-                <Button size="sm" variant="outline" className="gap-1.5 flex-1 h-8 text-xs" onClick={handleDownloadCorrected}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1.5 flex-1 h-8 text-xs"
+                  onClick={handleDownloadCorrected}
+                >
                   <Download className="w-3 h-3" /> Télécharger
                 </Button>
               )}
@@ -1087,16 +1553,64 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 <Trash2 className="w-3.5 h-3.5" />
               </Button>
             </div>
+
+            {/* Limites administratives (référentiel national, mêmes contours que /cadastre/sections) */}
+            <div className="flex mt-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant={ADMIN_LEVELS.some((level) => adminShow[level]) ? "default" : "outline"}
+                    className="gap-1.5 flex-1 h-8 text-xs"
+                  >
+                    <Layers className="w-3 h-3" />
+                    Limites admin
+                    {ADMIN_LEVELS.some((level) => adminShow[level])
+                      ? ` (${ADMIN_LEVELS.filter((level) => adminShow[level])
+                          .map((level) => ADMIN_STYLES[level].label)
+                          .join(", ")})`
+                      : ""}
+                    <ChevronDown className="w-3 h-3 opacity-60" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  {ADMIN_LEVELS.map((level) => {
+                    const st = ADMIN_STYLES[level];
+                    return (
+                      <DropdownMenuCheckboxItem
+                        key={level}
+                        checked={adminShow[level]}
+                        onSelect={(e) => e.preventDefault()}
+                        onCheckedChange={(checked) =>
+                          setAdminShow((prev) => ({ ...prev, [level]: checked === true }))
+                        }
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <span className="h-2.5 w-2.5 rounded-sm" style={{ background: st.color }} />
+                          {st.label}
+                        </span>
+                      </DropdownMenuCheckboxItem>
+                    );
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
 
-          <Tabs defaultValue="errors" className="flex-1 flex flex-col overflow-hidden">
+          <Tabs
+            defaultValue="errors"
+            className="flex-1 flex flex-col overflow-hidden"
+          >
             <div className="mx-4 mt-3 shrink-0 flex items-center gap-2">
               <TabsList className="flex-1 grid grid-cols-4">
                 <TabsTrigger value="errors" className="text-xs px-1">
                   <AlertTriangle className="w-3 h-3 mr-1" />
                   Erreurs
                 </TabsTrigger>
-                <TabsTrigger value="duplicates" className="text-xs px-1 relative">
+                <TabsTrigger
+                  value="duplicates"
+                  className="text-xs px-1 relative"
+                >
                   <Copy className="w-3 h-3 mr-1" />
                   Doublons
                   {duplicateGroups.length > 0 && (
@@ -1114,29 +1628,46 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                   IA
                 </TabsTrigger>
               </TabsList>
-              <Link href={`/map/${analysis.id}/table`} title="Voir les données en table">
-                <Button size="icon" variant="outline" className="h-8 w-8 shrink-0">
+              <Link
+                href={`/map/${analysis.id}/table`}
+                title="Voir les données en table"
+              >
+                <Button
+                  size="icon"
+                  variant="outline"
+                  className="h-8 w-8 shrink-0"
+                >
                   <Table2 className="w-3.5 h-3.5" />
                 </Button>
               </Link>
             </div>
 
             {/* Errors tab */}
-            <TabsContent value="errors" className="flex-1 overflow-hidden flex flex-col px-4 mt-3">
+            <TabsContent
+              value="errors"
+              className="flex-1 overflow-hidden flex flex-col px-4 mt-3"
+            >
               {/* Type filters */}
               <div className="flex flex-wrap gap-1 mb-3">
                 {errorTypeGroups.map((type) => {
-                  const count = analysis.errors.filter((e) => e.errorType === type).length;
+                  const count = analysis.errors.filter(
+                    (e) => e.errorType === type,
+                  ).length;
                   const active = activeFilters.has(type);
                   return (
                     <button
                       key={type}
                       onClick={() => toggleFilter(type)}
                       className={`cursor-pointer text-[10px] px-2 py-0.5 rounded-full border transition-all ${
-                        active ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/40"
+                        active
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border text-muted-foreground hover:border-primary/40"
                       }`}
                     >
-                      <span className="w-2 h-2 rounded-full inline-block mr-1" style={{ background: errorTypeColor(type) }} />
+                      <span
+                        className="w-2 h-2 rounded-full inline-block mr-1"
+                        style={{ background: errorTypeColor(type) }}
+                      />
                       {type} ({count})
                     </button>
                   );
@@ -1145,8 +1676,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
 
               {filteredErrors.length > 0 && (
                 <p className="text-[11px] text-muted-foreground mb-2 leading-relaxed">
-                  👉 Cliquez sur une erreur ci-dessous (ou sur une parcelle de la carte) pour la
-                  localiser, puis choisissez une action de correction dans le panneau qui s&apos;ouvre en bas.
+                  👉 Cliquez sur une erreur ci-dessous (ou sur une parcelle de
+                  la carte) pour la localiser, puis choisissez une action de
+                  correction dans le panneau qui s&apos;ouvre en bas.
                 </p>
               )}
               <ScrollArea className="flex-1">
@@ -1156,17 +1688,32 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                       key={err.id}
                       onClick={() => {
                         setSelectedDupNicad(null);
-                        setSelectedError(selectedError?.id === err.id ? null : err);
+                        setSelectedError(
+                          selectedError?.id === err.id ? null : err,
+                        );
                       }}
                       className={`cursor-pointer w-full text-left p-3 rounded-lg border transition-all ${
-                        selectedError?.id === err.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/30"
+                        selectedError?.id === err.id
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-primary/30"
                       } ${err.corrected || correctedErrorIds.has(err.id) ? "opacity-50" : ""}`}
                     >
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="w-2 h-2 rounded-full shrink-0" style={{ background: errorTypeColor(err.errorType) }} />
-                        <span className="text-[10px] font-mono">{err.errorType}</span>
+                        <span
+                          className="w-2 h-2 rounded-full shrink-0"
+                          style={{ background: errorTypeColor(err.errorType) }}
+                        />
+                        <span className="text-[10px] font-mono">
+                          {err.errorType}
+                        </span>
                         <Badge
-                          variant={err.severity.toLowerCase() as "critical" | "high" | "medium" | "low"}
+                          variant={
+                            err.severity.toLowerCase() as
+                              | "critical"
+                              | "high"
+                              | "medium"
+                              | "low"
+                          }
                           className="text-[9px] h-4 px-1 ml-auto"
                         >
                           {SEVERITY_LABELS[err.severity] || err.severity}
@@ -1174,18 +1721,23 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                       </div>
                       {err.nicad1 && (
                         <p className="text-xs font-mono text-muted-foreground truncate">
-                          {err.nicad1}{err.nicad2 ? ` ↔ ${err.nicad2}` : ""}
+                          {err.nicad1}
+                          {err.nicad2 ? ` ↔ ${err.nicad2}` : ""}
                         </p>
                       )}
                       {err.area && (
-                        <p className="text-[10px] text-muted-foreground">{err.area.toFixed(2)} m²</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {err.area.toFixed(2)} m²
+                        </p>
                       )}
                     </button>
                   ))}
                   {filteredErrors.length === 0 && (
                     <div className="text-center py-8">
                       <CheckCircle className="w-8 h-8 text-green-400 mx-auto mb-2" />
-                      <p className="text-sm text-muted-foreground">Aucune erreur</p>
+                      <p className="text-sm text-muted-foreground">
+                        Aucune erreur
+                      </p>
                     </div>
                   )}
                 </div>
@@ -1193,24 +1745,35 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
             </TabsContent>
 
             {/* Duplicates tab */}
-            <TabsContent value="duplicates" className="flex-1 overflow-hidden flex flex-col px-4 mt-3">
+            <TabsContent
+              value="duplicates"
+              className="flex-1 overflow-hidden flex flex-col px-4 mt-3"
+            >
               {duplicateGroups.length === 0 ? (
                 <div className="flex flex-col items-center justify-center flex-1 gap-2">
                   <CheckCircle className="w-8 h-8 text-green-400 opacity-70" />
-                  <p className="text-sm text-muted-foreground">Aucun doublon détecté</p>
+                  <p className="text-sm text-muted-foreground">
+                    Aucun doublon détecté
+                  </p>
                 </div>
               ) : (
                 <>
                   <div className="flex items-start justify-between gap-2 mb-3 shrink-0">
                     <p className="text-[11px] text-muted-foreground flex-1">
-                      <span className="font-semibold text-purple-400">{duplicateGroups.length}</span> NICAD
-                      {duplicateGroups.length > 1 ? "s" : ""} dupliqué{duplicateGroups.length > 1 ? "s" : ""}
-                      {" · "}cliquer un groupe zoome sur ses occurrences et les annote
+                      <span className="font-semibold text-purple-400">
+                        {duplicateGroups.length}
+                      </span>{" "}
+                      NICAD
+                      {duplicateGroups.length > 1 ? "s" : ""} dupliqué
+                      {duplicateGroups.length > 1 ? "s" : ""}
+                      {" · "}cliquer un groupe zoome sur ses occurrences et les
+                      annote
                       {dupEditMode && (
                         <span className="block text-green-400/80 mt-0.5">
-                          Mode édition (table) : <strong>Renommer</strong> réassigne un NICAD distinct à
-                          l&apos;occurrence, <strong>Conserver</strong> (ou un clic sur son marqueur) la
-                          garde et supprime les autres.
+                          Mode édition (table) : <strong>Renommer</strong>{" "}
+                          réassigne un NICAD distinct à l&apos;occurrence,{" "}
+                          <strong>Conserver</strong> (ou un clic sur son
+                          marqueur) la garde et supprime les autres.
                         </span>
                       )}
                     </p>
@@ -1254,8 +1817,13 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                             {/* Occurrence list */}
                             <div className="space-y-1 pl-4">
                               {group.errors.map((err, i) => (
-                                <div key={err.id} className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                                  <span className="font-mono text-purple-400/70">#{i + 1}</span>
+                                <div
+                                  key={err.id}
+                                  className="flex items-center gap-2 text-[10px] text-muted-foreground"
+                                >
+                                  <span className="font-mono text-purple-400/70">
+                                    #{i + 1}
+                                  </span>
                                   <span className="font-mono">
                                     OBJECTID&nbsp;{err.nicad2 ?? "—"}
                                   </span>
@@ -1270,7 +1838,8 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
 
                             {isSelected && (
                               <p className="text-[9px] text-purple-400/70 mt-2 pl-4">
-                                ✓ Occurrences surlignées sur la carte · Comparaison ouverte
+                                ✓ Occurrences surlignées sur la carte ·
+                                Comparaison ouverte
                               </p>
                             )}
                           </button>
@@ -1283,7 +1852,10 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
             </TabsContent>
 
             {/* Report tab */}
-            <TabsContent value="report" className="flex-1 overflow-hidden flex flex-col px-4 mt-3">
+            <TabsContent
+              value="report"
+              className="flex-1 overflow-hidden flex flex-col px-4 mt-3"
+            >
               <div className="flex gap-2 mb-3 shrink-0">
                 <Button
                   size="sm"
@@ -1293,7 +1865,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                   disabled={isRegeneratingReport}
                   title="Régénérer le rapport IA"
                 >
-                  <RefreshCw className={`w-3 h-3 ${isRegeneratingReport ? "animate-spin" : ""}`} />
+                  <RefreshCw
+                    className={`w-3 h-3 ${isRegeneratingReport ? "animate-spin" : ""}`}
+                  />
                   {isRegeneratingReport ? "Génération..." : "Régénérer"}
                 </Button>
                 {aiReport && (
@@ -1309,7 +1883,11 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                       {isSavingReport ? "Sauvegarde..." : "Sauvegarder"}
                     </Button>
                     <Link href="/reports">
-                      <Button size="sm" variant="ghost" className="h-7 text-xs gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs gap-1"
+                      >
                         <FileText className="w-3 h-3" /> Voir tous
                       </Button>
                     </Link>
@@ -1320,7 +1898,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 {isRegeneratingReport ? (
                   <div className="flex flex-col items-center justify-center py-12 gap-3">
                     <RefreshCw className="w-6 h-6 text-primary animate-spin" />
-                    <p className="text-xs text-muted-foreground">Génération du rapport en cours…</p>
+                    <p className="text-xs text-muted-foreground">
+                      Génération du rapport en cours…
+                    </p>
                   </div>
                 ) : aiReport ? (
                   <div className="prose prose-invert prose-xs max-w-none text-xs leading-relaxed">
@@ -1329,33 +1909,51 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 ) : (
                   <div className="text-center py-8">
                     <FileText className="w-8 h-8 text-muted-foreground mx-auto mb-2 opacity-50" />
-                    <p className="text-sm text-muted-foreground">Rapport non disponible</p>
-                    <p className="text-xs text-muted-foreground mt-1">Cliquez sur &quot;Régénérer&quot; pour créer un rapport IA</p>
+                    <p className="text-sm text-muted-foreground">
+                      Rapport non disponible
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Cliquez sur &quot;Régénérer&quot; pour créer un rapport IA
+                    </p>
                   </div>
                 )}
               </ScrollArea>
             </TabsContent>
 
             {/* Chat tab */}
-            <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden px-4 mt-3">
+            <TabsContent
+              value="chat"
+              className="flex-1 flex flex-col overflow-hidden px-4 mt-3"
+            >
               <ScrollArea className="flex-1 mb-3">
                 <div className="space-y-3 pb-2">
                   {chatMessages.length === 0 && (
                     <div className="text-center py-6">
                       <Brain className="w-8 h-8 text-primary mx-auto mb-2 opacity-50" />
-                      <p className="text-xs text-muted-foreground">Posez une question sur vos données cadastrales</p>
+                      <p className="text-xs text-muted-foreground">
+                        Posez une question sur vos données cadastrales
+                      </p>
                     </div>
                   )}
                   {chatMessages.map((msg, i) => (
-                    <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                      <div className={`max-w-[85%] px-3 py-2 rounded-lg text-xs ${
-                        msg.role === "user" ? "bg-primary/10 text-primary border border-primary/20" : "bg-secondary border border-border"
-                      }`}>
+                    <div
+                      key={i}
+                      className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                    >
+                      <div
+                        className={`max-w-[85%] px-3 py-2 rounded-lg text-xs ${
+                          msg.role === "user"
+                            ? "bg-primary/10 text-primary border border-primary/20"
+                            : "bg-secondary border border-border"
+                        }`}
+                      >
                         {msg.role === "assistant" ? (
                           <div className="prose prose-invert prose-xs max-w-none">
                             <ReactMarkdown>{msg.content}</ReactMarkdown>
                           </div>
-                        ) : msg.content}
+                        ) : (
+                          msg.content
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1364,7 +1962,11 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                       <div className="px-3 py-2 rounded-lg bg-secondary border border-border">
                         <div className="flex gap-1">
                           {[0, 1, 2].map((i) => (
-                            <div key={i} className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+                            <div
+                              key={i}
+                              className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce"
+                              style={{ animationDelay: `${i * 0.15}s` }}
+                            />
                           ))}
                         </div>
                       </div>
@@ -1376,9 +1978,15 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
               {selectedParcel && (
                 <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-lg bg-primary/5 border border-primary/20">
                   <span className="text-[10px] text-primary flex-1 truncate">
-                    Parcelle: {String(selectedParcel.NICAD || selectedParcel.nicad || "N/A")}
+                    Parcelle:{" "}
+                    {String(
+                      selectedParcel.NICAD || selectedParcel.nicad || "N/A",
+                    )}
                   </span>
-                  <button className="cursor-pointer" onClick={() => setSelectedParcel(null)}>
+                  <button
+                    className="cursor-pointer"
+                    onClick={() => setSelectedParcel(null)}
+                  >
                     <X className="w-3 h-3 text-muted-foreground hover:text-foreground" />
                   </button>
                 </div>
@@ -1389,12 +1997,22 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                   type="text"
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleChat(); } }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleChat();
+                    }
+                  }}
                   placeholder="Ex: Quelles sont les erreurs critiques ?"
                   className="flex-1 text-xs px-3 py-2 rounded-lg border border-border bg-transparent focus:outline-none focus:ring-1 focus:ring-primary"
                   disabled={chatLoading}
                 />
-                <Button size="sm" onClick={handleChat} disabled={chatLoading || !chatInput.trim()} className="h-9 px-3">
+                <Button
+                  size="sm"
+                  onClick={handleChat}
+                  disabled={chatLoading || !chatInput.trim()}
+                  className="h-9 px-3"
+                >
                   <ChevronRight className="w-4 h-4" />
                 </Button>
               </div>
@@ -1406,60 +2024,106 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
             <div className="border-t border-border p-4 bg-card/50">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xs font-semibold">Détail de l&apos;erreur</p>
-                <button className="cursor-pointer" onClick={() => setSelectedError(null)}>
+                <button
+                  className="cursor-pointer"
+                  onClick={() => setSelectedError(null)}
+                >
                   <X className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground" />
                 </button>
               </div>
               <div className="space-y-1 text-xs text-muted-foreground">
-                <p><strong className="text-foreground">Type:</strong> {selectedError.errorType}</p>
-                <p><strong className="text-foreground">Sévérité:</strong> {SEVERITY_LABELS[selectedError.severity]}</p>
-                {selectedError.nicad1 && <p><strong className="text-foreground">NICAD:</strong> {selectedError.nicad1}</p>}
-                {selectedError.area && <p><strong className="text-foreground">Surface:</strong> {selectedError.area.toFixed(2)} m²</p>}
-                {selectedError.description && <p className="mt-1 leading-relaxed">{selectedError.description}</p>}
+                <p>
+                  <strong className="text-foreground">Type:</strong>{" "}
+                  {selectedError.errorType}
+                </p>
+                <p>
+                  <strong className="text-foreground">Sévérité:</strong>{" "}
+                  {SEVERITY_LABELS[selectedError.severity]}
+                </p>
+                {selectedError.nicad1 && (
+                  <p>
+                    <strong className="text-foreground">NICAD:</strong>{" "}
+                    {selectedError.nicad1}
+                  </p>
+                )}
+                {selectedError.area && (
+                  <p>
+                    <strong className="text-foreground">Surface:</strong>{" "}
+                    {selectedError.area.toFixed(2)} m²
+                  </p>
+                )}
+                {selectedError.description && (
+                  <p className="mt-1 leading-relaxed">
+                    {selectedError.description}
+                  </p>
+                )}
               </div>
 
-              {selectedError.corrected || correctedErrorIds.has(selectedError.id) ? (
+              {selectedError.corrected ||
+              correctedErrorIds.has(selectedError.id) ? (
                 <p className="mt-3 pt-3 border-t border-border/50 text-[11px] text-green-400 flex items-center gap-1.5">
                   <CheckCircle className="w-3.5 h-3.5" /> Erreur corrigée
                 </p>
               ) : (
                 <div className="mt-3 pt-3 border-t border-border/50 space-y-1.5">
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Corriger</p>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
+                    Corriger
+                  </p>
                   <p className="text-[11px] text-muted-foreground leading-relaxed pb-1">
-                    Choisissez une action pour appliquer la correction. Elle est exécutée immédiatement
-                    et le résultat est téléchargeable via le bouton <strong>« Télécharger »</strong>.
+                    Choisissez une action pour appliquer la correction. Elle est
+                    exécutée immédiatement et le résultat est téléchargeable via
+                    le bouton <strong>« Télécharger »</strong>.
                   </p>
                   {selectedError.errorType === "OVERLAP" && (
                     <>
                       <Button
-                        size="sm" variant="outline" className="w-full h-7 text-xs justify-start gap-1.5"
+                        size="sm"
+                        variant="outline"
+                        className="w-full h-7 text-xs justify-start gap-1.5"
                         disabled={correctingErrorId === selectedError.id}
-                        onClick={() => handleCorrectError(selectedError.id, "clip_first")}
+                        onClick={() =>
+                          handleCorrectError(selectedError.id, "clip_first")
+                        }
                       >
-                        <Wrench className="w-3 h-3" /> Découper {selectedError.nicad1 ?? "parcelle 1"}
+                        <Wrench className="w-3 h-3" /> Découper{" "}
+                        {selectedError.nicad1 ?? "parcelle 1"}
                       </Button>
                       <Button
-                        size="sm" variant="outline" className="w-full h-7 text-xs justify-start gap-1.5"
+                        size="sm"
+                        variant="outline"
+                        className="w-full h-7 text-xs justify-start gap-1.5"
                         disabled={correctingErrorId === selectedError.id}
-                        onClick={() => handleCorrectError(selectedError.id, "clip_second")}
+                        onClick={() =>
+                          handleCorrectError(selectedError.id, "clip_second")
+                        }
                       >
-                        <Wrench className="w-3 h-3" /> Découper {selectedError.nicad2 ?? "parcelle 2"}
+                        <Wrench className="w-3 h-3" /> Découper{" "}
+                        {selectedError.nicad2 ?? "parcelle 2"}
                       </Button>
                     </>
                   )}
                   {selectedError.errorType === "SLIVER" && (
                     <>
                       <Button
-                        size="sm" variant="outline" className="w-full h-7 text-xs justify-start gap-1.5"
+                        size="sm"
+                        variant="outline"
+                        className="w-full h-7 text-xs justify-start gap-1.5"
                         disabled={correctingErrorId === selectedError.id}
-                        onClick={() => handleCorrectError(selectedError.id, "merge_neighbor")}
+                        onClick={() =>
+                          handleCorrectError(selectedError.id, "merge_neighbor")
+                        }
                       >
-                        <Wrench className="w-3 h-3" /> Fusionner avec la parcelle voisine
+                        <Wrench className="w-3 h-3" /> Fusionner avec la
+                        parcelle voisine
                       </Button>
                       <Button
-                        size="sm" variant="outline" className="w-full h-7 text-xs justify-start gap-1.5"
+                        size="sm"
+                        variant="outline"
+                        className="w-full h-7 text-xs justify-start gap-1.5"
                         disabled={correctingErrorId === selectedError.id}
-                        onClick={() => handleCorrectError(selectedError.id, "delete")}
+                        onClick={() =>
+                          handleCorrectError(selectedError.id, "delete")
+                        }
                       >
                         <Trash2 className="w-3 h-3" /> Supprimer le sliver
                       </Button>
@@ -1467,54 +2131,88 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                   )}
                   {selectedError.errorType === "GAP" && (
                     <Button
-                      size="sm" variant="outline" className="w-full h-7 text-xs justify-start gap-1.5"
+                      size="sm"
+                      variant="outline"
+                      className="w-full h-7 text-xs justify-start gap-1.5"
                       disabled={correctingErrorId === selectedError.id}
-                      onClick={() => handleCorrectError(selectedError.id, "assign_to_neighbor")}
+                      onClick={() =>
+                        handleCorrectError(
+                          selectedError.id,
+                          "assign_to_neighbor",
+                        )
+                      }
                     >
-                      <Wrench className="w-3 h-3" /> Combler avec {selectedError.nicad1 ?? "la parcelle adjacente"}
+                      <Wrench className="w-3 h-3" /> Combler avec{" "}
+                      {selectedError.nicad1 ?? "la parcelle adjacente"}
                     </Button>
                   )}
                   {selectedError.errorType === "BOUNDARY_CROSS" && (
                     <Button
-                      size="sm" variant="outline" className="w-full h-7 text-xs justify-start gap-1.5"
+                      size="sm"
+                      variant="outline"
+                      className="w-full h-7 text-xs justify-start gap-1.5"
                       disabled={correctingErrorId === selectedError.id}
-                      onClick={() => handleCorrectError(selectedError.id, "truncate")}
+                      onClick={() =>
+                        handleCorrectError(selectedError.id, "truncate")
+                      }
                     >
-                      <Wrench className="w-3 h-3" /> Tronquer à la limite administrative
+                      <Wrench className="w-3 h-3" /> Tronquer à la limite
+                      administrative
                     </Button>
                   )}
                   {selectedError.errorType === "INVALID_GEOM" && (
                     <Button
-                      size="sm" variant="outline" className="w-full h-7 text-xs justify-start gap-1.5"
+                      size="sm"
+                      variant="outline"
+                      className="w-full h-7 text-xs justify-start gap-1.5"
                       disabled={correctingErrorId === selectedError.id}
-                      onClick={() => handleCorrectError(selectedError.id, "delete")}
+                      onClick={() =>
+                        handleCorrectError(selectedError.id, "delete")
+                      }
                     >
-                      <Trash2 className="w-3 h-3" /> Supprimer la géométrie invalide
+                      <Trash2 className="w-3 h-3" /> Supprimer la géométrie
+                      invalide
                     </Button>
                   )}
                   {selectedError.errorType === "DUPLICATE" && (
                     <Button
-                      size="sm" variant="outline" className="w-full h-7 text-xs justify-start gap-1.5"
+                      size="sm"
+                      variant="outline"
+                      className="w-full h-7 text-xs justify-start gap-1.5"
                       disabled={correctingErrorId === selectedError.id}
-                      onClick={() => handleCorrectError(selectedError.id, "delete")}
+                      onClick={() =>
+                        handleCorrectError(selectedError.id, "delete")
+                      }
                     >
-                      <Trash2 className="w-3 h-3" /> Supprimer cette occurrence du doublon
+                      <Trash2 className="w-3 h-3" /> Supprimer cette occurrence
+                      du doublon
                     </Button>
                   )}
-                  {(selectedError.errorType === "MISSING_NICAD" || selectedError.errorType === "SHORT_NICAD") && (
+                  {(selectedError.errorType === "MISSING_NICAD" ||
+                    selectedError.errorType === "SHORT_NICAD") && (
                     <div className="flex gap-1.5">
                       <input
                         type="text"
                         value={nicadAssignValue}
                         onChange={(e) => setNicadAssignValue(e.target.value)}
-                        placeholder={selectedError.errorType === "SHORT_NICAD" ? "NICAD corrigé (vide = AUTO)" : "NICAD (vide = AUTO)"}
+                        placeholder={
+                          selectedError.errorType === "SHORT_NICAD"
+                            ? "NICAD corrigé (vide = AUTO)"
+                            : "NICAD (vide = AUTO)"
+                        }
                         className="flex-1 h-7 rounded-md border border-border bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
                       />
                       <Button
-                        size="sm" variant="outline" className="h-7 px-2 text-xs gap-1.5"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-xs gap-1.5"
                         disabled={correctingErrorId === selectedError.id}
                         onClick={() => {
-                          handleCorrectError(selectedError.id, "assign_nicad", nicadAssignValue.trim() || undefined);
+                          handleCorrectError(
+                            selectedError.id,
+                            "assign_nicad",
+                            nicadAssignValue.trim() || undefined,
+                          );
                           setNicadAssignValue("");
                         }}
                       >
@@ -1523,9 +2221,13 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                     </div>
                   )}
                   <Button
-                    size="sm" variant="ghost" className="w-full h-7 text-xs justify-start gap-1.5 text-muted-foreground"
+                    size="sm"
+                    variant="ghost"
+                    className="w-full h-7 text-xs justify-start gap-1.5 text-muted-foreground"
                     disabled={correctingErrorId === selectedError.id}
-                    onClick={() => handleCorrectError(selectedError.id, "ignore")}
+                    onClick={() =>
+                      handleCorrectError(selectedError.id, "ignore")
+                    }
                   >
                     <X className="w-3 h-3" /> Ignorer (intentionnel)
                   </Button>
@@ -1534,6 +2236,15 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
             </div>
           )}
         </div>
+
+        {/* Bascule d'affichage du panneau latéral. */}
+        <button
+          onClick={() => setLeftPanelOpen((v) => !v)}
+          title={leftPanelOpen ? "Masquer le panneau latéral" : "Afficher le panneau latéral"}
+          className="shrink-0 w-4 flex items-center justify-center border-r border-border bg-card hover:bg-secondary/60 text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
+        >
+          <ChevronLeft className={`w-3 h-3 transition-transform ${leftPanelOpen ? "" : "rotate-180"}`} />
+        </button>
 
         {/* Map + Attribute Table */}
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -1545,12 +2256,16 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
               initialBounds={initialBounds}
               errors={filteredErrors}
               selectedErrorId={selectedError?.id}
-              blinkIntense={(selectedError?.errorType ?? "").toUpperCase() === "DUPLICATE"}
+              blinkIntense={
+                (selectedError?.errorType ?? "").toUpperCase() === "DUPLICATE"
+              }
               onFeatureClick={handleFeatureClick}
               selectedNicads={selectedNicads}
               focusTarget={focusTarget}
               searchedNicads={searchedNicad ? [searchedNicad] : []}
-              conformeHighlight={showConforme}
+              // Parcelles intactes (conformes) toujours affichées en vert : erreurs
+              // colorées par type (couleurs de l'accueil) + intactes en vert.
+              conformeHighlight={true}
               nonConformeNicads={nonConformeNicads}
               occurrences={dupOccurrences}
               occurrencesBounds={dupBounds}
@@ -1558,7 +2273,29 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
               onOccurrenceKeep={handleKeepOnlyOccurrence}
               showSections={showSections}
               sansSectionHighlight={showSansSection}
+              deletedNicads={deletedNicads}
+              adminLevels={ADMIN_LEVELS.filter((level) => adminShow[level])}
             />
+            {/* Annuler/rétablir — coin haut-gauche de la carte, sur la même
+                ligne que le panneau latéral, juste à sa droite. */}
+            <div className="absolute top-2 left-2 z-10 flex items-center gap-1 px-1.5 py-1 rounded-lg border border-border bg-card/90 backdrop-blur-sm shadow-lg">
+              <button
+                onClick={() => void performUndo()}
+                disabled={!mapHistory.canUndo || restoringHistory}
+                title="Annuler (Ctrl+Z)"
+                className="flex items-center gap-1 px-1.5 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/40 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => void performRedo()}
+                disabled={!mapHistory.canRedo || restoringHistory}
+                title="Rétablir (Ctrl+Y)"
+                className="flex items-center gap-1 px-1.5 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-secondary/40 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+              >
+                <Redo2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
             {geoLoading && (
               <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-3 py-1.5 text-[11px] rounded-full bg-card/90 backdrop-blur-sm border border-border shadow-lg">
                 <RefreshCw className="w-3 h-3 animate-spin text-primary" />
@@ -1572,31 +2309,50 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
             >
               <Table2 className="w-3 h-3" />
               Table attributaire
-              {tableOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+              {tableOpen ? (
+                <ChevronDown className="w-3 h-3" />
+              ) : (
+                <ChevronUp className="w-3 h-3" />
+              )}
             </button>
           </div>
 
           {/* Attribute table panel */}
           {tableOpen && (
-            <div className="border-t border-border bg-card shrink-0 flex flex-col" style={{ height: 210 }}>
+            <div
+              className="border-t border-border bg-card shrink-0 flex flex-col"
+              style={{ height: 210 }}
+            >
               {/* Header bar */}
               <div className="flex items-center justify-between px-3 py-1.5 border-b border-border shrink-0">
                 <div className="flex items-center gap-2">
                   <Table2 className="w-3.5 h-3.5 text-primary" />
-                  <span className="text-xs font-semibold">Table attributaire</span>
+                  <span className="text-xs font-semibold">
+                    Table attributaire
+                  </span>
                   {tableRows.length > 0 && (
                     <span className="text-[10px] text-muted-foreground flex items-center gap-2">
                       <span>
-                        {tableRows.length} parcelle{tableRows.length > 1 ? "s" : ""}
+                        {tableRows.length} parcelle
+                        {tableRows.length > 1 ? "s" : ""}
                         {selectedDupNicad
                           ? ` — doublon NICAD ${selectedDupNicad}`
-                          : selectedError ? ` — ${selectedError.errorType}` : ""}
+                          : selectedError
+                            ? ` — ${selectedError.errorType}`
+                            : ""}
                       </span>
                       {tableRows.length >= 2 && (
-                        <span className="text-yellow-400">· différences surlignées</span>
+                        <span className="text-yellow-400">
+                          · différences surlignées
+                        </span>
                       )}
                       <button
-                        onClick={() => { setTableRows([]); setSelectedParcel(null); setSelectedRows(new Set()); clearDuplicateFocus(); }}
+                        onClick={() => {
+                          setTableRows([]);
+                          setSelectedParcel(null);
+                          setSelectedRows(new Set());
+                          clearDuplicateFocus();
+                        }}
                         className="cursor-pointer underline hover:text-foreground transition-colors"
                       >
                         Tout effacer
@@ -1612,11 +2368,18 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                       className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium bg-red-500/15 text-red-400 hover:bg-red-500/25 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
                     >
                       <Trash2 className="w-3 h-3" />
-                      {deletingRows ? "Suppression…" : `Supprimer${selectedRows.size ? ` (${selectedRows.size})` : " les parcelles"}`}
+                      {deletingRows
+                        ? "Suppression…"
+                        : `Supprimer${selectedRows.size ? ` (${selectedRows.size})` : " les parcelles"}`}
                     </button>
                   )}
                   <button
-                    onClick={() => { setTableOpen(false); setTableRows([]); setSelectedRows(new Set()); clearDuplicateFocus(); }}
+                    onClick={() => {
+                      setTableOpen(false);
+                      setTableRows([]);
+                      setSelectedRows(new Set());
+                      clearDuplicateFocus();
+                    }}
                     className="cursor-pointer text-muted-foreground hover:text-foreground"
                   >
                     <X className="w-3.5 h-3.5" />
@@ -1628,7 +2391,8 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
               <div className="overflow-auto flex-1">
                 {tableRows.length === 0 ? (
                   <div className="flex items-center justify-center h-full text-xs text-muted-foreground">
-                    Cliquez une parcelle ou sélectionnez une erreur dans la liste
+                    Cliquez une parcelle ou sélectionnez une erreur dans la
+                    liste
                   </div>
                 ) : (
                   <AttributeTable
@@ -1636,6 +2400,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                     selectable={tableDeletable}
                     selectedKeys={selectedRows}
                     onToggle={toggleRow}
+                    onToggleAll={toggleAllRows}
                     editMode={dupEditMode && !!selectedDupNicad}
                     onKeepOnly={handleKeepOnlyOccurrence}
                     onRename={handleRenameOccurrence}
@@ -1656,34 +2421,54 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 <Trash2 className="w-5 h-5 text-destructive" />
               </div>
               <div>
-                <h2 className="text-base font-semibold">Supprimer l&apos;analyse</h2>
-                <p className="text-sm text-muted-foreground mt-0.5">Cette action est irréversible.</p>
+                <h2 className="text-base font-semibold">
+                  Supprimer l&apos;analyse
+                </h2>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  Cette action est irréversible.
+                </p>
               </div>
             </div>
 
             {/* What will be deleted */}
             <div className="rounded-lg border border-border bg-secondary/30 p-4 mb-5 space-y-2">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Données supprimées</p>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                Données supprimées
+              </p>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Fichier</span>
-                <span className="font-mono text-xs truncate max-w-[200px]">{analysis.fileName}</span>
+                <span className="font-mono text-xs truncate max-w-[200px]">
+                  {analysis.fileName}
+                </span>
               </div>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Parcelles</span>
-                <span className="font-semibold">{(analysis.totalFeatures ?? 0).toLocaleString()}</span>
+                <span className="font-semibold">
+                  {(analysis.totalFeatures ?? 0).toLocaleString()}
+                </span>
               </div>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Erreurs détectées</span>
-                <span className="font-semibold text-red-400">{analysis.errors.length}</span>
+                <span className="font-semibold text-red-400">
+                  {analysis.errors.length}
+                </span>
               </div>
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Fichier GeoJSON sur disque</span>
-                <span className="text-orange-400 text-xs">Supprimé définitivement</span>
+                <span className="text-muted-foreground">
+                  Fichier GeoJSON sur disque
+                </span>
+                <span className="text-orange-400 text-xs">
+                  Supprimé définitivement
+                </span>
               </div>
               {correctedData && (
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Données corrigées</span>
-                  <span className="text-orange-400 text-xs">Supprimées définitivement</span>
+                  <span className="text-muted-foreground">
+                    Données corrigées
+                  </span>
+                  <span className="text-orange-400 text-xs">
+                    Supprimées définitivement
+                  </span>
                 </div>
               )}
             </div>

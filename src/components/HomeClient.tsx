@@ -395,17 +395,17 @@ export default function HomeClient({ user, stats }: Props) {
               <div className="flex items-center justify-center gap-6 mb-10 text-sm">
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <Database className="w-4 h-4 text-primary" />
-                  <span><strong className="text-foreground">{stats.totalAnalyses}</strong> analyses</span>
+                  <span><strong className="font-serif text-foreground">{stats.totalAnalyses}</strong> analyses</span>
                 </div>
                 <div className="w-px h-4 bg-border" />
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <MapPin className="w-4 h-4 text-blue-400" />
-                  <span><strong className="text-foreground">{(stats.totalParcelles ?? 0).toLocaleString()}</strong> parcelles traitées</span>
+                  <span><strong className="font-serif text-foreground">{(stats.totalParcelles ?? 0).toLocaleString()}</strong> parcelles traitées</span>
                 </div>
                 <div className="w-px h-4 bg-border" />
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <CheckCircle className="w-4 h-4 text-green-400" />
-                  <span>Conformité moy. <strong className="text-green-400">{toNum(stats.avgConformity).toFixed(1)}%</strong></span>
+                  <span>Conformité moy. <strong className="font-serif text-green-400">{toNum(stats.avgConformity).toFixed(1)}%</strong></span>
                 </div>
               </div>
             )}
@@ -413,7 +413,7 @@ export default function HomeClient({ user, stats }: Props) {
             {/* Format chips */}
             <div className="flex flex-wrap justify-center gap-2 mb-10">
               {FORMATS.map((f) => (
-                <span key={f} className="px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground text-xs font-mono border border-border">
+                <span key={f} className="px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground text-xs font-mono border border-border">
                   {f}
                 </span>
               ))}

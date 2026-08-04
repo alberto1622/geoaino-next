@@ -4,7 +4,6 @@
  * Porté depuis vericad/server/importData.ts (Drizzle → Prisma).
  */
 import { prisma } from "@/lib/prisma";
-// @ts-expect-error — shapefile n'a pas de types complets
 import * as shapefile from "shapefile";
 import proj4 from "proj4";
 
@@ -23,7 +22,7 @@ function utmToWgs84(x: number, y: number): [number, number] {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function convertGeometryToWgs84(geometry: any): any {
+export function convertGeometryToWgs84(geometry: any): any {
   if (!geometry) return geometry;
   const needsConversion = (coords: number[]): boolean =>
     Math.abs(coords[0]) > 180 || Math.abs(coords[1]) > 90;
@@ -370,7 +369,7 @@ export async function importSections(fichiers: FichierInput[]): Promise<ImportRe
       const props = feature.properties ?? {};
       const numSectN = props.Num_sect_N ?? props.NUM_SECT_N ?? "";
       const numSectioRaw =
-        props.Num_sectio ?? props.Num_sect ?? props.NUM_SECT ?? props.NUMSECT ?? props.numSection ?? props.NUM_SECTION ?? props.SECTION ?? "";
+        props.Num_sectio ?? props.NUM_SECTIO ?? props.Num_sect ?? props.NUM_SECT ?? props.NUMSECT ?? props.numSection ?? props.NUM_SECTION ?? props.SECTION ?? "";
       const nomSection = props.NOM_SECT ?? props.NOMSECT ?? props.nomSection ?? props.NOM_SECTION ?? props.NAME ?? "";
       const nomCommune = props.COM_ARROND ?? props.NomCommune ?? props.NOM_COMMUN ?? props.NOM ?? props.nom ?? "";
       const region = props.REGION ?? props.region ?? "";

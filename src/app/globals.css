@@ -19,7 +19,8 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-ring: var(--ring);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-manrope);
+  --font-serif: var(--font-fraunces);
   --font-mono: var(--font-geist-mono);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -27,48 +28,60 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/* Identité GéoAino (maquette Claude Design, projet "GeoAino.dc.html") : palette
+   crème/brun chaud en clair (thème par défaut), déclinaison sombre dérivée de la
+   propre section CTA de la maquette (encre #1E1610 + doré #C99A2E déjà associés
+   là-bas) — la maquette elle-même ne définissait qu'un thème clair. */
 :root {
+  color-scheme: light;
+  --radius: 0.625rem;
+  --background: #FAF6EF;
+  --foreground: #22190F;
+  --card: #FFFDF9;
+  --card-foreground: #22190F;
+  --border: #E9DFC9;
+  --input: #E9DFC9;
+  --primary: #1E1610;
+  --primary-foreground: #FAF6EF;
+  --secondary: #F1E9D8;
+  --secondary-foreground: #22190F;
+  --muted: #F1E9D8;
+  --muted-foreground: #6B5D4B;
+  --accent: #F0E4C8;
+  --accent-foreground: #8B4A2B;
+  --destructive: oklch(0.58 0.22 25);
+  --ring: #C99A2E;
+}
+
+.dark {
   /* Widgets natifs (listes des <select>, scrollbars, date pickers) rendus en
      sombre : sans cela le navigateur ouvre un popup clair avec le texte clair
      du thème hérité → blanc sur blanc. */
   color-scheme: dark;
-  --radius: 0.625rem;
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.175 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --border: oklch(0.28 0 0);
-  --input: oklch(0.28 0 0);
-  --primary: oklch(0.65 0.18 220);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.22 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.22 0 0);
-  --muted-foreground: oklch(0.60 0 0);
-  --accent: oklch(0.22 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  --background: #1E1610;
+  --foreground: #FAF6EF;
+  --card: #241B13;
+  --card-foreground: #FAF6EF;
+  --border: #3A2C1E;
+  --input: #3A2C1E;
+  --primary: #C99A2E;
+  --primary-foreground: #1E1610;
+  --secondary: #2A2016;
+  --secondary-foreground: #FAF6EF;
+  --muted: #2A2016;
+  --muted-foreground: #B5A488;
+  --accent: #33261A;
+  --accent-foreground: #E8C874;
   --destructive: oklch(0.60 0.22 25);
-  --ring: oklch(0.65 0.18 220);
-}
-
-.light {
-  color-scheme: light;
-  --background: oklch(0.985 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --border: oklch(0.88 0 0);
-  --input: oklch(0.88 0 0);
-  --secondary: oklch(0.95 0 0);
-  --secondary-foreground: oklch(0.145 0 0);
-  --muted: oklch(0.95 0 0);
-  --muted-foreground: oklch(0.45 0 0);
-  --accent: oklch(0.95 0 0);
-  --accent-foreground: oklch(0.145 0 0);
+  --ring: #C99A2E;
 }
 
 * {
   border-color: var(--border);
+}
+
+h1, h2, h3 {
+  font-family: var(--font-serif), var(--font-sans);
 }
 
 /* Ceinture + bretelles pour Chrome/Edge Windows : couleurs explicites des
@@ -81,7 +94,7 @@ select option {
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-geist-sans, Arial, sans-serif);
+  font-family: var(--font-manrope, Arial, sans-serif);
 }
 
 /* Leaflet overrides */

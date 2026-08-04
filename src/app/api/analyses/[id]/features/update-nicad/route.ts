@@ -7,6 +7,7 @@ import {
   type GeoFeature,
   type Locator,
 } from "@/lib/analyses/feature-locator";
+import { requireSession } from "@/lib/analyses/require-session";
 
 type Params = Promise<{ id: string }>;
 
@@ -23,6 +24,9 @@ type GeoFC = { type: "FeatureCollection"; features: GeoFeature[] };
  * corrigé.
  */
 export async function POST(req: NextRequest, { params }: { params: Params }) {
+  const unauthorized = await requireSession();
+  if (unauthorized) return unauthorized;
+
   const { id } = await params;
   const analysisId = parseInt(id, 10);
   if (Number.isNaN(analysisId)) {
@@ -95,5 +99,12 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
     }
   }
 
-  return NextResponse.json({ success: true, nicad, correctedGeoJson });
+  return NextResponse.json({
+    success: true,
+    nicad,
+    correctedGeoJson,
+    // Blob exact d'avant édition (utilisé par l'historique annuler/rétablir côté
+    // client) : `rawGeoJson` n'a pas été muté, seule la feature parsée l'a été.
+    previousCorrectedGeoJson: rawGeoJson,
+  });
 }

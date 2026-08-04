@@ -348,7 +348,7 @@ function hashGeometry(geom: PolygonGeom): string {
 
 // ───────────────────────────── Index spatial (grille) ─────────────────────────────
 
-type BBox = [number, number, number, number];
+export type BBox = [number, number, number, number];
 
 function geometryBBox(geom: PolygonGeom): BBox {
   return turf.bbox(geom) as BBox;
@@ -358,7 +358,7 @@ function geometryBBox(geom: PolygonGeom): BBox {
  * Index spatial en grille (équivalent léger d'un STRtree) pour limiter le
  * nombre de tests point-dans-polygone lors de la jointure spatiale.
  */
-class BBoxGridIndex {
+export class BBoxGridIndex {
   private cells = new Map<string, number[]>();
   private cellSize: number;
   private minX: number;
@@ -427,7 +427,7 @@ class BBoxGridIndex {
   }
 }
 
-function bboxIntersects(a: BBox, b: BBox): boolean {
+export function bboxIntersects(a: BBox, b: BBox): boolean {
   return a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
 }
 

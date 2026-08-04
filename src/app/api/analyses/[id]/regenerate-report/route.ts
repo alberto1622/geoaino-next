@@ -2,10 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { loadGeoJsonFromKey } from "@/lib/geo-storage";
 import { analyzeGeoJSON, generateAIReport } from "@/lib/geo-engine";
+import { requireSession } from "@/lib/analyses/require-session";
 
 type Params = Promise<{ id: string }>;
 
 export async function POST(_req: NextRequest, { params }: { params: Params }) {
+  const unauthorized = await requireSession();
+  if (unauthorized) return unauthorized;
+
   const { id } = await params;
   const analysisId = parseInt(id);
 

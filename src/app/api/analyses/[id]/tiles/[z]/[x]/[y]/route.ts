@@ -2,6 +2,7 @@ import { promisify } from "util";
 import { gzip } from "zlib";
 import vtpbf from "vt-pbf";
 import { getTileEntry, TILE_LAYER } from "@/lib/analyses/tile-index";
+import { requireSession } from "@/lib/analyses/require-session";
 
 // geojson-vt / vt-pbf / zlib → runtime Node obligatoire (pas Edge).
 export const runtime = "nodejs";
@@ -18,6 +19,9 @@ type Params = Promise<{ id: string; z: string; x: string; y: string }>;
  * une fois puis mis en cache (`tile-index.ts`). Couche MVT : `parcelles`.
  */
 export async function GET(_req: Request, { params }: { params: Params }) {
+  const unauthorized = await requireSession();
+  if (unauthorized) return unauthorized;
+
   const { id, z, x, y } = await params;
   const analysisId = parseInt(id, 10);
   const zi = parseInt(z, 10);

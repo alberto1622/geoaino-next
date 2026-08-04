@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { getTileEntry } from "@/lib/analyses/tile-index";
+import { requireSession } from "@/lib/analyses/require-session";
 
 export const runtime = "nodejs";
 
@@ -15,6 +16,9 @@ type Params = Promise<{ id: string }>;
  * S'appuie sur l'index de tuiles mis en cache (`tile-index.ts`).
  */
 export async function GET(req: NextRequest, { params }: { params: Params }) {
+  const unauthorized = await requireSession();
+  if (unauthorized) return unauthorized;
+
   const { id } = await params;
   const analysisId = parseInt(id, 10);
   if (Number.isNaN(analysisId)) {

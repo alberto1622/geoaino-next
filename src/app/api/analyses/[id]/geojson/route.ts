@@ -3,6 +3,7 @@ import { promisify } from "util";
 import { gzip } from "zlib";
 import { prisma } from "@/lib/prisma";
 import { loadGeoJsonFromKey } from "@/lib/geo-storage";
+import { requireSession } from "@/lib/analyses/require-session";
 
 // zlib → runtime Node obligatoire (pas Edge)
 export const runtime = "nodejs";
@@ -27,6 +28,9 @@ function jsonError(message: string, status: number): Response {
  *  - compression gzip transparente (~10× sur du GeoJSON) quand le client la supporte.
  */
 export async function GET(req: NextRequest, { params }: { params: Params }) {
+  const unauthorized = await requireSession();
+  if (unauthorized) return unauthorized;
+
   const { id } = await params;
   const analysisId = parseInt(id);
   if (Number.isNaN(analysisId)) return jsonError("ID invalide", 400);

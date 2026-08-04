@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getTileEntry, geometryBBox, type BBox } from "@/lib/analyses/tile-index";
+import { requireSession } from "@/lib/analyses/require-session";
 
 export const runtime = "nodejs";
 
@@ -20,6 +21,9 @@ function bboxDist(a: BBox, b: BBox): number {
  * NICAD n'est pas dupliqué. S'appuie sur l'index de tuiles mis en cache.
  */
 export async function GET(req: NextRequest, { params }: { params: Params }) {
+  const unauthorized = await requireSession();
+  if (unauthorized) return unauthorized;
+
   const { id } = await params;
   const analysisId = parseInt(id, 10);
   if (Number.isNaN(analysisId)) {

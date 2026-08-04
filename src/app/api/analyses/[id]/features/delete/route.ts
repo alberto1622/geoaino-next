@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { loadGeoJsonFromKey, writeGeoJsonByKey } from "@/lib/geo-storage";
 import { resolveLocator, type GeoFeature, type Locator } from "@/lib/analyses/feature-locator";
+import { requireSession } from "@/lib/analyses/require-session";
 
 type Params = Promise<{ id: string }>;
 
@@ -17,6 +18,9 @@ type GeoFC = { type: "FeatureCollection"; features: GeoFeature[] };
  * erreurs de topologie dont l'index est fourni sont marquées corrigées.
  */
 export async function POST(req: NextRequest, { params }: { params: Params }) {
+  const unauthorized = await requireSession();
+  if (unauthorized) return unauthorized;
+
   const { id } = await params;
   const analysisId = parseInt(id, 10);
   if (Number.isNaN(analysisId)) {
@@ -103,5 +107,8 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
     remaining: geoJson.features.length,
     notFound: notFound.length,
     correctedGeoJson,
+    // Blob exact d'avant édition (utilisé par l'historique annuler/rétablir côté
+    // client) : `rawGeoJson` n'a pas été muté, seul l'objet `geoJson` parsé l'a été.
+    previousCorrectedGeoJson: rawGeoJson,
   });
 }

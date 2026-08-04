@@ -18,8 +18,16 @@ import {
   X,
   ChevronsLeft,
   ChevronsRight,
+  Layers,
+  ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+} from "@/components/ui/dropdown-menu";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -191,7 +199,7 @@ export default function SectionsClient() {
   const [adminShow, setAdminShow] = useState<Record<AdminLevel, boolean>>({
     regions: false,
     departements: false,
-    communes: true,
+    communes: false,
   });
   const adminDataRef = useRef<Partial<Record<AdminLevel, AdminData>>>({});
   const adminFetchingRef = useRef<Set<AdminLevel>>(new Set());
@@ -289,18 +297,62 @@ export default function SectionsClient() {
     })();
   }, [loadBatches, fetchData]);
 
-  // ── Upload + lancement du job ──────────────────────────────────────────────
+  // ── Notification de fin de construction (job DXF/DGN ou shapefile synchrone) ─
+  const reportBuildResult = useCallback(
+    async (report: {
+      sourceFichier: string;
+      nbSections: number;
+      nbOverlaps: number;
+      nbResidusFusionnes?: number;
+      nbResidusEcartes?: number;
+      nbEnveloppesEcartees?: number;
+    }) => {
+      setUploading(false);
+      const fus = report.nbResidusFusionnes ?? 0;
+      const res =
+        (report.nbResidusEcartes ?? 0) + (report.nbEnveloppesEcartees ?? 0);
+      toast.success(
+        `${report.nbSections} section(s) construites · ${report.nbOverlaps} chevauchement(s) détecté(s)` +
+          (fus > 0 ? ` · ${fus} résidu(s) fusionné(s) à leur section` : "") +
+          (res > 0 ? ` · ${res} résidu(s)/enveloppe(s) écarté(s)` : "") +
+          ".",
+      );
+      await fetchData(report.sourceFichier);
+      await loadBatches();
+    },
+    [fetchData, loadBatches],
+  );
+
+  // ── Upload + lancement du job (DXF/DGN/ZIP) ou construction directe (shapefile) ─
   const handleUpload = useCallback(async () => {
     if (files.length === 0) {
-      toast.error("Sélectionnez un fichier DXF/DGN/ZIP.");
+      toast.error(
+        "Sélectionnez un fichier DXF/DGN/ZIP ou un shapefile (.shp + .dbf).",
+      );
       return;
     }
     setUploading(true);
     setSections([]);
     setOverlaps([]);
+    const isShapefile = files.some((f) =>
+      f.name.toLowerCase().endsWith(".shp"),
+    );
     try {
       const fd = new FormData();
       for (const f of files) fd.append("files", f);
+
+      if (isShapefile) {
+        // Shapefile : polygones déjà valides → construction synchrone, pas de job.
+        const res = await fetch("/api/cadastre/sections/import-shapefile", {
+          method: "POST",
+          body: fd,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Import échoué");
+        await reportBuildResult(data);
+        return;
+      }
+
       const res = await fetch("/api/cadastre/sections/import", {
         method: "POST",
         body: fd,
@@ -318,7 +370,7 @@ export default function SectionsClient() {
       toast.error(String(err));
       setUploading(false);
     }
-  }, [files]);
+  }, [files, reportBuildResult]);
 
   // ── Polling du job jusqu'à complétion ──────────────────────────────────────
   useEffect(() => {
@@ -335,24 +387,19 @@ export default function SectionsClient() {
           error: j.error,
         });
         if (j.status === "completed") {
-          setUploading(false);
           const src = (j.report?.sourceFichier as string) ?? sourceFichier;
-          const nb = j.report?.nbSections ?? j.totalBuilt ?? 0;
-          const ov = j.report?.nbOverlaps ?? 0;
-          const fus = j.report?.nbResidusFusionnes ?? 0;
-          const res =
-            (j.report?.nbResidusEcartes ?? 0) +
-            (j.report?.nbEnveloppesEcartees ?? 0);
-          toast.success(
-            `${nb} section(s) construites · ${ov} chevauchement(s) détecté(s)` +
-              (fus > 0
-                ? ` · ${fus} résidu(s) fusionné(s) à leur section`
-                : "") +
-              (res > 0 ? ` · ${res} résidu(s)/enveloppe(s) écarté(s)` : "") +
-              ".",
-          );
-          if (src) await fetchData(src);
-          await loadBatches();
+          if (src) {
+            await reportBuildResult({
+              sourceFichier: src,
+              nbSections: j.report?.nbSections ?? j.totalBuilt ?? 0,
+              nbOverlaps: j.report?.nbOverlaps ?? 0,
+              nbResidusFusionnes: j.report?.nbResidusFusionnes ?? 0,
+              nbResidusEcartes: j.report?.nbResidusEcartes ?? 0,
+              nbEnveloppesEcartees: j.report?.nbEnveloppesEcartees ?? 0,
+            });
+          } else {
+            setUploading(false);
+          }
         } else if (j.status === "failed") {
           setUploading(false);
           toast.error(j.error || "Traitement échoué");
@@ -362,7 +409,7 @@ export default function SectionsClient() {
       }
     }, 1500);
     return () => clearInterval(timer);
-  }, [job, sourceFichier, fetchData, loadBatches]);
+  }, [job, sourceFichier, reportBuildResult]);
 
   // ── Suppression d'une section individuelle (table OU popup carte) ──────────
   // Une zone récupérée à tort comme section (enveloppe, quartier, artefact) se
@@ -998,12 +1045,16 @@ export default function SectionsClient() {
           body: JSON.stringify({ overlapIds: ids, action, sourceFichier }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Correction groupée échouée");
+        if (!res.ok)
+          throw new Error(data.error || "Correction groupée échouée");
         setSections(data.sections ?? []);
         setOverlaps(data.overlaps ?? []);
         setOverlapSelection([]);
-        const results: Array<{ overlapId: number; ok: boolean; error?: string }> =
-          data.results ?? [];
+        const results: Array<{
+          overlapId: number;
+          ok: boolean;
+          error?: string;
+        }> = data.results ?? [];
         const nbOk = results.filter((r) => r.ok).length;
         const nbFail = results.length - nbOk;
         if (nbFail === 0) {
@@ -1064,21 +1115,22 @@ export default function SectionsClient() {
           {/* Colonne 1 : import + lot stocké */}
           <div className="space-y-2">
             <div className="flex flex-col border border-border/60 rounded-xl px-2 py-1.5 gap-1.5">
-              {/* Import DXF/DGN/ZIP */}
+              {/* Import DXF/DGN/ZIP ou Shapefile (.shp + .dbf) */}
               <div className="flex flex-wrap items-center gap-2 rounded-xl border border-dashed border-border/60 px-2 py-1">
                 <label className="flex h-8 cursor-pointer items-center gap-2 rounded-lg border border-dashed border-border px-2 text-sm hover:border-primary/50">
                   <FileUp className="h-4 w-4 text-muted-foreground" />
                   <span className="truncate max-w-64 text-sm">
                     {files.length
                       ? files.map((f) => f.name).join(", ")
-                      : "Choisir un DXF / DGN / ZIP"}
+                      : "Choisir un DXF / DGN / ZIP / Shapefile"}
                   </span>
                   <input
                     type="file"
-                    accept=".dxf,.dgn,.zip"
+                    accept=".dxf,.dgn,.zip,.shp,.dbf,.shx,.prj"
                     multiple
                     className="hidden"
                     onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+                    title="DXF/DGN/ZIP : ingestion complète. Shapefile (.shp + .dbf) : polygones déjà fermés utilisés tels quels, lignes de limites polygonisées et regroupées par numéro de section (champ du .dbf)."
                   />
                 </label>
                 <Button
@@ -1166,35 +1218,58 @@ export default function SectionsClient() {
           <div className="space-y-2">
             <div className="flex flex-col border border-border/60 rounded-xl px-3 py-2 gap-2">
               {/* Limites administratives (contours + noms) */}
-              <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-border/60 px-3 py-2">
+              <div className="flex items-center gap-1.5 rounded-xl border border-border/60 px-3 py-2">
                 <span className="text-xs text-muted-foreground">
                   Limites admin :
                 </span>
-                {ADMIN_LEVELS.map((level) => {
-                  const st = ADMIN_STYLES[level];
-                  const active = adminShow[level];
-                  return (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
                     <Button
-                      key={level}
                       size="sm"
-                      variant={active ? "default" : "outline"}
-                      className="h-7 gap-1.5 px-2 text-[11px]"
-                      onClick={() =>
-                        setAdminShow((prev) => ({
-                          ...prev,
-                          [level]: !prev[level],
-                        }))
+                      variant={
+                        ADMIN_LEVELS.some((level) => adminShow[level])
+                          ? "default"
+                          : "outline"
                       }
-                      title={`Afficher les contours et noms : ${st.label.toLowerCase()}`}
+                      className="h-7 gap-1.5 px-2 text-[11px]"
                     >
-                      <span
-                        className="h-2.5 w-2.5 rounded-sm"
-                        style={{ background: st.color }}
-                      />
-                      {st.label}
+                      <Layers className="h-3.5 w-3.5" />
+                      {ADMIN_LEVELS.filter((level) => adminShow[level]).length >
+                      0
+                        ? ADMIN_LEVELS.filter((level) => adminShow[level])
+                            .map((level) => ADMIN_STYLES[level].label)
+                            .join(", ")
+                        : "Aucune"}
+                      <ChevronDown className="h-3.5 w-3.5 opacity-60" />
                     </Button>
-                  );
-                })}
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    {ADMIN_LEVELS.map((level) => {
+                      const st = ADMIN_STYLES[level];
+                      return (
+                        <DropdownMenuCheckboxItem
+                          key={level}
+                          checked={adminShow[level]}
+                          onSelect={(e) => e.preventDefault()}
+                          onCheckedChange={(checked) =>
+                            setAdminShow((prev) => ({
+                              ...prev,
+                              [level]: checked === true,
+                            }))
+                          }
+                        >
+                          <span className="flex items-center gap-1.5">
+                            <span
+                              className="h-2.5 w-2.5 rounded-sm"
+                              style={{ background: st.color }}
+                            />
+                            {st.label}
+                          </span>
+                        </DropdownMenuCheckboxItem>
+                      );
+                    })}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
 
               {/* Légende des couleurs de la carte */}
@@ -1414,7 +1489,7 @@ export default function SectionsClient() {
                         Tout sélectionner ({pending.length})
                       </label>
                       {activeOverlapSelection.length > 0 && (
-                        <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-red-400/30 bg-red-500/5 p-2">
+                        <div className="sticky top-0 z-10 flex flex-wrap items-center gap-1.5 rounded-lg border border-red-400/40 bg-red-500/10 p-2 shadow-sm backdrop-blur">
                           <span className="text-[11px] font-medium">
                             {activeOverlapSelection.length} sélectionné
                             {activeOverlapSelection.length > 1 ? "s" : ""}
@@ -1459,7 +1534,8 @@ export default function SectionsClient() {
                           </div>
                         </div>
                       )}
-                      {pending.map((o) => {
+                      <div className="max-h-70 space-y-2 overflow-y-auto pr-0.5">
+                        {pending.map((o) => {
                         const isSel = o.id === selectedOverlapId;
                         const busy = correcting === o.id;
                         return (
@@ -1546,6 +1622,7 @@ export default function SectionsClient() {
                           </div>
                         );
                       })}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1627,7 +1704,10 @@ export default function SectionsClient() {
                                     e.stopPropagation();
                                     handleDeleteSection(s);
                                   }}
-                                  disabled={deletingSectionId === s.id || batchCorrecting}
+                                  disabled={
+                                    deletingSectionId === s.id ||
+                                    batchCorrecting
+                                  }
                                   title={`Supprimer la section ${s.numSection ?? "—"}`}
                                   className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
                                 >

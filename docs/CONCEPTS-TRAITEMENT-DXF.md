@@ -22,11 +22,15 @@ est vu, il doit être ajouté ici (cf. règle dans `CLAUDE.md`).
 5. [Tuilage adaptatif : récupérer les cœurs urbains denses](#5-tuilage-adaptatif--récupérer-les-cœurs-urbains-denses)
 6. [Dédoublonnage & enveloppes : coïncidence vs contenance](#6-dédoublonnage--enveloppes--coïncidence-vs-contenance)
     - [6 bis. Correction des chevauchements partiels (retaille par priorité)](#6-bis-correction-des-chevauchements-partiels-retaille-par-priorité)
+    - [6 ter. Chevauchements non signalés au-delà de 500 parcelles (plafond de détection à l'analyse)](#6-ter-chevauchements-non-signalés-au-delà-de-500-parcelles-plafond-de-détection-à-lanalyse)
 7. [Nettoyage des libellés : codes de formatage MTEXT](#7-nettoyage-des-libellés--codes-de-formatage-mtext)
 8. [Suppression manuelle de parcelles (table attributaire)](#8-suppression-manuelle-de-parcelles-table-attributaire)
 9. [Doublures NICAD : zoom sur les occurrences, annotation & mode édition](#9-doublures-nicad--zoom-sur-les-occurrences-annotation--mode-édition)
 10. [Colorer les NICAD manquants/courts sur toute l'analyse (hors plafond d'erreurs)](#10-colorer-les-nicad-manquantscourts-sur-toute-lanalyse-hors-plafond-derreurs)
 11. [Table `limite_section` : extraction des sections + contrôle des chevauchements](#11-table-limite_section--extraction-des-sections--contrôle-des-chevauchements)
+    - [11 bis. Sections fusionnées SANS trou de raccord : limite mitoyenne absente de la source](#11-bis-sections-fusionnées-sans-trou-de-raccord--limite-mitoyenne-absente-de-la-source)
+    - [11 ter. Attribution manuelle du numéro pour les sections sans étiquette](#11-ter-attribution-manuelle-du-numéro-pour-les-sections-sans-étiquette)
+    - [11 quater. Import de sections depuis un shapefile : contourner le pipeline DXF](#11-quater-import-de-sections-depuis-un-shapefile--contourner-le-pipeline-dxf)
 12. [Annexe — compteurs du rapport & variables d'environnement](#12-annexe--compteurs-du-rapport--variables-denvironnement)
 13. [Correction groupée des chevauchements de sections : règle « auto » et ordre séquentiel](#13-correction-groupée-des-chevauchements-de-sections--règle--auto--et-ordre-séquentiel)
 
@@ -425,6 +429,71 @@ après le dédoublonnage) :
 
 ---
 
+## 6 ter. Chevauchements non signalés au-delà de 500 parcelles (plafond de détection à l'analyse)
+
+**Problème métier.** Sur un DXF de quelques milliers de parcelles ou plus, des
+chevauchements bel et bien présents dans les données n'apparaissaient **jamais**
+dans la liste d'erreurs ni sur la carte — alors que `resolveParcelleOverlaps`
+(§6 bis) est censé les avoir déjà corrigés à l'ingestion.
+
+**Cause technique.** `resolveParcelleOverlaps` corrige déjà l'essentiel, mais sa
+correction échoue silencieusement sur les géométries dégénérées (`turf.difference`
+qui lève une exception → §6 bis, « on garde la parcelle telle quelle… jamais de
+perte silencieuse ») : le chevauchement résiduel reste alors délibérément visible
+pour ne rien perdre. Le filet de sécurité censé le signaler est `analyzeGeoJSON`
+(`geo-engine.ts`, section « 3. Overlaps ») — mais il ne comparait que les **500
+premières features du tableau** (`MAX_OVERLAP_CHECK`) et s'arrêtait après **200
+erreurs** (`MAX_OVERLAP_ERRORS`), avec une double boucle O(n²) sans index spatial.
+Sur un lot de plusieurs milliers à 100k+ parcelles (l'échelle même pour laquelle
+le pipeline est conçu, §1), la quasi-totalité des parcelles n'était jamais
+comparée : les chevauchements résiduels au-delà de la 500ᵉ feature passaient
+entièrement sous le radar.
+
+**Solution.** `geo-engine.ts · analyzeGeoJSON` réutilise l'index spatial en
+grille de l'ingestion (`BBoxGridIndex`/`bboxIntersects`, désormais **exportés**
+depuis `parcelle-ingestion.ts`) : la totalité des features est indexée, seules
+les paires dont les bbox tombent dans des cellules voisines sont testées
+(`turf.intersect`), ce qui reste quasi linéaire au lieu de O(n²). Le plafond de
+troncature aux 500 premières features est supprimé ; le plafond du nombre
+d'erreurs (garde-fou anti-pathologique, pas une limite métier) est relevé de 200
+à 5000.
+
+**Pourquoi / pièges :**
+
+- Comparer toutes les paires sans index (O(n²)) serait irréaliste à 100k
+  parcelles (~5 milliards de paires) — c'est exactement le même problème, et la
+  même solution (grille adaptative à cellules ~2 bbox/cellule), que le
+  noding/dédoublonnage à l'ingestion (§4, §6).
+- Le plafond d'erreurs (5000) reste une protection, pas une limite attendue en
+  usage normal : après correction à l'ingestion (§6 bis), un chevauchement réel
+  résiduel doit rester rare — en voir des milliers indique un problème de
+  données ou une correction à l'ingestion désactivée (`DXF_OVERLAP_*` mis à
+  0/1 pour débogage), pas un DXF normal.
+- **Plafond distinct en aval, corrigé séparément.** La page carte
+  (`src/app/map/[analysisId]/page.tsx · ERROR_RENDER_LIMIT = 2000`) ne chargeait
+  que les 2000 premières `TopologicalError` **toutes catégories confondues**,
+  triées par sévérité. Or `DUPLICATE`/`MISSING_NICAD`/`SHORT_NICAD` sont
+  coloriés directement depuis les tuiles (§10) et n'ont pas besoin de leur
+  géométrie pour l'overlay carte, mais peuvent être très nombreux (severity
+  souvent `critical`) — avec un plafond **partagé**, ils évinçaient les erreurs
+  qui, elles, ONT besoin de leur géométrie pour s'afficher (`OVERLAP`/`GAP`/
+  `SLIVER`/`INVALID_GEOM`/`BOUNDARY_CROSS`/`SELF_INTERSECT`, overlay-only via
+  `TILE_COLORED_ERROR_TYPES`, `MapLibreMap.tsx`) : un chevauchement bien détecté
+  par `analyzeGeoJSON` pouvait rester invisible sur la carte si d'autres types
+  d'erreur remplissaient le plafond en premier. **Solution :** deux requêtes
+  Prisma indépendantes, chacune avec son propre plafond de 2000 — une pour les
+  types overlay-only (ont besoin de leur géométrie), une pour les types
+  coloriés par tuile (n'en ont pas besoin) — de sorte qu'aucune catégorie ne
+  puisse évincer l'autre.
+
+**Fichiers · fonctions.** `src/lib/geo-engine.ts` (`analyzeGeoJSON`, section
+« 3. Overlaps »), `src/lib/parcelle-ingestion.ts` (`BBoxGridIndex`,
+`bboxIntersects`, `type BBox` — désormais exportés pour réutilisation),
+`src/app/map/[analysisId]/page.tsx` (`TILE_COLORED_ERROR_TYPES`, requêtes
+`overlayErrors`/`tileColoredErrors` séparées).
+
+---
+
 ## 7. Nettoyage des libellés : codes de formatage MTEXT
 
 **Problème.** Les libellés sortaient formatés : `\fArial Black|b0|i0|c00|p39;ZAR/948`
@@ -804,6 +873,125 @@ sont dans le rapport d'import.
 **Pourquoi ne PAS augmenter la tolérance.** À 2 m, la face fusionnée absorbait
 aussi la section 015 : sur des tracés sans trou réel, élargir la tolérance ne
 sépare rien et **dégrade** les sections voisines saines. 1 m reste le bon réglage.
+
+---
+
+## 11 ter. Attribution manuelle du numéro pour les sections sans étiquette
+
+**Problème métier.** Une section peut sortir de l'extraction sans
+`numSection` (libellé `numero_section` absent du DXF, ou hors du polygone
+lors de la jointure « plus petit contenant », cf. §11) : elle reste dans
+`limite_section` mais aucune fusion par numéro n'a pu s'appliquer
+(§11, dissolution par (syscol, numéro)) et aucun export NICAD ne peut la
+rattacher. Avant cette fonctionnalité, la seule façon de la récupérer était
+la fusion manuelle avec une section déjà numérotée voisine — inutilisable
+si la section est isolée et légitimement une section à part.
+
+**Solution.** `POST /api/cadastre/sections/numero` (`{ sectionId,
+numSection }`) attribue un numéro à une section dont `numSection` est
+`null` — attribut seul, aucune géométrie touchée, aucun recalcul de
+chevauchement. Deux points d'entrée dans `SectionsClient.tsx` : édition
+inline dans la table (colonne « Sect. »), et champ dans le popup carte au
+clic sur un polygone sans numéro ; un filtre « Sans numéro (N) » restreint
+table et carte à ces sections pour les repérer rapidement.
+
+**Pourquoi la vérification d'unicité est PAR COMMUNE, pas globale.** Comme
+pour la dissolution (§11), un numéro de section n'est unique que **dans sa
+commune** : deux communes différentes ont chacune une section « 001 ».
+`findSectionNumeroConflict` (`sections-data.ts`) cherche donc une collision
+sur la clé **(syscolCommune, numSection)** — la même clé que la dissolution
+d'import — et non sur `numSection` seul, sinon la moitié des attributions
+échouerait à tort sur des sections de communes différentes qui partagent un
+numéro. Sans commune résolue (`syscolCommune` null), aucun contrôle n'est
+possible : l'attribution passe sans vérification.
+
+**Piège évité.** En cas de collision détectée, l'API refuse (409) plutôt que
+de fusionner automatiquement les deux sections : une même valeur de
+`numSection` dans la même commune ne veut pas nécessairement dire « même
+section physique » (numérotation dupliquée par erreur dans le DXF source).
+La fusion reste un geste **délibéré** de l'utilisateur via la fonction de
+fusion manuelle existante (§11, « Fusion manuelle de sections »).
+
+**Fichiers · fonctions.** `src/lib/cadastre/sections-data.ts`
+(`findSectionNumeroConflict`, `updateSectionNumero`, `getSection` étendu),
+`src/app/api/cadastre/sections/numero/route.ts`,
+`src/components/cadastre/SectionsClient.tsx` (`performSetNumero`,
+filtre `showUnnumberedOnly`).
+
+---
+
+## 11 quater. Import de sections depuis un shapefile : contourner le pipeline DXF
+
+**Besoin métier.** Un shapefile de sections peut arriver sous deux formes bien
+différentes : des **polygones déjà fermés** (export SIG propre), ou des
+**lignes de limites non fermées** (numérisation par limite mitoyenne, comme la
+couche `limites_sections` d'un DXF). Forcer systématiquement un passage par la
+lecture native DXF + tuilage (§ 2 à 5) serait un détour inutile pour le premier
+cas ; ignorer le second reviendrait à perdre silencieusement toute section
+numérisée en lignes (c'était le comportement initial de ce module : une
+géométrie non-Polygon était simplement écartée).
+
+**Concept — découpler `SectionCandidate` de sa provenance.** `buildLimiteSections`
+(§ 11) ne consommait historiquement qu'un `DxfIngestionResult` complet, alors
+qu'il ne lit jamais que son champ `sections: SectionCandidate[]`. Élargir sa
+signature à `{ sections: SectionCandidate[] }` (compatible structurellement avec
+`DxfIngestionResult`, donc sans impact sur l'appelant DXF dans `run-job.ts`)
+permet de lui fournir des candidates construites **par n'importe quelle source**
+— DXF polygonisé ou shapefile lu tel quel — et de réutiliser sans duplication
+100 % de la logique aval : jointure commune, dissolution par (commune, numéro),
+absorption des résidus, contrôle des chevauchements, persistance.
+
+**Construction des candidates** (`src/lib/cadastre/sections-from-shapefile.ts`) :
+lecture via `shapefile.read(shp, dbf)` (API batch, cf. piège de typage
+ci-dessous), extraction du numéro de section via les mêmes alias de propriétés
+QGIS/ArcGIS que `importSections` (`Num_sect_N` 11 chiffres, sinon
+`Num_sectio`/`NUM_SECT`/`SECTION`…), calcul du point représentatif
+(`turf.pointOnFeature`, repli centroïde) et de la surface. Le traitement
+diverge ensuite selon le type de géométrie de chaque feature :
+
+- **Polygon/MultiPolygon** : déjà fermé, juste reprojeté UTM28N → WGS84
+  (`convertGeometryToWgs84`, même heuristique que l'import shapefile du module
+  Cadastre — coordonnées `|x| > 180` ou `|y| > 90` ⇒ conversion proj4).
+- **LineString/MultiLineString** : polygonisé via le **même moteur que le DXF**
+  (`polygonizeLines`, § 4/4 bis/5 — nodage JSTS + `Polygonizer`, snap-rounding
+  progressif, tolérance de raccord `DXF_SECTION_SNAP_TOLERANCE_M` partagée avec
+  le réseau de sections DXF). Différence clé avec le DXF : là où le DXF associe
+  un numéro à un polygone reconstruit *après coup* par jointure point-dans-polygone
+  sur une couche de labels séparée, le shapefile porte ici le numéro
+  **directement sur chaque ligne** (attribut du .dbf) — les lignes sont donc
+  **groupées par numéro AVANT nodage**, et chaque groupe est polygonisé
+  indépendamment. Ce découpage évite toute jointure spatiale après coup, mais
+  suppose que les lignes d'un même numéro suffisent à refermer un contour ;
+  un groupe qui ne se referme pas (limite mitoyenne portée par le seul voisin,
+  segment manquant) ne produit silencieusement aucun polygone (compté et
+  loggé, `nbGroupesNonFermes`) — aucun repli automatique, contrairement à
+  l'absorption de résidus du pipeline DXF (§ 11) qui ne s'applique qu'à des
+  polygones déjà fermés.
+- Le nodage/`Polygonizer` (JSTS) exigent des coordonnées **planes** (mètres,
+  comme le pipeline DXF en EPSG:32628) : les lignes du shapefile sont donc
+  reprojetées WGS84 → UTM28N **avant** polygonisation si nécessaire
+  (heuristique symétrique de `convertGeometryToWgs84`), puis le résultat
+  repasse par le même `convertGeometryToWgs84` en sortie, exactement comme un
+  polygone déjà fermé.
+
+**Traitement synchrone, pas de job.** Le DXF passe par `ImportJob` (asynchrone,
+suivi par polling) car le tuilage de 100k+ segments peut prendre plusieurs
+minutes (§ 5). Un shapefile de sections (quelques centaines de polygones) se lit
+et se construit en quelques secondes : `POST /api/cadastre/sections/import-shapefile`
+traite la requête **dans le cycle HTTP** et renvoie directement le
+`BuildSectionsResult`, sans créer de `ImportJob`. Piège si le volume grossit un
+jour : repasser par un job dès que le shapefile dépasse un seuil de taille,
+plutôt que de bloquer la requête.
+
+**Piège de typage — `shapefile.read()` non déclaré.** Le fichier `src/types/shapefile.d.ts`
+(déclaration ambiante, le paquet `shapefile` ne fournit aucun `.d.ts`) ne
+couvrait que l'API streaming (`open()` + `Source.read()` itératif), pas l'API
+batch `read(shp, dbf)` pourtant utilisée par `import-data.ts` — d'où un
+`@ts-expect-error` **et** une erreur `Property 'read' does not exist`
+simultanés (la déclaration ambiante existait, donc l'erreur « pas de types »
+attendue par le `@ts-expect-error` ne se déclenchait plus, mais `read` restait
+absent du type). Corrigé en ajoutant la signature de `read` à la déclaration
+ambiante plutôt qu'en réempilant un nouveau contournement.
 
 ---
 

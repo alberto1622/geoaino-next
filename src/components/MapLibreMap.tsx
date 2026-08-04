@@ -83,18 +83,39 @@ interface Props {
   showSections?: boolean;
   /** Colore les parcelles SANS section rattachée (`_ssec`, numero_section absent/« 000 »). */
   sansSectionHighlight?: boolean;
+  /** NICAD supprimés côté client : masqués immédiatement sans attendre le refetch des tuiles. */
+  deletedNicads?: string[];
+  /** Niveaux de limites administratives actifs (régions/départements/communes, référentiel national). */
+  adminLevels?: AdminLevel[];
 }
 
 /** Couleur des parcelles sans section (orange, distinct des types d'erreur). */
 const SANS_SECTION_COLOR = "#f97316";
 
-/** Couleur des limites/étiquettes de sections (violet, distinct des parcelles grises). */
-const SECTION_COLOR = "#7c3aed";
+/** Couleur des limites/étiquettes de sections (rouge, distinct des parcelles grises). */
+const SECTION_COLOR = "#ef4444";
 /** Zoom minimal d'affichage des étiquettes de numéros de section (marqueurs DOM). */
 const SECTION_LABEL_MIN_ZOOM = 10;
 
 interface SectionLabel { lng: number; lat: number; numSection: string | null; commune: string | null }
 interface SectionsData { boundaries: GeoJSON.FeatureCollection; labels: SectionLabel[] }
+
+// ── Limites administratives (régions / départements / communes) ──────────────
+// Mêmes contours nationaux que /cadastre/sections, servis par
+// /api/cadastre/admin-boundaries (dérivés de cad_communes_2026), plutôt que le
+// contour déduit de l'emprise de l'analyse (abandonné pour rester cohérent
+// avec la page sections).
+type AdminLevel = "regions" | "departements" | "communes";
+const ADMIN_STYLES: Record<
+  AdminLevel,
+  { label: string; color: string; width: number; dasharray?: number[]; minLabelZoom: number; fontSize: number }
+> = {
+  regions: { label: "Régions", color: "#b91c1c", width: 3, minLabelZoom: 5, fontSize: 12 },
+  departements: { label: "Départements", color: "#b45309", width: 2, dasharray: [6, 3], minLabelZoom: 7.5, fontSize: 12 },
+  communes: { label: "Communes", color: "#0f766e", width: 1.2, dasharray: [4, 3], minLabelZoom: 9, fontSize: 10 },
+};
+interface AdminLabel { lng: number; lat: number; nom: string }
+interface AdminData { boundaries: GeoJSON.FeatureCollection; labels: AdminLabel[] }
 
 interface PopupState { lng: number; lat: number; html: string }
 
@@ -123,7 +144,7 @@ function computeBbox(features: unknown[]): [[number, number], [number, number]] 
   return found ? [[w, s], [e, n]] : null;
 }
 
-export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, errors, selectedErrorId, blinkIntense = false, onFeatureClick, selectedNicads = [], searchedNicads = [], focusTarget, conformeHighlight = false, nonConformeNicads = [], occurrences = [], occurrencesBounds = null, occurrenceEditMode = false, onOccurrenceKeep, showSections = false, sansSectionHighlight = false }: Props) {
+export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, errors, selectedErrorId, blinkIntense = false, onFeatureClick, selectedNicads = [], searchedNicads = [], focusTarget, conformeHighlight = false, nonConformeNicads = [], occurrences = [], occurrencesBounds = null, occurrenceEditMode = false, onOccurrenceKeep, showSections = false, sansSectionHighlight = false, deletedNicads = [], adminLevels = [] }: Props) {
   const mapRef = useRef<MapRef>(null);
   const blinkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const onClickRef = useRef(onFeatureClick);
@@ -138,6 +159,9 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
   const [cursor, setCursor] = useState("grab");
   // Limites de sections (chargées une fois, à la première activation).
   const [sectionsData, setSectionsData] = useState<SectionsData | null>(null);
+  // Contours administratifs par niveau (chargés une fois par niveau, à sa première activation).
+  const [adminData, setAdminData] = useState<Partial<Record<AdminLevel, AdminData>>>({});
+  const adminFetchingRef = useRef<Set<AdminLevel>>(new Set());
   // Zoom courant : les étiquettes de sections (marqueurs DOM) ne sont rendues
   // qu'à partir de SECTION_LABEL_MIN_ZOOM pour éviter l'encombrement en vue large.
   const [zoom, setZoom] = useState(INITIAL_VIEW.zoom);
@@ -163,6 +187,24 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
     })();
     return () => { cancelled = true; };
   }, [showSections, sectionsData]);
+
+  // ── Chargement des limites administratives (référentiel national, une fois par niveau) ─
+  useEffect(() => {
+    for (const level of adminLevels) {
+      if (adminData[level] || adminFetchingRef.current.has(level)) continue;
+      adminFetchingRef.current.add(level);
+      void (async () => {
+        try {
+          const res = await fetch(`/api/cadastre/admin-boundaries?niveau=${level}`);
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Chargement des contours échoué");
+          setAdminData((prev) => ({ ...prev, [level]: data as AdminData }));
+        } catch (err) {
+          console.warn(`[MapLibreMap] admin-boundaries (${level}):`, err);
+        }
+      })();
+    }
+  }, [adminLevels, adminData]);
 
   // ── URL des tuiles vectorielles ───────────────────────────────────────────
   // Composant client-only (ssr:false) → `window` disponible. `tilesVersion`
@@ -259,8 +301,16 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
         [">=", ["length", ["get", "_nicad"]], 8],
         ["!", ["in", ["downcase", ["get", "_nicad"]], ["literal", MISSING_NICAD_VALUES]]],
         ["!", ["in", ["get", "_nicad"], ["literal", nonConformeNicads]]],
+        ["!", ["in", ["get", "_nicad"], ["literal", deletedNicads]]],
       ] as any,
-    [nonConformeNicads]
+    [nonConformeNicads, deletedNicads]
+  );
+
+  // Parcelles supprimées côté client (avant refetch des tuiles) : exclues de toutes
+  // les couches issues de la source vecteur pour un retrait immédiat sans « reload ».
+  const notDeletedFilter = useMemo(
+    () => ["!", ["in", ["get", "_nicad"], ["literal", deletedNicads]]] as any,
+    [deletedNicads]
   );
 
   // ── Blink animation ───────────────────────────────────────────────────────
@@ -386,11 +436,11 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
 
         {/* ── Parcelles (tuiles vectorielles MVT, couche « parcelles ») ── */}
         <Source id="parcelles" type="vector" tiles={[tilesUrl]} minzoom={0} maxzoom={20}>
-          <Layer id="parcelles-fill" source-layer="parcelles" type="fill" paint={{ "fill-color": "#6b7280", "fill-opacity": 0.22 }} />
-          <Layer id="parcelles-line" source-layer="parcelles" type="line" paint={{ "line-color": "#9ca3af", "line-width": 0.8, "line-opacity": 0.6 }} />
+          <Layer id="parcelles-fill" source-layer="parcelles" type="fill" paint={{ "fill-color": "#6b7280", "fill-opacity": 0.22 }} filter={notDeletedFilter} />
+          <Layer id="parcelles-line" source-layer="parcelles" type="line" paint={{ "line-color": "#9ca3af", "line-width": 0.8, "line-opacity": 0.6 }} filter={notDeletedFilter} />
         </Source>
 
-        {/* ── Limites de sections (table limite_section) — contours violets ── */}
+        {/* ── Limites de sections (table limite_section) — contours rouges ── */}
         {showSections && sectionsData && (
           <Source id="sections-limites" type="geojson" data={sectionsData.boundaries}>
             <Layer
@@ -400,6 +450,27 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
             />
           </Source>
         )}
+
+        {/* ── Limites administratives (régions/départements/communes, référentiel national) ── */}
+        {adminLevels.map((level) => {
+          const data = adminData[level];
+          if (!data) return null;
+          const st = ADMIN_STYLES[level];
+          return (
+            <Source key={level} id={`admin-${level}`} type="geojson" data={data.boundaries}>
+              <Layer
+                id={`admin-${level}-line`}
+                type="line"
+                paint={{
+                  "line-color": st.color,
+                  "line-width": st.width,
+                  "line-opacity": 0.85,
+                  ...(st.dasharray ? { "line-dasharray": st.dasharray } : {}),
+                }}
+              />
+            </Source>
+          );
+        })}
 
         {/* ── Error geometry overlays ── */}
         <Source id="error-geoms" type="geojson" data={errorGeomsFc}>
@@ -487,7 +558,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
           type="fill"
           beforeId="error-type-top"
           paint={{ "fill-color": errorTypeColor("missing_nicad"), "fill-opacity": 0.5 }}
-          filter={["==", ["get", "_nstat"], "missing"] as any}
+          filter={["all", ["==", ["get", "_nstat"], "missing"], notDeletedFilter] as any}
         />
         <Layer
           id="short-nicad-fill"
@@ -496,7 +567,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
           type="fill"
           beforeId="error-type-top"
           paint={{ "fill-color": errorTypeColor("short_nicad"), "fill-opacity": 0.5 }}
-          filter={["==", ["get", "_nstat"], "short"] as any}
+          filter={["all", ["==", ["get", "_nstat"], "short"], notDeletedFilter] as any}
         />
 
         {/* ── Parcelles SANS section rattachée (numero_section absent/« 000 ») ──
@@ -511,7 +582,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
               type="fill"
               beforeId="error-type-top"
               paint={{ "fill-color": SANS_SECTION_COLOR, "fill-opacity": 0.45 }}
-              filter={["==", ["get", "_ssec"], 1] as any}
+              filter={["all", ["==", ["get", "_ssec"], 1], notDeletedFilter] as any}
             />
             <Layer
               id="sans-section-line"
@@ -520,7 +591,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
               type="line"
               beforeId="error-type-top"
               paint={{ "line-color": SANS_SECTION_COLOR, "line-width": 1.2, "line-opacity": 0.9 }}
-              filter={["==", ["get", "_ssec"], 1] as any}
+              filter={["all", ["==", ["get", "_ssec"], 1], notDeletedFilter] as any}
             />
           </>
         )}
@@ -640,6 +711,35 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
               </Marker>
             ) : null
           )}
+
+        {/* ── Étiquettes des limites administratives (marqueurs DOM, zoom minimal par niveau) ── */}
+        {adminLevels.map((level) => {
+          const data = adminData[level];
+          if (!data || zoom < ADMIN_STYLES[level].minLabelZoom) return null;
+          const st = ADMIN_STYLES[level];
+          return data.labels.map((lbl, i) => (
+            <Marker key={`admin-${level}-${i}`} longitude={lbl.lng} latitude={lbl.lat} anchor="center">
+              <div
+                style={{
+                  display: "inline-block",
+                  whiteSpace: "nowrap",
+                  padding: "1px 6px",
+                  borderRadius: 6,
+                  background: "rgba(255,255,255,.85)",
+                  color: st.color,
+                  border: `1px solid ${st.color}`,
+                  fontSize: st.fontSize,
+                  fontWeight: 700,
+                  textTransform: level === "regions" ? "uppercase" : "none",
+                  userSelect: "none",
+                  pointerEvents: "none",
+                }}
+              >
+                {lbl.nom}
+              </div>
+            </Marker>
+          ));
+        })}
 
         {popup && (
           <Popup

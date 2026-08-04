@@ -74,3 +74,25 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
   Ex: charger un fichier de 2013 et générer la correspondance de 2026
 
 - Vérifier si un numero de nicad (charger un fichier) est conforme au découpage administrative
+
+### 26/07/2026
+
+- Recharger le fichier de Diourbel pour revoir les corrections
+- Appliquer une historique pour retourner vers les précédents modifs
+- Afficher par couches (les couches communes, region, section, parcelle)
+- Controler le numero section et parcelle
+- Contruire les nicad en effectuant des incrémentation suivant le dernier nicad ou parcelle
+
+claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b771bd8ef7
+
+- ✅Ajouter l'ajout de section à partir de shape file
+- ✅Appliquer la polygonisation lors de la construction des sections
+
+Qiusheng Wu - Building open-source tools for geospatial data science and GeoAI
+
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ 📥 SOURCES │ │ ⚙️ PROCESSING │ │ 💾 STOCKAGE │ │📊 DASHBOARD │
+├──────────────┤ ├──────────────┤ ├──────────────┤ ├──────────────┤
+│ Kaggle CSV │─────▶│ Pandas │─────▶│ DuckDB │─────▶│ FastAPI │
+│ Web Scraping │ │ PySpark │ │Elasticsearch │ │ Streamlit │
+└──────────────┘ └──────────────┘ └──────────────┘ └──────────────┘
