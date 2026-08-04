@@ -5,6 +5,7 @@ import {
   findSectionNumeroConflict,
   updateSectionNumero,
 } from "@/lib/cadastre/sections-data";
+import { normalizeSection } from "@/lib/nicad";
 
 export const runtime = "nodejs";
 
@@ -32,9 +33,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     /* corps vide */
   }
   const sectionId = Number(body.sectionId);
-  const numSection = typeof body.numSection === "string" ? body.numSection.trim() : "";
+  const numSection = normalizeSection(body.numSection);
   if (!Number.isInteger(sectionId) || !numSection) {
-    return NextResponse.json({ error: "sectionId et numSection requis" }, { status: 400 });
+    return NextResponse.json({ error: "sectionId et numSection requis (numérique)" }, { status: 400 });
   }
 
   try {

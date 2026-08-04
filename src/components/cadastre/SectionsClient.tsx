@@ -190,6 +190,8 @@ export default function SectionsClient() {
   // aux chevauchements PENDING (voir `activeOverlapSelection` plus bas).
   const [overlapSelection, setOverlapSelection] = useState<number[]>([]);
   const [batchCorrecting, setBatchCorrecting] = useState(false);
+  // Ref miroir pour lecture dans le popup carte (impératif, cf. mergeSelectionRef).
+  const batchCorrectingRef = useRef(false);
   // Recadrage global : uniquement quand la PORTÉE des données change (premier
   // chargement, changement de lot) — jamais après une correction, fusion ou
   // suppression, sinon l'utilisateur perd sa vue zoomée à chaque action.
@@ -447,6 +449,10 @@ export default function SectionsClient() {
     mergeSelectionRef.current = activeMergeSelection;
   }, [activeMergeSelection]);
 
+  useEffect(() => {
+    batchCorrectingRef.current = batchCorrecting;
+  }, [batchCorrecting]);
+
   // Sections impliquées dans au moins un chevauchement EN ATTENTE : colorées
   // en alerte (ambre) — toutes les autres partagent la couleur unique.
   const pendingSectionIds = useMemo(() => {
@@ -527,7 +533,7 @@ export default function SectionsClient() {
             : { color, weight: 1.2, fillColor: color, fillOpacity: 0.15 },
         });
         gj.bindTooltip(
-          `Section <b>${s.numSection ?? "—"}</b><br/>${s.commune ?? "—"}` +
+          `Section <b>${escHtml(s.numSection ?? "—")}</b><br/>${escHtml(s.commune ?? "—")}` +
             (hasError
               ? "<br/><span style='color:#b45309'>⚠ chevauchement à corriger — cliquer pour le sélectionner</span>"
               : !s.numSection
@@ -563,6 +569,7 @@ export default function SectionsClient() {
             "padding:3px 8px;font-size:11px;border-radius:6px;" +
             "border:1px solid #f59e0b;color:#f59e0b;background:transparent;cursor:pointer";
           const submitNumero = () => {
+            if (batchCorrectingRef.current) return;
             const val = numeroInput.value.trim();
             if (!val) return;
             map.closePopup();
@@ -572,6 +579,13 @@ export default function SectionsClient() {
           numeroInput.onkeydown = (e: KeyboardEvent) => {
             if (e.key === "Enter") submitNumero();
           };
+          // Correction groupée en cours : ce bouton reste inerte (la réponse
+          // du batch écrase `sections` — cf. batchCorrecting).
+          const syncNumeroBtn = () => {
+            numeroBtn.disabled = batchCorrectingRef.current;
+          };
+          syncNumeroBtn();
+          gj.on("popupopen", syncNumeroBtn);
           numeroWrap.appendChild(numeroInput);
           numeroWrap.appendChild(numeroBtn);
         }
@@ -1711,6 +1725,7 @@ export default function SectionsClient() {
                                       onChange={(e) => setNumeroDraft(e.target.value)}
                                       onKeyDown={(e) => {
                                         if (e.key === "Enter") {
+                                          if (batchCorrecting) return;
                                           void performSetNumero(s.id, numeroDraft);
                                         } else if (e.key === "Escape") {
                                           setNumeroEditId(null);
@@ -1721,7 +1736,7 @@ export default function SectionsClient() {
                                     />
                                     <button
                                       onClick={() => void performSetNumero(s.id, numeroDraft)}
-                                      disabled={savingNumero === s.id}
+                                      disabled={savingNumero === s.id || batchCorrecting}
                                       title="Enregistrer le numéro"
                                       className="rounded p-0.5 text-green-500 transition-colors hover:bg-green-500/10 disabled:opacity-40"
                                     >
@@ -1756,8 +1771,9 @@ export default function SectionsClient() {
                                           setNumeroEditId(s.id);
                                           setNumeroDraft("");
                                         }}
+                                        disabled={batchCorrecting}
                                         title="Attribuer un numéro de section"
-                                        className="inline-flex items-center gap-1 text-amber-500 hover:underline"
+                                        className="inline-flex items-center gap-1 text-amber-500 hover:underline disabled:opacity-40"
                                       >
                                         <Pencil className="h-3 w-3" />—
                                       </button>
