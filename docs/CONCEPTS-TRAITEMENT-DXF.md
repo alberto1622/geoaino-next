@@ -27,6 +27,8 @@ est vu, il doit être ajouté ici (cf. règle dans `CLAUDE.md`).
 9. [Doublures NICAD : zoom sur les occurrences, annotation & mode édition](#9-doublures-nicad--zoom-sur-les-occurrences-annotation--mode-édition)
 10. [Colorer les NICAD manquants/courts sur toute l'analyse (hors plafond d'erreurs)](#10-colorer-les-nicad-manquantscourts-sur-toute-lanalyse-hors-plafond-derreurs)
 11. [Table `limite_section` : extraction des sections + contrôle des chevauchements](#11-table-limite_section--extraction-des-sections--contrôle-des-chevauchements)
+    - [11 bis. Sections fusionnées SANS trou de raccord : limite mitoyenne absente de la source](#11-bis-sections-fusionnées-sans-trou-de-raccord--limite-mitoyenne-absente-de-la-source)
+    - [11 ter. Attribution manuelle du numéro pour les sections sans étiquette](#11-ter-attribution-manuelle-du-numéro-pour-les-sections-sans-étiquette)
 12. [Annexe — compteurs du rapport & variables d'environnement](#12-annexe--compteurs-du-rapport--variables-denvironnement)
 13. [Correction groupée des chevauchements de sections : règle « auto » et ordre séquentiel](#13-correction-groupée-des-chevauchements-de-sections--règle--auto--et-ordre-séquentiel)
 
@@ -804,6 +806,50 @@ sont dans le rapport d'import.
 **Pourquoi ne PAS augmenter la tolérance.** À 2 m, la face fusionnée absorbait
 aussi la section 015 : sur des tracés sans trou réel, élargir la tolérance ne
 sépare rien et **dégrade** les sections voisines saines. 1 m reste le bon réglage.
+
+---
+
+## 11 ter. Attribution manuelle du numéro pour les sections sans étiquette
+
+**Problème métier.** Une section peut sortir de l'extraction sans
+`numSection` (libellé `numero_section` absent du DXF, ou hors du polygone
+lors de la jointure « plus petit contenant », cf. §11) : elle reste dans
+`limite_section` mais aucune fusion par numéro n'a pu s'appliquer
+(§11, dissolution par (syscol, numéro)) et aucun export NICAD ne peut la
+rattacher. Avant cette fonctionnalité, la seule façon de la récupérer était
+la fusion manuelle avec une section déjà numérotée voisine — inutilisable
+si la section est isolée et légitimement une section à part.
+
+**Solution.** `POST /api/cadastre/sections/numero` (`{ sectionId,
+numSection }`) attribue un numéro à une section dont `numSection` est
+`null` — attribut seul, aucune géométrie touchée, aucun recalcul de
+chevauchement. Deux points d'entrée dans `SectionsClient.tsx` : édition
+inline dans la table (colonne « Sect. »), et champ dans le popup carte au
+clic sur un polygone sans numéro ; un filtre « Sans numéro (N) » restreint
+table et carte à ces sections pour les repérer rapidement.
+
+**Pourquoi la vérification d'unicité est PAR COMMUNE, pas globale.** Comme
+pour la dissolution (§11), un numéro de section n'est unique que **dans sa
+commune** : deux communes différentes ont chacune une section « 001 ».
+`findSectionNumeroConflict` (`sections-data.ts`) cherche donc une collision
+sur la clé **(syscolCommune, numSection)** — la même clé que la dissolution
+d'import — et non sur `numSection` seul, sinon la moitié des attributions
+échouerait à tort sur des sections de communes différentes qui partagent un
+numéro. Sans commune résolue (`syscolCommune` null), aucun contrôle n'est
+possible : l'attribution passe sans vérification.
+
+**Piège évité.** En cas de collision détectée, l'API refuse (409) plutôt que
+de fusionner automatiquement les deux sections : une même valeur de
+`numSection` dans la même commune ne veut pas nécessairement dire « même
+section physique » (numérotation dupliquée par erreur dans le DXF source).
+La fusion reste un geste **délibéré** de l'utilisateur via la fonction de
+fusion manuelle existante (§11, « Fusion manuelle de sections »).
+
+**Fichiers · fonctions.** `src/lib/cadastre/sections-data.ts`
+(`findSectionNumeroConflict`, `updateSectionNumero`, `getSection` étendu),
+`src/app/api/cadastre/sections/numero/route.ts`,
+`src/components/cadastre/SectionsClient.tsx` (`performSetNumero`,
+filtre `showUnnumberedOnly`).
 
 ---
 
