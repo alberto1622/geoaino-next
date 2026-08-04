@@ -111,14 +111,27 @@ export async function listSections(sourceFichier: string | null): Promise<Sectio
   return rows.map((r) => ({ ...r, id: Number(r.id), surfaceM2: r.surfaceM2 == null ? null : Number(r.surfaceM2) }));
 }
 
-/** GeoJSON + lot d'une section (pour appliquer une correction géométrique). */
+/** GeoJSON + lot d'une section (pour appliquer une correction géométrique ou attribuer un numéro). */
 export async function getSection(
   id: number,
-): Promise<{ geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon; sourceFichier: string; numSection: string | null } | null> {
+): Promise<{
+  geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon;
+  sourceFichier: string;
+  numSection: string | null;
+  syscolCommune: string | null;
+  commune: string | null;
+} | null> {
   const rows = await prisma.$queryRaw<
-    Array<{ geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon; sourceFichier: string; numSection: string | null }>
+    Array<{
+      geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon;
+      sourceFichier: string;
+      numSection: string | null;
+      syscolCommune: string | null;
+      commune: string | null;
+    }>
   >`
-    SELECT "geomGeoJson", "sourceFichier", "numSection" FROM "limite_section" WHERE id = ${id}
+    SELECT "geomGeoJson", "sourceFichier", "numSection", "syscolCommune", "commune"
+    FROM "limite_section" WHERE id = ${id}
   `;
   return rows[0] ?? null;
 }
@@ -166,6 +179,34 @@ export async function deleteSection(id: number): Promise<void> {
     DELETE FROM "limite_section_overlap" WHERE "sectionAId" = ${id} OR "sectionBId" = ${id}
   `;
   await prisma.$executeRaw`DELETE FROM "limite_section" WHERE id = ${id}`;
+}
+
+/**
+ * Cherche une AUTRE section de la même commune portant déjà ce numéro —
+ * l'unicité du numéro de section n'est vraie que PAR COMMUNE (cf.
+ * build-sections.ts, clé de dissolution (syscol, numéro)). Sans commune
+ * résolue (`syscolCommune` null), aucun contrôle n'est possible.
+ */
+export async function findSectionNumeroConflict(
+  syscolCommune: string | null,
+  numSection: string,
+  excludeId: number,
+): Promise<{ id: number; commune: string | null } | null> {
+  if (!syscolCommune) return null;
+  const rows = await prisma.$queryRaw<Array<{ id: number | bigint; commune: string | null }>>`
+    SELECT id, "commune" FROM "limite_section"
+    WHERE "syscolCommune" = ${syscolCommune} AND "numSection" = ${numSection} AND id <> ${excludeId}
+    LIMIT 1
+  `;
+  const r = rows[0];
+  return r ? { id: Number(r.id), commune: r.commune } : null;
+}
+
+/** Attribue un numéro à une section (n'affecte pas la géométrie ni les chevauchements). */
+export async function updateSectionNumero(id: number, numSection: string): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "limite_section" SET "numSection" = ${numSection}, "updatedAt" = now() WHERE id = ${id}
+  `;
 }
 
 /**
