@@ -483,7 +483,7 @@ export default function SectionsClient() {
     (s: SectionItem) => {
       setConfirmState({
         title: "Supprimer la section",
-        description: `Supprimer la section ${s.numSection ?? "—"}${s.commune ? ` (${s.commune})` : ""} ?\nCette action est irréversible.`,
+        description: `Supprimer la section ${s.numSection ?? "—"}${s.commune ? ` (${s.commune})` : ""} ?\nRestaurable ensuite depuis le panneau Historique.`,
         confirmLabel: "Supprimer",
         run: () => void performDeleteSection(s),
       });
@@ -1311,7 +1311,7 @@ export default function SectionsClient() {
       title: "Supprimer le lot",
       description:
         `Supprimer les ${batch ? `${batch.nbSections} ` : ""}section(s) du fichier « ${sourceFichier} » ?\n` +
-        "Les chevauchements associés seront aussi supprimés.\nCette action est irréversible.",
+        "Les chevauchements associés seront aussi supprimés.\nRestaurable ensuite depuis le panneau Historique.",
       confirmLabel: "Supprimer le lot",
       run: () => void performDeleteBatch(),
     });
