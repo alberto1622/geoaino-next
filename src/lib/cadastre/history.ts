@@ -11,6 +11,7 @@
  */
 import type { Prisma } from "@prisma/client";
 import {
+  deleteSectionsBySource,
   reinsertLimiteSections,
   reinsertLimiteSectionOverlaps,
   type LimiteSectionRow,
@@ -65,6 +66,23 @@ export type RevertFn = (tx: Prisma.TransactionClient, before: unknown) => Promis
 
 async function revertDelete(tx: Prisma.TransactionClient, before: unknown): Promise<void> {
   const snapshot = before as SectionsDeleteSnapshot;
+  if (!Array.isArray(snapshot?.sections) || !Array.isArray(snapshot?.overlaps)) {
+    throw new Error("Snapshot de suppression invalide — impossible de restaurer.");
+  }
+  if (snapshot.sections.length > 1) {
+    // Suppression de lot : une restauration doit reproduire exactement l'état
+    // du lot au moment de la suppression, pas s'additionner à un lot déjà
+    // réimporté depuis (même sourceFichier, nouveaux id) — sinon les sections
+    // se dupliquent silencieusement (ON CONFLICT sur id ne peut pas le voir,
+    // les id diffèrent). Une suppression d'UNE section n'a pas ce risque : un
+    // id jamais réutilisé par la séquence Postgres reste sûr à réinsérer tel
+    // quel, et vider tout le sourceFichier dans ce cas effacerait à tort le
+    // reste du lot, jamais capturé dans ce snapshot.
+    const sources = new Set(snapshot.sections.map((s) => s.sourceFichier));
+    for (const src of sources) {
+      await deleteSectionsBySource(src, tx);
+    }
+  }
   await reinsertLimiteSections(snapshot.sections, tx);
   await reinsertLimiteSectionOverlaps(snapshot.overlaps, tx);
 }
