@@ -472,6 +472,29 @@ model LimiteSectionOverlap {
   @@map("limite_section_overlap")
 }
 
+// Historique des modifications sections/parcelles — une entrée par action
+// utilisateur (pas par ligne modifiée), avec un snapshot avant/après complet
+// pour permettre de restaurer n'importe quel point passé, pas seulement la
+// dernière action. `scope` distingue les surfaces qui l'alimentent (sections
+// QA vs analyses /map) dans une table unique, pour un panneau et une route de
+// restauration communs. Cf. docs/superpowers/specs/2026-08-06-cadastre-history-restore-design.md.
+model CadHistoryEntry {
+  id         Int       @id @default(autoincrement())
+  scope      String // "sections" | "map"
+  scopeKey   String? // syscolCommune (sections, meilleur effort) | analysisId (map)
+  action     String // "delete" | "numero" | "correct" | "correct-batch" | "merge" | "nicad-fill" | "map-delete" | "map-rename" | "restore"
+  summary    String
+  before     Json
+  after      Json
+  restoredAt DateTime?
+  restoredBy String?
+  createdAt  DateTime  @default(now())
+  createdBy  String?
+
+  @@index([scope, scopeKey, createdAt])
+  @@map("cad_history_entries")
+}
+
 // Registre principal des NICAD
 model CadNicad {
   id          Int      @id @default(autoincrement())
