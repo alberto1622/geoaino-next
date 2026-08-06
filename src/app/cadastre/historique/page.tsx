@@ -1,5 +1,6 @@
 import { historiqueRecent } from "../_actions/nicad";
 import { getRecentOperationsList } from "../_actions/dashboard";
+import { listSectionsHistoryRecent } from "../_actions/history";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { NicadDisplay } from "@/components/cadastre/NicadDisplay";
 
@@ -7,9 +8,10 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "Historique Cadastre" };
 
 export default async function HistoriquePage() {
-  const [historique, operations] = await Promise.all([
+  const [historique, operations, sectionsHistory] = await Promise.all([
     historiqueRecent({ limit: 50 }),
     getRecentOperationsList({ limit: 50 }),
+    listSectionsHistoryRecent({ limit: 50 }),
   ]);
 
   return (
@@ -77,6 +79,35 @@ export default async function HistoriquePage() {
                       {op.statut}
                     </span>
                   </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">
+            Modifications sections/parcelles ({sectionsHistory.length})
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {sectionsHistory.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Aucune modification enregistrée.</p>
+          ) : (
+            <ul className="divide-y divide-border/50">
+              {sectionsHistory.map((h) => (
+                <li key={h.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                  <div className="min-w-0">
+                    <span className="truncate">{h.summary}</span>
+                    {h.restoredAt && (
+                      <span className="ml-2 text-xs text-emerald-500">restauré</span>
+                    )}
+                  </div>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {new Date(h.createdAt).toLocaleString("fr-FR")}
+                  </span>
                 </li>
               ))}
             </ul>
