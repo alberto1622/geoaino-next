@@ -3,6 +3,7 @@
 import "leaflet/dist/leaflet.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { CadHistoryPanel } from "@/components/cadastre/CadHistoryPanel";
 import { toast } from "sonner";
 import { notifyAnalysesUpdated } from "@/lib/analyses/live-refresh";
 import {
@@ -20,6 +21,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Layers,
+  History,
   ChevronDown,
   Pencil,
   Check,
@@ -193,6 +195,8 @@ export default function SectionsClient() {
     run: () => void;
   } | null>(null);
   const [exporting, setExporting] = useState(false);
+  // Panneau "Historique" des modifications sections/parcelles (delete pour l'instant).
+  const [historyOpen, setHistoryOpen] = useState(false);
   // Fusion manuelle : ids sélectionnés DANS L'ORDRE (le premier conserve ses
   // attributs). Ref miroir pour lecture dans les popups Leaflet (impératifs).
   const [mergeSelection, setMergeSelection] = useState<number[]>([]);
@@ -1435,6 +1439,19 @@ export default function SectionsClient() {
                 </Button>
               </div>
 
+              {/* Historique des modifications (sections QA) — liste + restauration. */}
+              <div className="flex items-center gap-1.5 rounded-xl border border-dashed border-border/60 px-2 py-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5"
+                  onClick={() => setHistoryOpen(true)}
+                >
+                  <History className="h-4 w-4" />
+                  Historique
+                </Button>
+              </div>
+
               {/* Lot stocké */}
               {batches.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-dashed border-border/60 px-2 py-1">
@@ -2169,6 +2186,14 @@ export default function SectionsClient() {
           setConfirmState(null);
         }}
         onCancel={() => setConfirmState(null)}
+      />
+
+      <CadHistoryPanel
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        scope="sections"
+        scopeKey={null}
+        onRestored={() => void fetchData(sourceFichier)}
       />
     </div>
   );
