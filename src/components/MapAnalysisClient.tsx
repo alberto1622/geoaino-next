@@ -42,6 +42,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 import { toNum, errorTypeColor } from "@/lib/utils";
+import { useAnalysisUpdateListener } from "@/lib/analyses/live-refresh";
 
 // ── Limites administratives (régions / départements / communes) ──────────────
 // Mêmes contours nationaux (cad_communes_2026) que la page /cadastre/sections.
@@ -466,6 +467,19 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   // en orange : leur NICAD porte une section indéterminée.
   const [showSansSection, setShowSansSection] = useState(true);
   const [sansSectionCount, setSansSectionCount] = useState<number | null>(null);
+  // Attribution en masse des NICAD manquants (incrémentation + plus proche
+  // voisin, cf. `nicad-fill-missing.ts`) — un seul indicateur pour l'aperçu
+  // (dryRun) ET l'application, jamais actifs simultanément.
+  const [fillingNicad, setFillingNicad] = useState(false);
+  // Aperçu par section (dryRun) affiché dans le sélecteur de sections, et
+  // sous-ensemble actuellement coché par l'utilisateur (tout coché par défaut).
+  const [nicadFillPreview, setNicadFillPreview] = useState<{
+    plans: { numSection: string; count: number; fromParcelle: string; toParcelle: string }[];
+    unresolvedCount: number;
+  } | null>(null);
+  const [nicadFillSelection, setNicadFillSelection] = useState<Set<string>>(
+    new Set(),
+  );
   // Limites administratives (référentiel national, mêmes contours que /cadastre/sections).
   const [adminShow, setAdminShow] = useState<Record<AdminLevel, boolean>>({
     regions: false,
@@ -501,6 +515,10 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   // de parcelle(s), renommage NICAD) — cf. type MapHistoryEntry.
   const mapHistory = useUndoHistory<MapHistoryEntry>();
   const [restoringHistory, setRestoringHistory] = useState(false);
+  // Réf « toujours à jour » vers `performUndo` (défini plus bas) : permet au
+  // bouton « Annuler » du toast de suppression de l'appeler sans figer une
+  // closure périmée ni réordonner les déclarations.
+  const performUndoRef = useRef<() => Promise<void>>(async () => {});
   // Rendu par tuiles vectorielles (MVT) : emprise globale pour le fit initial,
   // et version incrémentée à chaque correction pour invalider le cache des tuiles.
   const [initialBounds, setInitialBounds] = useState<
@@ -587,6 +605,33 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       cancelled = true;
     };
   }, [analysis.id, tileVersion]);
+
+  // Rafraîchissement en direct : une autre page (ex. attribution/modification
+  // d'un numéro de section dans `cadastre/sections`) a reconstruit le NICAD de
+  // parcelles de CETTE analyse pendant que cet onglet est déjà ouvert.
+  // `tileVersion++` couvre à la fois les tuiles (couleurs `_nstat`/`_ssec`/
+  // doublure) ET le KPI `sansSectionCount` (même effet ci-dessus, déjà
+  // dépendant de `tileVersion`) ; les erreurs DUPLICATE potentiellement
+  // résolues par la synchronisation sont, elles, rechargées explicitement pour
+  // sortir des superpositions/panneaux d'erreurs actifs sans recharger la page.
+  const handleExternalAnalysisUpdate = useCallback(() => {
+    setTileVersion((v) => v + 1);
+    (async () => {
+      try {
+        const res = await fetch(`/api/analyses/${analysis.id}/errors`);
+        if (!res.ok) return;
+        const fresh = (await res.json()) as { id: number; corrected: boolean }[];
+        const newlyCorrected = fresh.filter((e) => e.corrected).map((e) => e.id);
+        if (newlyCorrected.length > 0) {
+          setCorrectedErrorIds((prev) => new Set([...prev, ...newlyCorrected]));
+        }
+      } catch {
+        /* rafraîchissement best-effort */
+      }
+    })();
+    toast.info("Carte mise à jour — un numéro de section a été modifié ailleurs.");
+  }, [analysis.id]);
+  useAnalysisUpdateListener(analysis.id, handleExternalAnalysisUpdate);
 
   // Avertit quand la liste d'erreurs est tronquée (jeu très volumineux) : le
   // compteur total reste exact, mais carte et liste n'en montrent qu'un sous-ensemble.
@@ -943,7 +988,18 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         });
         // Réaligne les annotations d'occurrences sur ce qui reste du doublon.
         if (selectedDupNicad) applyOccurrenceMarkers(remaining);
-        toast.success(`${data.deleted} parcelle(s) supprimée(s)`);
+        // Bouton « Annuler » directement dans le toast (en plus de Ctrl+Z) :
+        // reprend la même sémantique « annule le sommet de la pile » que
+        // `performUndo`/le raccourci clavier — l'entrée qu'on vient de pousser
+        // est déjà en haut, donc cliquer juste après la suppression annule
+        // bien CETTE suppression (si une autre action a lieu entre-temps,
+        // Annuler annule celle-là à la place, comme le ferait Ctrl+Z).
+        toast.success(`${data.deleted} parcelle(s) supprimée(s)`, {
+          action: {
+            label: "Annuler",
+            onClick: () => void performUndoRef.current(),
+          },
+        });
         if (data.notFound > 0)
           toast.warning(
             `${data.notFound} parcelle(s) non localisée(s) — ignorée(s)`,
@@ -1159,6 +1215,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       setRestoringHistory(false);
     }
   }, [mapHistory, restoringHistory, applyMapSnapshot]);
+  useEffect(() => {
+    performUndoRef.current = performUndo;
+  }, [performUndo]);
 
   const performRedo = useCallback(async () => {
     const entry = mapHistory.peekRedo();
@@ -1327,6 +1386,105 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     },
     [analysis.id],
   );
+
+  // ── Attribution en masse des NICAD manquants sur CETTE analyse ─────────────
+  // Contrairement à l'assignation manuelle par erreur (ci-dessus, `AUTO_xxxxxx`
+  // factice), réutilise le vrai schéma NICAD et le chaînage plus proche voisin
+  // de `nicad-fill-missing.ts`, sur toutes les sections numérotées qui
+  // couvrent cette analyse — même flux aperçu/confirmation que
+  // `/cadastre/sections` (cf. `SectionsClient.tsx`).
+  const refreshCorrectedErrorsFromServer = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/analyses/${analysis.id}/errors`);
+      if (!res.ok) return;
+      const fresh = (await res.json()) as { id: number; corrected: boolean }[];
+      const newlyCorrected = fresh.filter((e) => e.corrected).map((e) => e.id);
+      if (newlyCorrected.length > 0) {
+        setCorrectedErrorIds((prev) => new Set([...prev, ...newlyCorrected]));
+      }
+    } catch {
+      /* rafraîchissement best-effort */
+    }
+  }, [analysis.id]);
+
+  const performFillMissingNicad = useCallback(
+    async (sections: string[]) => {
+      setFillingNicad(true);
+      try {
+        const res = await fetch(`/api/analyses/${analysis.id}/nicad-fill`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sections }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Attribution échouée");
+        const result = data.result as {
+          parcelsAssigned: number;
+          unresolvedCount: number;
+          plans: { numSection: string; count: number; fromParcelle: string; toParcelle: string }[];
+        };
+        if (result.parcelsAssigned === 0) {
+          toast.info("Aucune parcelle n'a pu être numérotée.");
+          return;
+        }
+        const range =
+          result.plans.length === 1
+            ? ` (section ${result.plans[0].numSection} : ${result.plans[0].fromParcelle} → ${result.plans[0].toParcelle})`
+            : ` (${result.plans.length} section(s) concernée(s))`;
+        toast.success(`${result.parcelsAssigned} NICAD attribué(s)${range}.`);
+        if (result.unresolvedCount > 0) {
+          toast.warning(
+            `${result.unresolvedCount} parcelle(s) sans NICAD non traitée(s) (aucune parcelle déjà numérotée dans leur section pour servir de référence).`,
+          );
+        }
+        setTileVersion((v) => v + 1);
+        void refreshCorrectedErrorsFromServer();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : String(err));
+      } finally {
+        setFillingNicad(false);
+      }
+    },
+    [analysis.id, refreshCorrectedErrorsFromServer],
+  );
+
+  // Aperçu (dryRun, toutes sections) qui alimente le sélecteur de sections
+  // (`nicadFillPreview`/`nicadFillSelection`, rendu près de `<ConfirmDialog>`) :
+  // contrairement à `confirmState` (description figée à l'ouverture), ces cases
+  // à cocher doivent rester interactives — la liste est donc construite en
+  // JSX inline au point de rendu, à partir d'un state dédié qui se met à jour
+  // à chaque clic, plutôt que via une description React figée dans `confirmState`.
+  const handleFillMissingNicad = useCallback(async () => {
+    setFillingNicad(true);
+    try {
+      const res = await fetch(`/api/analyses/${analysis.id}/nicad-fill`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dryRun: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Aperçu échoué");
+      const result = data.result as {
+        parcelsAssigned: number;
+        unresolvedCount: number;
+        plans: { numSection: string; count: number; fromParcelle: string; toParcelle: string }[];
+      };
+      if (result.parcelsAssigned === 0) {
+        toast.info(
+          result.unresolvedCount > 0
+            ? `${result.unresolvedCount} parcelle(s) sans NICAD, mais aucune parcelle déjà numérotée dans leur section pour servir de référence.`
+            : "Aucune parcelle sans NICAD dans les sections numérotées de cette analyse.",
+        );
+        return;
+      }
+      setNicadFillPreview({ plans: result.plans, unresolvedCount: result.unresolvedCount });
+      setNicadFillSelection(new Set(result.plans.map((p) => p.numSection)));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFillingNicad(false);
+    }
+  }, [analysis.id]);
 
   const handleSaveReport = async () => {
     setIsSavingReport(true);
@@ -1551,6 +1709,26 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 title="Supprimer l'analyse"
               >
                 <Trash2 className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+
+            {/* Attribution en masse des NICAD manquants (incrémentation + plus
+                proche voisin, par section numérotée de cette analyse). */}
+            <div className="flex mt-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5 flex-1 h-8 text-xs"
+                onClick={() => void handleFillMissingNicad()}
+                disabled={fillingNicad}
+                title="Attribuer un NICAD aux parcelles sans NICAD de cette analyse (incrémentation + plus proche voisin, par section numérotée)"
+              >
+                {fillingNicad ? (
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Wrench className="w-3 h-3" />
+                )}
+                Attribuer les NICAD manquants
               </Button>
             </div>
 
@@ -2506,6 +2684,75 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
           setConfirmState(null);
         }}
         onCancel={() => setConfirmState(null)}
+      />
+      <ConfirmDialog
+        open={nicadFillPreview !== null}
+        title="Attribuer les NICAD manquants"
+        confirmLabel="Attribuer"
+        description={
+          nicadFillPreview && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p>Sections à traiter :</p>
+                <button
+                  type="button"
+                  className="text-xs text-primary hover:underline cursor-pointer"
+                  onClick={() =>
+                    setNicadFillSelection((prev) =>
+                      prev.size === nicadFillPreview.plans.length
+                        ? new Set()
+                        : new Set(nicadFillPreview.plans.map((p) => p.numSection)),
+                    )
+                  }
+                >
+                  {nicadFillSelection.size === nicadFillPreview.plans.length
+                    ? "Tout désélectionner"
+                    : "Tout sélectionner"}
+                </button>
+              </div>
+              <div className="max-h-48 overflow-y-auto rounded-md border border-border divide-y divide-border">
+                {nicadFillPreview.plans.map((p) => (
+                  <label
+                    key={p.numSection}
+                    className="flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer hover:bg-secondary/40"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={nicadFillSelection.has(p.numSection)}
+                      onChange={() =>
+                        setNicadFillSelection((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(p.numSection)) next.delete(p.numSection);
+                          else next.add(p.numSection);
+                          return next;
+                        })
+                      }
+                    />
+                    <span className="flex-1">
+                      Section {p.numSection} — {p.count} ({p.fromParcelle} → {p.toParcelle})
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Numérotation par plus proche voisin à partir du dernier numéro
+                connu de chaque section sélectionnée.
+                {nicadFillPreview.unresolvedCount > 0 &&
+                  ` ${nicadFillPreview.unresolvedCount} parcelle(s) sans NICAD non traitable(s) (aucune référence dans leur section).`}
+              </p>
+            </div>
+          )
+        }
+        onConfirm={() => {
+          const sections = Array.from(nicadFillSelection);
+          setNicadFillPreview(null);
+          if (sections.length === 0) {
+            toast.error("Aucune section sélectionnée.");
+            return;
+          }
+          void performFillMissingNicad(sections);
+        }}
+        onCancel={() => setNicadFillPreview(null)}
       />
     </div>
   );

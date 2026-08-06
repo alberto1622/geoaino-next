@@ -6,16 +6,21 @@ import {
   updateSectionNumero,
 } from "@/lib/cadastre/sections-data";
 import { normalizeSection } from "@/lib/nicad";
+import { syncNicadForSectionChange, type NicadSyncResult } from "@/lib/cadastre/nicad-section-sync";
 
 export const runtime = "nodejs";
 
 /**
- * POST /api/cadastre/sections/numero — attribue un numéro à une section qui
- * n'en a pas encore (numSection NULL : libellé absent ou hors polygone lors
- * de l'extraction, cf. docs/CONCEPTS-TRAITEMENT-DXF.md §11). Refuse si la
- * section a déjà un numéro, ou si une autre section de la même commune
- * (syscolCommune) porte déjà ce numéro — le numéro de section n'est unique
- * QUE dans sa commune (cf. build-sections.ts).
+ * POST /api/cadastre/sections/numero — attribue ou modifie le numéro d'une
+ * section (numSection NULL : libellé absent ou hors polygone lors de
+ * l'extraction ; numSection déjà renseigné : correction manuelle, cf.
+ * docs/CONCEPTS-TRAITEMENT-DXF.md §11 ter). Refuse si une AUTRE section de la
+ * même commune (syscolCommune) porte déjà ce numéro — le numéro de section
+ * n'est unique QUE dans sa commune (cf. build-sections.ts).
+ *
+ * Après écriture, déclenche `syncNicadForSectionChange` pour reconstruire le
+ * NICAD des parcelles rattachées (module Map) — best-effort : un échec de
+ * synchronisation n'annule pas l'attribution du numéro, déjà actée.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const session = await auth();
@@ -43,8 +48,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (!existing) {
       return NextResponse.json({ error: "Section introuvable" }, { status: 404 });
     }
-    if (existing.numSection) {
-      return NextResponse.json({ error: "Cette section a déjà un numéro" }, { status: 409 });
+    if (existing.numSection === numSection) {
+      return NextResponse.json({ success: true, sectionId, numSection, nicadSync: null });
     }
 
     const conflict = await findSectionNumeroConflict(existing.syscolCommune, numSection, sectionId);
@@ -60,7 +65,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
 
     await updateSectionNumero(sectionId, numSection);
-    return NextResponse.json({ success: true, sectionId, numSection });
+
+    let nicadSync: NicadSyncResult | null = null;
+    let nicadSyncError: string | null = null;
+    try {
+      nicadSync = await syncNicadForSectionChange(existing, numSection);
+    } catch (err) {
+      console.error("[cadastre/sections/numero] syncNicadForSectionChange", err);
+      nicadSyncError = "La mise à jour des NICAD a échoué ; le numéro de section est enregistré.";
+    }
+
+    return NextResponse.json({ success: true, sectionId, numSection, nicadSync, nicadSyncError });
   } catch (err) {
     console.error("[cadastre/sections/numero] POST", err);
     return NextResponse.json({ error: String(err) }, { status: 500 });

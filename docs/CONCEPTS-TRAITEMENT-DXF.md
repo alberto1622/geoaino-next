@@ -30,7 +30,9 @@ est vu, il doit être ajouté ici (cf. règle dans `CLAUDE.md`).
 11. [Table `limite_section` : extraction des sections + contrôle des chevauchements](#11-table-limite_section--extraction-des-sections--contrôle-des-chevauchements)
     - [11 bis. Sections fusionnées SANS trou de raccord : limite mitoyenne absente de la source](#11-bis-sections-fusionnées-sans-trou-de-raccord--limite-mitoyenne-absente-de-la-source)
     - [11 ter. Attribution manuelle du numéro pour les sections sans étiquette](#11-ter-attribution-manuelle-du-numéro-pour-les-sections-sans-étiquette)
+    - [11 ter bis. Mise à jour automatique des NICAD lors de l'ajout/modification du numéro de section](#11-ter-bis-mise-à-jour-automatique-des-nicad-lors-de-lajoutmodification-du-numéro-de-section)
     - [11 quater. Import de sections depuis un shapefile : contourner le pipeline DXF](#11-quater-import-de-sections-depuis-un-shapefile--contourner-le-pipeline-dxf)
+    - [11 quinquies. Attribution des NICAD manquants par incrémentation + plus proche voisin](#11-quinquies-attribution-des-nicad-manquants-par-incrémentation--plus-proche-voisin)
 12. [Annexe — compteurs du rapport & variables d'environnement](#12-annexe--compteurs-du-rapport--variables-denvironnement)
 13. [Correction groupée des chevauchements de sections : règle « auto » et ordre séquentiel](#13-correction-groupée-des-chevauchements-de-sections--règle--auto--et-ordre-séquentiel)
 
@@ -888,12 +890,23 @@ la fusion manuelle avec une section déjà numérotée voisine — inutilisable
 si la section est isolée et légitimement une section à part.
 
 **Solution.** `POST /api/cadastre/sections/numero` (`{ sectionId,
-numSection }`) attribue un numéro à une section dont `numSection` est
-`null` — attribut seul, aucune géométrie touchée, aucun recalcul de
-chevauchement. Deux points d'entrée dans `SectionsClient.tsx` : édition
-inline dans la table (colonne « Sect. »), et champ dans le popup carte au
-clic sur un polygone sans numéro ; un filtre « Sans numéro (N) » restreint
-table et carte à ces sections pour les repérer rapidement.
+numSection }`) attribue **ou modifie** le numéro d'une section — attribut
+seul, aucune géométrie touchée, aucun recalcul de chevauchement (la
+reconstruction des NICAD rattachés est un mécanisme séparé, cf. §11 ter
+bis). Deux points d'entrée dans `SectionsClient.tsx` : édition inline dans
+la table (colonne « Sect. » — crayon visible que la section soit numérotée
+ou non), et champ dans le popup carte au clic sur un polygone (libellé
+« Attribuer » ou « Modifier » selon l'état) ; un filtre « Sans numéro (N) »
+restreint table et carte aux sections non numérotées pour les repérer
+rapidement.
+
+**Évolution (2026-08-05) : modification d'un numéro déjà existant.** À
+l'origine, l'API refusait (409) toute écriture sur une section déjà
+numérotée — seul l'ajout d'un numéro manquant était permis, la correction
+d'un numéro existant devait passer par la fusion manuelle. Ce garde-fou a
+été levé : la seule vérification qui subsiste est l'unicité **(syscolCommune,
+numSection)** ci-dessous. Un numéro modifié déclenche désormais la
+synchronisation NICAD (§11 ter bis).
 
 **Pourquoi la vérification d'unicité est PAR COMMUNE, pas globale.** Comme
 pour la dissolution (§11), un numéro de section n'est unique que **dans sa
@@ -917,6 +930,145 @@ fusion manuelle existante (§11, « Fusion manuelle de sections »).
 `src/app/api/cadastre/sections/numero/route.ts`,
 `src/components/cadastre/SectionsClient.tsx` (`performSetNumero`,
 filtre `showUnnumberedOnly`).
+
+---
+
+## 11 ter bis. Mise à jour automatique des NICAD lors de l'ajout/modification du numéro de section
+
+**Problème métier.** Attribuer ou corriger le numéro d'une `limite_section`
+(§11 ter) ne suffisait pas à « débloquer » le NICAD des parcelles comme le
+laissait entendre le §11 ter d'origine : `updateSectionNumero` est un
+`UPDATE` d'attribut isolé, sans aucun effet de bord sur les parcelles déjà
+importées. Le NICAD d'une parcelle DXF (module Map, `Analysis.correctedData`)
+est calculé **une seule fois, à l'ingestion**, à partir des étiquettes de
+section lues dans le DXF *à ce moment-là* (`parcelle-ingestion.ts ·
+findSectionNumero` → `assign-nicad-2026.ts · buildNicad`). Numéroter une
+section après coup dans l'outil QA (`SectionsClient.tsx`) laissait donc les
+NICAD déjà générés inchangés — silencieusement faux tant qu'un utilisateur
+ne relançait pas manuellement chaque parcelle une à une via
+`update-nicad/route.ts`.
+
+**Cause technique — deux pipelines sans clé commune.** `LimiteSection`
+(sections QA, job d'import `kind: "sections"`) et `Analysis` (parcelles +
+NICAD, job d'import complet) sont produits par **deux jobs d'import
+distincts** (`run-job.ts`) et ne portent **aucune FK** l'une vers l'autre
+(vérifié dans `prisma/schema.prisma` : ni `LimiteSection` ni `CadSection` ne
+référencent `Parcelle`/`Analysis`). Le seul lien exploitable entre les deux
+est l'égalité de chaîne `Analysis.fileName === LimiteSection.sourceFichier`
+(même nom de fichier source, passé tel quel aux deux jobs).
+
+**Solution.** `src/lib/cadastre/nicad-section-sync.ts ·
+syncNicadForSectionChange(section, newNumSection)`, appelée depuis
+`POST /api/cadastre/sections/numero` juste après `updateSectionNumero`,
+automatiquement et sans étape de confirmation :
+1. Retrouve les `Analysis` dont `fileName === section.sourceFichier`.
+2. Pour chacune, rattache les parcelles à la section par **point-dans-
+   polygone** (`turf.booleanPointInPolygon` sur le point représentatif de
+   chaque feature vs. `section.geomGeoJson`) — même logique que
+   `findSectionNumero` à l'ingestion, car il n'existe pas d'autre moyen fiable
+   de savoir « quelle parcelle appartient à cette section » après coup.
+3. Pour chaque parcelle rattachée avec un NICAD complet (16 caractères) :
+   reconstruit `prefix8 + nouveauNumSection + parcelle5` en réutilisant le
+   préfixe territorial et le numéro de parcelle **déjà présents** dans le
+   NICAD existant (`nicad.ts · buildNicad`) — pas de nouvelle jointure
+   commune, le préfixe ne change pas.
+4. Avant écriture, vérifie que le NICAD reconstruit n'est pas déjà porté par
+   une autre parcelle de la **même** `Analysis` ; en cas de collision, la
+   parcelle est **ignorée et reportée** (`conflicts[]`), jamais écrasée
+   silencieusement (même principe que les doublures NICAD, §9).
+5. Écrit via `setFeatureNicad` **et** `setFeatureSection` (`feature-locator.ts`)
+   sur toutes les clés NICAD ET section reconnues, persiste `correctedData` (+
+   `geojsonKey` en best-effort, même repli que `update-nicad/route.ts`). Les
+   deux réécritures sont nécessaires : `numero_section` est une propriété
+   INDÉPENDANTE du NICAD sur la feature (cf. piège ci-dessous), pas seulement
+   son segment médian décodé.
+6. Compte les occurrences par NICAD (`nicadCounts`) **avant** et **après**
+   application, dans la même passe que la détection de collision (étape 4) :
+   un NICAD qui portait une erreur `DUPLICATE` (≥ 2 occurrences au départ) et
+   qui retombe à ≤ 1 occurrence après reconstruction voit ses lignes
+   `TopologicalError` (`errorType: DUPLICATE`, `nicad1` = l'ancien NICAD)
+   marquées `corrected: true`, dans la même transaction que l'écriture de
+   `correctedData`.
+
+La route retourne `{ nicadSync: { analysesUpdated, parcelsUpdated,
+conflicts, errorsResolved } }` ; `SectionsClient.tsx` affiche un toast
+récapitulatif après `performSetNumero`. Un échec de synchronisation
+(exception) est capturé et renvoyé en `nicadSyncError` **sans annuler**
+l'attribution du numéro, déjà actée en base — la sync NICAD est un
+enrichissement best-effort, pas une transaction atomique avec l'écriture du
+numéro (la résolution des doublures, elle, est atomique **avec** l'écriture
+de `correctedData` à l'intérieur de la sync — étape 6).
+
+**Pourquoi les codes couleur de la carte se corrigent automatiquement.** Le
+surlignage « NICAD manquant/court » (§10) est calculé **en direct** depuis le
+vecteur (`_nstat`, `tile-index.ts`) à chaque (re)construction de l'index de
+tuiles — invalidée par `Analysis.updatedAt` (`@updatedAt` Prisma), que notre
+écriture de `correctedData` déclenche automatiquement. Aucune action
+supplémentaire n'était donc nécessaire pour ce surlignage : il se recalcule
+de lui-même dès la prochaine requête de tuile après la synchronisation. En
+revanche, le surlignage « doublure » (§9) est **hybride** : la couleur est
+posée sur le NICAD courant du vecteur (live), mais l'ENSEMBLE des NICAD
+considérés en doublure (`nicadsByType["duplicate"]`, `MapLibreMap.tsx`) vient
+d'un instantané figé — les lignes `TopologicalError` chargées par
+`MapAnalysisClient.tsx`. Sans l'étape 6, une parcelle dont le NICAD venait
+d'être corrigé cessait bien d'être coloriée (son `_nicad` ne matche plus
+l'ancien), mais l'AUTRE occurrence restante — désormais unique, donc plus
+réellement dupliquée — restait coloriée à tort jusqu'à régénération manuelle
+du rapport. L'étape 6 comble précisément ce trou.
+
+**Troisième classification, distincte du NICAD : « sans section » (`_ssec`).**
+Le surlignage orange « sans section » (`tile-index.ts`, `SANS_SECTION_COLOR`
+dans `MapLibreMap.tsx`) ne lit PAS le NICAD : il teste la propriété
+`numero_section` de la feature (vide ou `"000"` → `_ssec = 1`). C'est une
+propriété à part, écrite une fois à l'ingestion (`parcelle-ingestion.ts`,
+`numero_section: p.numeroSection`), qui ne se met PAS à jour toute seule
+quand le NICAD change — contrairement au surlignage « manquant/court » qui,
+lui, est dérivé du NICAD. Une première version de cette synchronisation
+n'écrivait que le NICAD (`setFeatureNicad`) : le cas d'usage le plus courant
+du §11 ter (numéroter une section qui n'en avait pas) corrigeait donc bien le
+segment section du NICAD (`buildNicad` retombe sur `"000"` en son absence,
+donc ces parcelles ont un NICAD complet de 16 caractères, pas « manquant »)
+**mais laissait `numero_section` à `"000"`/vide** — la classification « sans
+section » restait fausse malgré un NICAD désormais correct. D'où l'étape 5 :
+`setFeatureSection` réécrit `numero_section` (+ alias `num_section`/
+`NUM_SECTION`) en parallèle de `setFeatureNicad`, sur le **même** critère
+d'appartenance (point-dans-polygone), pas seulement sur les parcelles au
+NICAD complet.
+
+**Pièges.**
+- *Deux propriétés indépendantes, un seul rattachement* : le NICAD encode le
+  numéro de section dans son segment médian, mais `numero_section` est une
+  propriété séparée sur la feature — les deux doivent être réécrites
+  ensemble (`setFeatureNicad` + `setFeatureSection`), sinon `_ssec` reste
+  périmé même quand le NICAD est déjà correct.
+- *Parcelles sans NICAD complet* (absent ou « court », §10) : ignorées plutôt
+  que reconstruites à moitié — un `slice()` sur un NICAD de longueur ≠ 16
+  produirait un préfixe ou un numéro de parcelle tronqué/faux. Conséquence :
+  les erreurs `MISSING_NICAD`/`SHORT_NICAD` ne sont **jamais** résolues par
+  cette synchronisation (seul `DUPLICATE` peut l'être, étape 6) — un rapport
+  régénéré (`regenerate-report`) reste nécessaire pour celles-ci.
+- *Lien par nom de fichier fragile* : si deux imports différents partagent
+  le même nom de fichier source, la synchronisation peut cibler la mauvaise
+  (ou une trop large) `Analysis`. Limite assumée de l'architecture actuelle
+  (déjà vraie avant cette fonctionnalité), non résolue ici — un identifiant
+  d'import partagé entre les deux jobs serait le vrai correctif, hors
+  périmètre.
+- *Compter, pas seulement vérifier l'appartenance* : la détection de
+  collision comme la résolution de doublure reposent sur un `Map<string,
+  number>` (occurrences), pas un `Set` — un NICAD dupliqué a plusieurs
+  occurrences, en déplacer une seule ne le « libère » pas pour une autre
+  parcelle tant qu'il en reste ≥ 1. Une version antérieure utilisait un `Set`
+  et aurait pu autoriser à tort la réutilisation d'un NICAD encore porté par
+  une autre occurrence de la doublure.
+- *Corrigé si ≤ 1 occurrence, pas si ce NICAD précis a bougé* : un groupe à 3
+  occurrences ou plus dont on ne corrige qu'une parcelle reste `PENDING` (la
+  doublure entre les 2 occurrences restantes est toujours réelle) — seul le
+  passage à ≤ 1 occurrence marque l'erreur corrigée.
+
+**Fichiers · fonctions.** `src/lib/cadastre/nicad-section-sync.ts`
+(`syncNicadForSectionChange`), `src/app/api/cadastre/sections/numero/route.ts`,
+`src/lib/analyses/feature-locator.ts` (`setFeatureNicad`, réutilisée),
+`src/lib/nicad.ts` (`buildNicad`, `normalizeSection`, réutilisées).
 
 ---
 
@@ -992,6 +1144,132 @@ simultanés (la déclaration ambiante existait, donc l'erreur « pas de types »
 attendue par le `@ts-expect-error` ne se déclenchait plus, mais `read` restait
 absent du type). Corrigé en ajoutant la signature de `read` à la déclaration
 ambiante plutôt qu'en réempilant un nouveau contournement.
+
+---
+
+## 11 quinquies. Attribution des NICAD manquants par incrémentation + plus proche voisin
+
+**Problème métier.** Dans une section numérotée, certaines parcelles n'ont
+**aucun** NICAD (`_nstat = "missing"`, § 10) — contrairement au cas du § 11 ter
+bis où le NICAD existe déjà et n'a besoin que d'être reconstruit avec le bon
+segment section. Sans NICAD du tout, il n'y a ni préfixe territorial ni numéro
+de parcelle à réutiliser : un identifiant doit être **créé à partir de rien**.
+Le laisser à la correction manuelle un par un (`update-nicad/route.ts`) n'est
+pas praticable dès que plusieurs dizaines de parcelles d'une section sont
+concernées.
+
+**Cause technique.** Même rattachement section → parcelles que
+`nicad-section-sync.ts` (§ 11 ter bis) : `Analysis.fileName ===
+LimiteSection.sourceFichier` puis point-dans-polygone, faute de FK entre les
+deux tables. La différence tient à ce qu'il n'y a, par définition, aucun NICAD
+à lire sur les parcelles cibles pour en dériver le préfixe — il faut le
+récupérer sur une **autre** parcelle de la même section qui, elle, est déjà
+correctement numérotée.
+
+**Solution** (`src/lib/cadastre/nicad-fill-missing.ts ·
+fillMissingNicadForSection`) :
+1. Parmi les parcelles rattachées à la section (point-dans-polygone), sépare
+   les **cibles** (NICAD totalement absent, `isMissingNicad`) des
+   **références** (NICAD complet, 16 caractères) ; parmi ces dernières, retient
+   celle qui porte le numéro de parcelle le plus élevé — son préfixe
+   territorial (8 premiers caractères) et sa position servent de point de
+   départ.
+2. Sans aucune référence dans la section, rien n'est attribué
+   (`unresolvedCount`) : impossible de connaître le préfixe territorial sans
+   au moins une parcelle déjà correctement numérotée à proximité.
+3. **Chaînage glouton par plus proche voisin** : à partir du point représentatif
+   de la parcelle de référence, cherche à chaque itération la parcelle cible
+   restante la plus proche, lui attribue `dernierNuméro + 1`, puis repart de
+   sa position pour l'itération suivante — jusqu'à épuisement des cibles de la
+   section.
+4. Avant écriture, vérifie que le NICAD généré n'est pas déjà utilisé dans
+   l'analyse (collision défensive : ne devrait pas arriver puisqu'on numérote
+   au-delà du dernier numéro connu, mais on saute le numéro plutôt que
+   d'écraser en cas de doute).
+5. `dryRun: true` calcule le même plan (nombre de parcelles, plage
+   `fromParcelle`→`toParcelle`) **sans** écrire en base — c'est l'aperçu
+   chiffré affiché avant confirmation dans `SectionsClient.tsx`
+   (`handleFillMissingNicad` pour l'aperçu, `performFillMissingNicad` pour
+   l'écriture, après validation via `ConfirmDialog`).
+6. À l'écriture, résout les erreurs `MISSING_NICAD` des parcelles concernées.
+   Contrairement à `DUPLICATE` (§ 11 ter bis), ce type d'erreur n'a **pas** de
+   NICAD à comparer (`nicad1`/`nicad2` valent `null`, puisqu'il n'y en avait
+   aucun) : l'appariement erreur ↔ parcelle se fait donc par **égalité de
+   géométrie** (`geometryApproxEqual`, même tolérance que
+   `errors/[errorId]/correct/route.ts`), la géométrie étant la seule clé stable
+   qui n'a pas changé entre le calcul du rapport et cette correction.
+
+**Second point d'entrée : `/map/[analysisId]`, scopé à une analyse plutôt
+qu'à une section.** `/cadastre/sections` traite UNE section à la fois (donc
+potentiellement plusieurs `Analysis` si le lot est tuilé) ; sur la carte d'une
+analyse, le besoin est inverse — traiter en un clic TOUTES les sections
+numérotées qui couvrent CETTE analyse (une tuile peut chevaucher plusieurs
+sections). Plutôt que dupliquer l'algorithme, `fillMissingNicadInFeatures`
+(recherche référence + chaînage) a été extrait en fonction pure, réutilisée
+par deux orchestrateurs :
+- `fillMissingNicadForSection` (inchangée) : une section → boucle sur les
+  `Analysis` qui la couvrent, un `correctedData` réécrit par analyse.
+- `fillMissingNicadForAnalysis` (nouvelle, `POST
+  /api/analyses/[id]/nicad-fill`) : une analyse → boucle sur ses sections
+  numérotées (`limite_section` où `sourceFichier` correspond), le chaînage de
+  chaque section s'appliquant sur le **même** GeoJSON déjà parsé, avec une
+  **seule** écriture finale (pas un write par section) et un plan agrégé
+  `{ numSection, count, fromParcelle, toParcelle }` par section touchée. Le
+  bouton « Attribuer les NICAD manquants » de `MapAnalysisClient.tsx` suit le
+  même flux aperçu (`dryRun`) → `ConfirmDialog` → application que
+  `SectionsClient.tsx`, avec une différence : l'aperçu liste une section par
+  ligne avec case à cocher (tout coché par défaut), et seules les sections
+  cochées sont renvoyées dans `sections: string[]` à l'appel d'application —
+  `fillMissingNicadForAnalysis` filtre alors sa requête sur `limite_section`
+  avec `"numSection" = ANY(sections)` au lieu de tout traiter. Une analyse
+  couvrant plusieurs sections peut ainsi en exclure certaines (déjà traitées,
+  ou dont on ne veut pas encore fixer la numérotation), sans passer par
+  `/cadastre/sections` section par section. Cette route n'a par ailleurs pas
+  de restriction ADMIN : elle vit sous `/api/analyses/[id]/*`, où
+  `requireSession()` (session simple, espace de
+  travail partagé) est déjà la garde de toutes les actions de correction —
+  contrairement à `/api/cadastre/sections/*`, plus destructif (suppression,
+  fusion de sections), qui exige `ADMIN`.
+
+**Pourquoi un plus proche voisin glouton, pas un optimum global.** L'objectif
+n'est pas de minimiser une distance totale (problème du voyageur de commerce,
+hors de portée en temps interactif) mais de produire une numérotation qui
+« ressemble » à un cheminement humain sur le terrain — chaque numéro voisin du
+précédent. Le glouton donne ce résultat pour l'immense majorité des
+configurations réelles (parcelles disposées le long d'une voie ou en trame
+régulière) ; il peut occasionnellement zigzaguer sur une géométrie très
+irrégulière, ce qui reste acceptable puisque le but est un identifiant unique
+et localement cohérent, pas un ordre topographique garanti optimal.
+
+**Pièges.**
+- *Aucune référence ⇒ aucune attribution, jamais de préfixe inventé* : sans
+  parcelle déjà numérotée dans la section pour donner le préfixe territorial,
+  la fonction ne tente **rien** (`unresolvedCount`) plutôt que de deviner un
+  Syscol — contrairement à un NICAD reconstruit (§ 11 ter bis) qui réutilise
+  toujours un préfixe déjà présent sur la parcelle elle-même.
+- *NICAD « court » (§ 10, longueur ≠ 16 mais pas vide) : ni référence fiable,
+  ni cible* — ignoré silencieusement, car ni utilisable pour en dériver un
+  préfixe fiable, ni considéré comme « manquant » au sens strict
+  (`isMissingNicad`).
+- *Le point de départ se déplace à chaque itération* : ce n'est pas toujours
+  la parcelle de référence d'origine qui sert de point de comparaison, mais la
+  **dernière parcelle numérotée** — sinon le chaînage produirait des allers-
+  retours au lieu de suivre un cheminement local.
+- *Résolution d'erreur par géométrie, pas par NICAD* : `MISSING_NICAD` n'a pas
+  de valeur NICAD à comparer avant/après (elle était vide) ; toute opération
+  qui modifierait la géométrie de la parcelle entre le calcul du rapport et
+  cette correction romprait l'appariement — c'est le même risque, et la même
+  tolérance d'arrondi, que la correction manuelle d'erreur (`correct/route.ts`).
+
+**Fichiers · fonctions.** `src/lib/cadastre/nicad-fill-missing.ts`
+(`fillMissingNicadInFeatures` — cœur partagé ; `fillMissingNicadForSection` ;
+`fillMissingNicadForAnalysis`), `src/app/api/cadastre/sections/nicad-fill/route.ts`,
+`src/app/api/analyses/[id]/nicad-fill/route.ts`,
+`src/components/cadastre/SectionsClient.tsx` (`handleFillMissingNicad`,
+`performFillMissingNicad`), `src/components/MapAnalysisClient.tsx`
+(mêmes noms de handlers, scopés à l'analyse), `src/lib/analyses/feature-locator.ts`
+(`setFeatureNicad`/`setFeatureSection`, réutilisées), `src/lib/nicad.ts`
+(`buildNicad`, `normalizeSection`, `normalizeNumeroParcelle`, réutilisées).
 
 ---
 

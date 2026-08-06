@@ -92,3 +92,23 @@ export function setFeatureNicad(feature: GeoFeature, nicad: string): void {
   props.nicad = nicad;
   feature.properties = props;
 }
+
+// Clés de propriété reconnues pour le numéro de section (cf. `tile-index.ts ·
+// _ssec` et `MapLibreMap.tsx`, popup) — distinctes des clés NICAD : le numéro
+// de section est une propriété à part sur la feature, pas seulement le
+// segment médian du NICAD.
+export const SECTION_KEYS = ["numero_section", "num_section", "NUM_SECTION"] as const;
+
+/**
+ * Réécrit le numéro de section d'une feature sur TOUTES ses clés porteuses (+
+ * `numero_section`, clé canonique écrite à l'ingestion). Sans cette réécriture,
+ * la classification « sans section » (`_ssec`, tile-index.ts) reste périmée
+ * après un NICAD reconstruit : cette propriété est indépendante du NICAD, la
+ * corriger dans le NICAD ne la met pas à jour.
+ */
+export function setFeatureSection(feature: GeoFeature, numSection: string): void {
+  const props = { ...(feature.properties ?? {}) };
+  for (const k of SECTION_KEYS) if (k in props) props[k] = numSection;
+  props.numero_section = numSection;
+  feature.properties = props;
+}

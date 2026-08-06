@@ -41,8 +41,10 @@ export function ConfirmDialog({
               <DialogPrimitive.Title className="font-semibold leading-snug">
                 {title}
               </DialogPrimitive.Title>
-              <DialogPrimitive.Description className="mt-1.5 whitespace-pre-line text-sm text-muted-foreground">
-                {description}
+              <DialogPrimitive.Description asChild>
+                <div className="mt-1.5 whitespace-pre-line text-sm text-muted-foreground">
+                  {description}
+                </div>
               </DialogPrimitive.Description>
             </div>
           </div>

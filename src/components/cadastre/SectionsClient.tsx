@@ -4,6 +4,7 @@ import "leaflet/dist/leaflet.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { toast } from "sonner";
+import { notifyAnalysesUpdated } from "@/lib/analyses/live-refresh";
 import {
   Upload,
   Loader2,
@@ -22,6 +23,8 @@ import {
   ChevronDown,
   Pencil,
   Check,
+  Tag,
+  ListOrdered,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -77,8 +80,14 @@ interface Batch {
 // attente — la zone d'intersection elle-même reste dessinée en rouge par-dessus.
 const SECTION_OK_COLOR = "#2563eb";
 const SECTION_ERROR_COLOR = "#f59e0b";
-function sectionColor(hasError: boolean): string {
-  return hasError ? SECTION_ERROR_COLOR : SECTION_OK_COLOR;
+// Même couleur que `SANS_SECTION_COLOR` (MapLibreMap.tsx) : une section sans
+// numéro sur cette carte QA correspond aux parcelles orphelines de section
+// sur la carte d'analyse — un seul code couleur pour le même concept partout.
+const SECTION_UNNUMBERED_COLOR = "#f97316";
+function sectionColor(hasError: boolean, unnumbered = false): string {
+  if (hasError) return SECTION_ERROR_COLOR;
+  if (unnumbered) return SECTION_UNNUMBERED_COLOR;
+  return SECTION_OK_COLOR;
 }
 
 const OVERLAP_COLOR = "#ef4444";
@@ -171,6 +180,9 @@ export default function SectionsClient() {
   const [deletingSectionId, setDeletingSectionId] = useState<number | null>(
     null,
   );
+  // Attribution des NICAD manquants (incrémentation par plus proche voisin) —
+  // id de la section en cours de traitement (aperçu ou application).
+  const [fillingNicadId, setFillingNicadId] = useState<number | null>(null);
   // Panneau latéral (chevauchements + sections) superposé à la carte, repliable.
   const [panelOpen, setPanelOpen] = useState(true);
   // Confirmation en attente pour les actions destructives (remplace window.confirm).
@@ -219,6 +231,9 @@ export default function SectionsClient() {
   >({});
   const [adminFetchTick, setAdminFetchTick] = useState(0);
   const [mapZoom, setMapZoom] = useState(12);
+  // Étiquettes de numéro de section sur la carte : masquables (encombrant sur
+  // les gros lots) — bascule à côté des limites admin.
+  const [showSectionLabels, setShowSectionLabels] = useState(false);
   // Cartes des cartes de chevauchement dans la liste : pour y défiler quand une
   // section en erreur est cliquée sur la carte.
   const overlapItemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -472,6 +487,99 @@ export default function SectionsClient() {
     [performDeleteSection],
   );
 
+  // ── Attribution des NICAD manquants (incrémentation par plus proche voisin,
+  // à partir du dernier numéro connu dans la section) ────────────────────────
+  // Contrairement à la synchro NICAD (qui reconstruit un NICAD déjà complet),
+  // cette action CRÉE des identifiants à partir de rien : déclenchement
+  // volontaire (bouton dédié) avec aperçu chiffré avant confirmation, pas
+  // d'application automatique.
+  const performFillMissingNicad = useCallback(async (s: SectionItem) => {
+    setFillingNicadId(s.id);
+    try {
+      const res = await fetch("/api/cadastre/sections/nicad-fill", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sectionId: s.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Attribution échouée");
+      const result = data.result as {
+        parcelsAssigned: number;
+        unresolvedCount: number;
+        analysisIds: number[];
+        plans: { fromParcelle: string; toParcelle: string }[];
+      };
+      if (result.parcelsAssigned === 0) {
+        toast.info("Aucune parcelle n'a pu être numérotée.");
+        return;
+      }
+      const range =
+        result.plans.length === 1
+          ? ` (${result.plans[0].fromParcelle} → ${result.plans[0].toParcelle})`
+          : "";
+      toast.success(`${result.parcelsAssigned} NICAD attribué(s)${range}.`);
+      if (result.unresolvedCount > 0) {
+        toast.warning(
+          `${result.unresolvedCount} parcelle(s) sans NICAD non traitée(s) (aucune parcelle déjà numérotée dans leur analyse pour servir de référence).`,
+        );
+      }
+      notifyAnalysesUpdated(result.analysisIds ?? []);
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setFillingNicadId(null);
+    }
+  }, []);
+
+  const handleFillMissingNicad = useCallback(
+    async (s: SectionItem) => {
+      if (!s.numSection) {
+        toast.error("Attribuez d'abord un numéro à cette section.");
+        return;
+      }
+      setFillingNicadId(s.id);
+      try {
+        const res = await fetch("/api/cadastre/sections/nicad-fill", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sectionId: s.id, dryRun: true }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Aperçu échoué");
+        const result = data.result as {
+          parcelsAssigned: number;
+          unresolvedCount: number;
+          plans: { fromParcelle: string; toParcelle: string }[];
+        };
+        if (result.parcelsAssigned === 0) {
+          toast.info(
+            result.unresolvedCount > 0
+              ? `${result.unresolvedCount} parcelle(s) sans NICAD, mais aucune parcelle déjà numérotée dans cette section pour servir de référence.`
+              : "Aucune parcelle sans NICAD dans cette section.",
+          );
+          return;
+        }
+        const range =
+          result.plans.length === 1
+            ? `de ${result.plans[0].fromParcelle} à ${result.plans[0].toParcelle}`
+            : `${result.plans.length} lot(s) concernés`;
+        setConfirmState({
+          title: "Attribuer les NICAD manquants",
+          description:
+            `Attribuer ${result.parcelsAssigned} NICAD (${range}) aux parcelles sans NICAD de la section ${s.numSection} ?\n` +
+            "Numérotation par plus proche voisin à partir du dernier numéro connu.",
+          confirmLabel: "Attribuer",
+          run: () => void performFillMissingNicad(s),
+        });
+      } catch (err) {
+        toast.error(String(err));
+      } finally {
+        setFillingNicadId(null);
+      }
+    },
+    [performFillMissingNicad],
+  );
+
   // ── Sélection pour fusion manuelle ──────────────────────────────────────────
   const toggleMergeSelection = useCallback((id: number) => {
     setMergeSelection((prev) =>
@@ -514,32 +622,66 @@ export default function SectionsClient() {
 
   // ── Attribution d'un numéro à une section qui n'en a pas ────────────────────
   // Handler partagé par la table (édition inline) et le popup carte (Task 4).
-  const performSetNumero = useCallback(async (sectionId: number, rawValue: string) => {
-    const numSection = rawValue.trim();
-    if (!numSection) {
-      toast.error("Le numéro ne peut pas être vide.");
-      return;
-    }
-    setSavingNumero(sectionId);
-    try {
-      const res = await fetch("/api/cadastre/sections/numero", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sectionId, numSection }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Attribution échouée");
-      setSections((prev) =>
-        prev.map((s) => (s.id === sectionId ? { ...s, numSection } : s)),
-      );
-      setNumeroEditId(null);
-      toast.success(`Numéro ${numSection} attribué.`);
-    } catch (err) {
-      toast.error(String(err));
-    } finally {
-      setSavingNumero(null);
-    }
-  }, []);
+  const performSetNumero = useCallback(
+    async (sectionId: number, rawValue: string) => {
+      const numSection = rawValue.trim();
+      if (!numSection) {
+        toast.error("Le numéro ne peut pas être vide.");
+        return;
+      }
+      setSavingNumero(sectionId);
+      try {
+        const res = await fetch("/api/cadastre/sections/numero", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sectionId, numSection }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Attribution échouée");
+        setSections((prev) =>
+          prev.map((s) => (s.id === sectionId ? { ...s, numSection } : s)),
+        );
+        setNumeroEditId(null);
+
+        const sync = data.nicadSync as
+          | {
+              parcelsUpdated: number;
+              conflicts: unknown[];
+              errorsResolved: number;
+              analysisIds: number[];
+            }
+          | null
+          | undefined;
+        if (sync && sync.parcelsUpdated > 0) {
+          const conflictSuffix =
+            sync.conflicts.length > 0
+              ? `, ${sync.conflicts.length} conflit(s) ignoré(s)`
+              : "";
+          const errorsSuffix =
+            sync.errorsResolved > 0
+              ? `, ${sync.errorsResolved} doublure(s) résolue(s)`
+              : "";
+          toast.success(
+            `Numéro ${numSection} enregistré — ${sync.parcelsUpdated} NICAD mis à jour${errorsSuffix}${conflictSuffix}.`,
+          );
+          // Notifie un éventuel onglet /map/[id] déjà ouvert sur une des analyses
+          // touchées : rafraîchit tuiles (couleurs) + KPI sans rechargement manuel.
+          notifyAnalysesUpdated(sync.analysisIds ?? []);
+        } else if (data.nicadSyncError) {
+          toast.warning(
+            `Numéro ${numSection} enregistré. ${data.nicadSyncError}`,
+          );
+        } else {
+          toast.success(`Numéro ${numSection} attribué.`);
+        }
+      } catch (err) {
+        toast.error(String(err));
+      } finally {
+        setSavingNumero(null);
+      }
+    },
+    [],
+  );
 
   const unnumberedCount = useMemo(
     () => sections.filter((s) => !s.numSection).length,
@@ -548,7 +690,8 @@ export default function SectionsClient() {
   // Sections effectivement dessinées/listées — restreintes aux non numérotées
   // quand le filtre "Sans numéro" est actif.
   const displayedSections = useMemo(
-    () => (showUnnumberedOnly ? sections.filter((s) => !s.numSection) : sections),
+    () =>
+      showUnnumberedOnly ? sections.filter((s) => !s.numSection) : sections,
     [sections, showUnnumberedOnly],
   );
 
@@ -572,19 +715,21 @@ export default function SectionsClient() {
     for (const s of displayedSections) {
       if (!s.geomGeoJson) continue;
       const hasError = pendingSectionIds.has(s.id);
-      const color = sectionColor(hasError);
+      const unnumbered = !s.numSection;
+      const color = sectionColor(hasError, unnumbered);
       try {
         const gj = L.geoJSON(s.geomGeoJson as any, {
-          style: hasError
-            ? { color, weight: 2, fillColor: color, fillOpacity: 0.35 }
-            : { color, weight: 1.2, fillColor: color, fillOpacity: 0.15 },
+          style:
+            hasError || unnumbered
+              ? { color, weight: 2, fillColor: color, fillOpacity: 0.35 }
+              : { color, weight: 1.2, fillColor: color, fillOpacity: 0.15 },
         });
         gj.bindTooltip(
           `Section <b>${escHtml(s.numSection ?? "—")}</b><br/>${escHtml(s.commune ?? "—")}` +
             (hasError
               ? "<br/><span style='color:#b45309'>⚠ chevauchement à corriger — cliquer pour le sélectionner</span>"
-              : !s.numSection
-                ? "<br/><span style='color:#f59e0b'>⚠ sans numéro — cliquer pour en attribuer un</span>"
+              : unnumbered
+                ? `<br/><span style='color:${SECTION_UNNUMBERED_COLOR}'>⚠ sans numéro — cliquer pour en attribuer un</span>`
                 : "<br/><span style='opacity:.7'>cliquer : détails / supprimer</span>"),
           { sticky: true },
         );
@@ -598,44 +743,43 @@ export default function SectionsClient() {
           (s.surfaceM2 != null
             ? `<br/>${Math.round(s.surfaceM2).toLocaleString("fr-FR")} m²`
             : "");
-        // Section sans numéro : champ d'attribution directement dans le popup.
-        let numeroWrap: HTMLDivElement | null = null;
-        if (!s.numSection) {
-          numeroWrap = document.createElement("div");
-          numeroWrap.style.cssText = "margin-top:6px;display:flex;gap:4px";
-          const numeroInput = document.createElement("input");
-          numeroInput.type = "text";
-          numeroInput.placeholder = "N° section";
-          numeroInput.style.cssText =
-            "flex:1;min-width:0;padding:3px 6px;font-size:11px;border-radius:6px;" +
-            "border:1px solid #f59e0b;background:transparent;color:inherit";
-          const numeroBtn = document.createElement("button");
-          numeroBtn.type = "button";
-          numeroBtn.textContent = "Attribuer";
-          numeroBtn.style.cssText =
-            "padding:3px 8px;font-size:11px;border-radius:6px;" +
-            "border:1px solid #f59e0b;color:#f59e0b;background:transparent;cursor:pointer";
-          const submitNumero = () => {
-            if (batchCorrectingRef.current) return;
-            const val = numeroInput.value.trim();
-            if (!val) return;
-            map.closePopup();
-            void performSetNumero(s.id, val);
-          };
-          numeroBtn.onclick = submitNumero;
-          numeroInput.onkeydown = (e: KeyboardEvent) => {
-            if (e.key === "Enter") submitNumero();
-          };
-          // Correction groupée en cours : ce bouton reste inerte (la réponse
-          // du batch écrase `sections` — cf. batchCorrecting).
-          const syncNumeroBtn = () => {
-            numeroBtn.disabled = batchCorrectingRef.current;
-          };
-          syncNumeroBtn();
-          gj.on("popupopen", syncNumeroBtn);
-          numeroWrap.appendChild(numeroInput);
-          numeroWrap.appendChild(numeroBtn);
-        }
+        // Champ d'attribution/modification du numéro directement dans le popup
+        // (attribution si absent, modification sinon — recalcule les NICAD rattachés).
+        const numeroWrap = document.createElement("div");
+        numeroWrap.style.cssText = "margin-top:6px;display:flex;gap:4px";
+        const numeroInput = document.createElement("input");
+        numeroInput.type = "text";
+        numeroInput.placeholder = "N° section";
+        numeroInput.value = s.numSection ?? "";
+        numeroInput.style.cssText =
+          "flex:1;min-width:0;padding:3px 6px;font-size:11px;border-radius:6px;" +
+          "border:1px solid #f59e0b;background:transparent;color:inherit";
+        const numeroBtn = document.createElement("button");
+        numeroBtn.type = "button";
+        numeroBtn.textContent = s.numSection ? "Modifier" : "Attribuer";
+        numeroBtn.style.cssText =
+          "padding:3px 8px;font-size:11px;border-radius:6px;" +
+          "border:1px solid #f59e0b;color:#f59e0b;background:transparent;cursor:pointer";
+        const submitNumero = () => {
+          if (batchCorrectingRef.current) return;
+          const val = numeroInput.value.trim();
+          if (!val) return;
+          map.closePopup();
+          void performSetNumero(s.id, val);
+        };
+        numeroBtn.onclick = submitNumero;
+        numeroInput.onkeydown = (e: KeyboardEvent) => {
+          if (e.key === "Enter") submitNumero();
+        };
+        // Correction groupée en cours : ce bouton reste inerte (la réponse
+        // du batch écrase `sections` — cf. batchCorrecting).
+        const syncNumeroBtn = () => {
+          numeroBtn.disabled = batchCorrectingRef.current;
+        };
+        syncNumeroBtn();
+        gj.on("popupopen", syncNumeroBtn);
+        numeroWrap.appendChild(numeroInput);
+        numeroWrap.appendChild(numeroBtn);
         const mergeBtn = document.createElement("button");
         mergeBtn.type = "button";
         mergeBtn.style.cssText =
@@ -654,6 +798,22 @@ export default function SectionsClient() {
           toggleMergeSelection(s.id);
           map.closePopup();
         };
+        // Attribution des NICAD manquants : seulement pour une section déjà
+        // numérotée (le NICAD encode son numéro).
+        let fillNicadBtn: HTMLButtonElement | null = null;
+        if (s.numSection) {
+          fillNicadBtn = document.createElement("button");
+          fillNicadBtn.type = "button";
+          fillNicadBtn.textContent = "Attribuer les NICAD manquants";
+          fillNicadBtn.style.cssText =
+            "margin-top:6px;width:100%;padding:3px 8px;font-size:11px;border-radius:6px;" +
+            "border:1px solid #2563eb;color:#2563eb;background:transparent;cursor:pointer";
+          fillNicadBtn.onclick = () => {
+            if (batchCorrectingRef.current) return;
+            map.closePopup();
+            void handleFillMissingNicad(s);
+          };
+        }
         const delBtn = document.createElement("button");
         delBtn.type = "button";
         delBtn.textContent = "Supprimer cette section";
@@ -665,7 +825,7 @@ export default function SectionsClient() {
           void handleDeleteSection(s);
         };
         popup.appendChild(info);
-        if (numeroWrap) popup.appendChild(numeroWrap);
+        popup.appendChild(numeroWrap);
         popup.appendChild(mergeBtn);
         popup.appendChild(delBtn);
         gj.bindPopup(popup);
@@ -689,6 +849,24 @@ export default function SectionsClient() {
         }
         gj.addTo(secGroup);
         sectionLayersRef.current.set(s.id, gj);
+        // Étiquette permanente du numéro de section (pas seulement au survol/clic) —
+        // même pattern que les labels des limites administratives ci-dessous.
+        if (s.numSection && showSectionLabels) {
+          const center = gj.getBounds().getCenter();
+          const labelHtml =
+            `<div style="color:${color};font-size:10px;font-weight:700;` +
+            `text-shadow:0 0 2px #fff,0 0 2px #fff,0 0 2px #fff;` +
+            `white-space:nowrap;pointer-events:none">${escHtml(s.numSection)}</div>`;
+          L.marker(center, {
+            icon: L.divIcon({
+              className: "",
+              html: labelHtml,
+              iconSize: [0, 0],
+            }),
+            interactive: false,
+            keyboard: false,
+          }).addTo(secGroup);
+        }
       } catch {
         /* ignore */
       }
@@ -746,15 +924,21 @@ export default function SectionsClient() {
     handleDeleteSection,
     toggleMergeSelection,
     performSetNumero,
+    handleFillMissingNicad,
+    showSectionLabels,
   ]);
 
   // ── Surbrillance des sections sélectionnées pour fusion (restylage seul) ───
   // Rejoue aussi après chaque reconstruction des couches (styles de base).
   useEffect(() => {
     const sel = new Set(activeMergeSelection);
+    const unnumberedIds = new Set(
+      displayedSections.filter((s) => !s.numSection).map((s) => s.id),
+    );
     for (const [id, layer] of sectionLayersRef.current) {
       const hasError = pendingSectionIds.has(id);
-      const color = sectionColor(hasError);
+      const unnumbered = unnumberedIds.has(id);
+      const color = sectionColor(hasError, unnumbered);
       try {
         layer.setStyle(
           sel.has(id)
@@ -764,7 +948,7 @@ export default function SectionsClient() {
                 fillColor: MERGE_COLOR,
                 fillOpacity: 0.35,
               }
-            : hasError
+            : hasError || unnumbered
               ? { color, weight: 2, fillColor: color, fillOpacity: 0.35 }
               : { color, weight: 1.2, fillColor: color, fillOpacity: 0.15 },
         );
@@ -772,7 +956,13 @@ export default function SectionsClient() {
         /* ignore */
       }
     }
-  }, [activeMergeSelection, displayedSections, overlaps, pendingSectionIds, mapReady]);
+  }, [
+    activeMergeSelection,
+    displayedSections,
+    overlaps,
+    pendingSectionIds,
+    mapReady,
+  ]);
 
   // ── Mise en évidence du chevauchement sélectionné (restylage seul) ─────────
   // Dépend aussi de sections/overlaps pour rejouer après chaque reconstruction
@@ -1367,6 +1557,16 @@ export default function SectionsClient() {
                     })}
                   </DropdownMenuContent>
                 </DropdownMenu>
+                <Button
+                  size="sm"
+                  variant={showSectionLabels ? "default" : "outline"}
+                  className="h-7 gap-1.5 px-2 text-[11px]"
+                  onClick={() => setShowSectionLabels((v) => !v)}
+                  title="Afficher/masquer les numéros de section sur la carte"
+                >
+                  <Tag className="h-3.5 w-3.5" />
+                  N° sections
+                </Button>
               </div>
 
               {/* Légende des couleurs de la carte */}
@@ -1384,6 +1584,13 @@ export default function SectionsClient() {
                     style={{ background: SECTION_ERROR_COLOR }}
                   />
                   Chevauchement à corriger
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span
+                    className="h-2.5 w-2.5 rounded-sm"
+                    style={{ background: SECTION_UNNUMBERED_COLOR }}
+                  />
+                  Sans numéro
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span
@@ -1633,92 +1840,94 @@ export default function SectionsClient() {
                       )}
                       <div className="max-h-70 space-y-2 overflow-y-auto pr-0.5">
                         {pending.map((o) => {
-                        const isSel = o.id === selectedOverlapId;
-                        const busy = correcting === o.id;
-                        return (
-                          <div
-                            key={o.id}
-                            ref={(el) => {
-                              if (el) overlapItemRefs.current.set(o.id, el);
-                              else overlapItemRefs.current.delete(o.id);
-                            }}
-                            onClick={() => setSelectedOverlapId(o.id)}
-                            className={[
-                              "cursor-pointer rounded-lg border p-2.5 transition-all",
-                              isSel
-                                ? "border-red-400/60 bg-red-500/5 ring-1 ring-red-400/30"
-                                : "border-border hover:border-red-400/30",
-                            ].join(" ")}
-                          >
-                            <div className="mb-1.5 flex items-center gap-2 text-xs">
-                              <input
-                                type="checkbox"
-                                checked={activeOverlapSelection.includes(o.id)}
-                                onClick={(e) => e.stopPropagation()}
-                                onChange={() => toggleOverlapSelection(o.id)}
-                                title="Sélectionner pour traitement groupé"
-                                className="h-3 w-3 shrink-0 cursor-pointer accent-red-500"
-                              />
-                              <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0" />
-                              <span className="font-medium">
-                                Section {o.aNumSection ?? "—"} ↔{" "}
-                                {o.bNumSection ?? "—"}
-                              </span>
-                              {o.overlapAreaM2 != null && (
-                                <span className="ml-auto text-muted-foreground">
-                                  {Math.round(o.overlapAreaM2)} m²
+                          const isSel = o.id === selectedOverlapId;
+                          const busy = correcting === o.id;
+                          return (
+                            <div
+                              key={o.id}
+                              ref={(el) => {
+                                if (el) overlapItemRefs.current.set(o.id, el);
+                                else overlapItemRefs.current.delete(o.id);
+                              }}
+                              onClick={() => setSelectedOverlapId(o.id)}
+                              className={[
+                                "cursor-pointer rounded-lg border p-2.5 transition-all",
+                                isSel
+                                  ? "border-red-400/60 bg-red-500/5 ring-1 ring-red-400/30"
+                                  : "border-border hover:border-red-400/30",
+                              ].join(" ")}
+                            >
+                              <div className="mb-1.5 flex items-center gap-2 text-xs">
+                                <input
+                                  type="checkbox"
+                                  checked={activeOverlapSelection.includes(
+                                    o.id,
+                                  )}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onChange={() => toggleOverlapSelection(o.id)}
+                                  title="Sélectionner pour traitement groupé"
+                                  className="h-3 w-3 shrink-0 cursor-pointer accent-red-500"
+                                />
+                                <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0" />
+                                <span className="font-medium">
+                                  Section {o.aNumSection ?? "—"} ↔{" "}
+                                  {o.bNumSection ?? "—"}
                                 </span>
-                              )}
+                                {o.overlapAreaM2 != null && (
+                                  <span className="ml-auto text-muted-foreground">
+                                    {Math.round(o.overlapAreaM2)} m²
+                                  </span>
+                                )}
+                              </div>
+                              <div className="grid grid-cols-2 gap-1">
+                                <ActBtn
+                                  busy={busy || batchCorrecting}
+                                  onClick={() => applyCorrection(o, "clip_a")}
+                                  icon={<Scissors className="h-3 w-3" />}
+                                >
+                                  Découper {o.aNumSection ?? "A"}
+                                </ActBtn>
+                                <ActBtn
+                                  busy={busy || batchCorrecting}
+                                  onClick={() => applyCorrection(o, "clip_b")}
+                                  icon={<Scissors className="h-3 w-3" />}
+                                >
+                                  Découper {o.bNumSection ?? "B"}
+                                </ActBtn>
+                                <ActBtn
+                                  busy={busy || batchCorrecting}
+                                  onClick={() => applyCorrection(o, "merge")}
+                                  icon={<Combine className="h-3 w-3" />}
+                                >
+                                  Fusionner
+                                </ActBtn>
+                                <ActBtn
+                                  busy={busy || batchCorrecting}
+                                  onClick={() => applyCorrection(o, "ignore")}
+                                  icon={<EyeOff className="h-3 w-3" />}
+                                >
+                                  Ignorer
+                                </ActBtn>
+                                <ActBtn
+                                  busy={busy || batchCorrecting}
+                                  danger
+                                  onClick={() => applyCorrection(o, "delete_a")}
+                                  icon={<Trash2 className="h-3 w-3" />}
+                                >
+                                  Suppr. {o.aNumSection ?? "A"}
+                                </ActBtn>
+                                <ActBtn
+                                  busy={busy || batchCorrecting}
+                                  danger
+                                  onClick={() => applyCorrection(o, "delete_b")}
+                                  icon={<Trash2 className="h-3 w-3" />}
+                                >
+                                  Suppr. {o.bNumSection ?? "B"}
+                                </ActBtn>
+                              </div>
                             </div>
-                            <div className="grid grid-cols-2 gap-1">
-                              <ActBtn
-                                busy={busy || batchCorrecting}
-                                onClick={() => applyCorrection(o, "clip_a")}
-                                icon={<Scissors className="h-3 w-3" />}
-                              >
-                                Découper {o.aNumSection ?? "A"}
-                              </ActBtn>
-                              <ActBtn
-                                busy={busy || batchCorrecting}
-                                onClick={() => applyCorrection(o, "clip_b")}
-                                icon={<Scissors className="h-3 w-3" />}
-                              >
-                                Découper {o.bNumSection ?? "B"}
-                              </ActBtn>
-                              <ActBtn
-                                busy={busy || batchCorrecting}
-                                onClick={() => applyCorrection(o, "merge")}
-                                icon={<Combine className="h-3 w-3" />}
-                              >
-                                Fusionner
-                              </ActBtn>
-                              <ActBtn
-                                busy={busy || batchCorrecting}
-                                onClick={() => applyCorrection(o, "ignore")}
-                                icon={<EyeOff className="h-3 w-3" />}
-                              >
-                                Ignorer
-                              </ActBtn>
-                              <ActBtn
-                                busy={busy || batchCorrecting}
-                                danger
-                                onClick={() => applyCorrection(o, "delete_a")}
-                                icon={<Trash2 className="h-3 w-3" />}
-                              >
-                                Suppr. {o.aNumSection ?? "A"}
-                              </ActBtn>
-                              <ActBtn
-                                busy={busy || batchCorrecting}
-                                danger
-                                onClick={() => applyCorrection(o, "delete_b")}
-                                icon={<Trash2 className="h-3 w-3" />}
-                              >
-                                Suppr. {o.bNumSection ?? "B"}
-                              </ActBtn>
-                            </div>
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -1799,11 +2008,16 @@ export default function SectionsClient() {
                                     <input
                                       autoFocus
                                       value={numeroDraft}
-                                      onChange={(e) => setNumeroDraft(e.target.value)}
+                                      onChange={(e) =>
+                                        setNumeroDraft(e.target.value)
+                                      }
                                       onKeyDown={(e) => {
                                         if (e.key === "Enter") {
                                           if (batchCorrecting) return;
-                                          void performSetNumero(s.id, numeroDraft);
+                                          void performSetNumero(
+                                            s.id,
+                                            numeroDraft,
+                                          );
                                         } else if (e.key === "Escape") {
                                           setNumeroEditId(null);
                                         }
@@ -1812,8 +2026,12 @@ export default function SectionsClient() {
                                       className="h-5 w-14 rounded border border-border bg-background px-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-ring"
                                     />
                                     <button
-                                      onClick={() => void performSetNumero(s.id, numeroDraft)}
-                                      disabled={savingNumero === s.id || batchCorrecting}
+                                      onClick={() =>
+                                        void performSetNumero(s.id, numeroDraft)
+                                      }
+                                      disabled={
+                                        savingNumero === s.id || batchCorrecting
+                                      }
                                       title="Enregistrer le numéro"
                                       className="rounded p-0.5 text-green-500 transition-colors hover:bg-green-500/10 disabled:opacity-40"
                                     >
@@ -1838,10 +2056,27 @@ export default function SectionsClient() {
                                       style={{
                                         background: sectionColor(
                                           pendingSectionIds.has(s.id),
+                                          !s.numSection,
                                         ),
                                       }}
                                     />
-                                    {s.numSection ?? (
+                                    {s.numSection ? (
+                                      <span className="inline-flex items-center gap-1">
+                                        {s.numSection}
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setNumeroEditId(s.id);
+                                            setNumeroDraft(s.numSection ?? "");
+                                          }}
+                                          disabled={batchCorrecting}
+                                          title="Modifier le numéro de section (recalcule les NICAD rattachés)"
+                                          className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40"
+                                        >
+                                          <Pencil className="h-3 w-3" />
+                                        </button>
+                                      </span>
+                                    ) : (
                                       <button
                                         onClick={(e) => {
                                           e.stopPropagation();
@@ -1872,6 +2107,26 @@ export default function SectionsClient() {
                                   : "—"}
                               </td>
                               <td className="py-1 text-right">
+                                {s.numSection && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void handleFillMissingNicad(s);
+                                    }}
+                                    disabled={
+                                      fillingNicadId === s.id ||
+                                      batchCorrecting
+                                    }
+                                    title="Attribuer les NICAD manquants (plus proche voisin)"
+                                    className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-blue-500/10 hover:text-blue-400 disabled:opacity-40"
+                                  >
+                                    {fillingNicadId === s.id ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <ListOrdered className="h-3 w-3" />
+                                    )}
+                                  </button>
+                                )}
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
