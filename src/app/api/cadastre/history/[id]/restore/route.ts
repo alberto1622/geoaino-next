@@ -60,6 +60,9 @@ export async function POST(req: NextRequest, { params }: { params: Params }): Pr
         after: entry.before,
         createdBy,
       });
+    }, {
+      maxWait: 10_000,
+      timeout: 120_000,
     });
     return NextResponse.json({ success: true });
   } catch (err) {

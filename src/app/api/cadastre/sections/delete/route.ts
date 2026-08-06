@@ -65,6 +65,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           createdBy,
         });
         return section;
+      }, {
+        maxWait: 10_000,
+        timeout: 120_000,
       });
       if (!existing) {
         return NextResponse.json({ error: "Section introuvable" }, { status: 404 });
@@ -73,8 +76,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
 
     if (sourceFichier) {
-      await prisma.$transaction(async (tx) => {
+      const deleted = await prisma.$transaction(async (tx) => {
         const sections = await getSectionsFullBySource(sourceFichier, tx);
+        // Lot vide : ne rien écrire dans l'historique — une entrée au snapshot
+        // vide n'offrirait qu'un bouton « Restaurer » sans effet.
+        if (sections.length === 0) return null;
         const overlaps = await getOverlapsFullBySource(sourceFichier, tx);
         const before: SectionsDeleteSnapshot = { sections, overlaps };
         await deleteSectionsBySource(sourceFichier, tx);
@@ -87,7 +93,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           after: {},
           createdBy,
         });
+        return sections.length;
+      }, {
+        maxWait: 10_000,
+        timeout: 120_000,
       });
+      if (deleted == null) {
+        return NextResponse.json({ error: "Aucune section trouvée pour ce fichier" }, { status: 404 });
+      }
       return NextResponse.json({ success: true, sourceFichier });
     }
 
