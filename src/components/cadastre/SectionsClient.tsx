@@ -511,7 +511,7 @@ export default function SectionsClient() {
         parcelsAssigned: number;
         unresolvedCount: number;
         analysisIds: number[];
-        plans: { fromParcelle: string; toParcelle: string }[];
+        plans: { fromParcelle: string; toParcelle: string; viaCommune2026?: boolean; communeApprox?: boolean }[];
       };
       if (result.parcelsAssigned === 0) {
         toast.info("Aucune parcelle n'a pu être numérotée.");
@@ -525,6 +525,13 @@ export default function SectionsClient() {
       if (result.unresolvedCount > 0) {
         toast.warning(
           `${result.unresolvedCount} parcelle(s) sans NICAD non traitée(s) (aucune parcelle déjà numérotée dans leur analyse pour servir de référence).`,
+        );
+      }
+      if (result.plans.some((p) => p.viaCommune2026)) {
+        toast.warning(
+          result.plans.some((p) => p.communeApprox)
+            ? "Préfixe territorial déduit de la commune 2026 par proximité (aucune parcelle de référence dans la section) — à vérifier."
+            : "Préfixe territorial déduit de la commune 2026 (aucune parcelle de référence dans la section) — à vérifier.",
         );
       }
       notifyAnalysesUpdated(result.analysisIds ?? []);
@@ -553,7 +560,7 @@ export default function SectionsClient() {
         const result = data.result as {
           parcelsAssigned: number;
           unresolvedCount: number;
-          plans: { fromParcelle: string; toParcelle: string }[];
+          plans: { fromParcelle: string; toParcelle: string; viaCommune2026?: boolean; communeApprox?: boolean }[];
         };
         if (result.parcelsAssigned === 0) {
           toast.info(
@@ -567,11 +574,17 @@ export default function SectionsClient() {
           result.plans.length === 1
             ? `de ${result.plans[0].fromParcelle} à ${result.plans[0].toParcelle}`
             : `${result.plans.length} lot(s) concernés`;
+        const viaCommune2026Note = result.plans.some((p) => p.viaCommune2026)
+          ? "\nAucune parcelle déjà numérotée dans cette section : préfixe territorial déduit de la commune 2026" +
+            (result.plans.some((p) => p.communeApprox) ? " (par proximité)" : "") +
+            ", à vérifier."
+          : "";
         setConfirmState({
           title: "Attribuer les NICAD manquants",
           description:
             `Attribuer ${result.parcelsAssigned} NICAD (${range}) aux parcelles sans NICAD de la section ${s.numSection} ?\n` +
-            "Numérotation par plus proche voisin à partir du dernier numéro connu.",
+            "Numérotation par plus proche voisin à partir du dernier numéro connu." +
+            viaCommune2026Note,
           confirmLabel: "Attribuer",
           run: () => void performFillMissingNicad(s),
         });

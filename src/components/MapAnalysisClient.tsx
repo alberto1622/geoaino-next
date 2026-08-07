@@ -474,7 +474,16 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   // Aperçu par section (dryRun) affiché dans le sélecteur de sections, et
   // sous-ensemble actuellement coché par l'utilisateur (tout coché par défaut).
   const [nicadFillPreview, setNicadFillPreview] = useState<{
-    plans: { numSection: string; count: number; fromParcelle: string; toParcelle: string }[];
+    plans: {
+      numSection: string;
+      count: number;
+      fromParcelle: string;
+      toParcelle: string;
+      viaCommune2026?: boolean;
+      communeApprox?: boolean;
+      crossFileSection?: boolean;
+      sectionSourceFichier?: string;
+    }[];
     unresolvedCount: number;
   } | null>(null);
   const [nicadFillSelection, setNicadFillSelection] = useState<Set<string>>(
@@ -578,6 +587,21 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     }
     return Math.max(0, displayFc.features.length - nonConforme);
   }, [analysis.conformeCount, displayFc, nonConformeNicads]);
+
+  // `conformeCount`/`analysis.errorCount` restent figés à l'état du serveur au
+  // chargement de la page (§ ci-dessus) : une correction faite DANS cet onglet
+  // (attribution NICAD, correction manuelle d'une erreur) ou notifiée par un
+  // autre onglet (`handleExternalAnalysisUpdate`) grossit `correctedErrorIds`
+  // sans jamais rafraîchir ces deux compteurs. Le sidebar affichait donc un
+  // nombre d'erreurs/conformes obsolète juste après avoir attribué des NICAD
+  // manquants (§ 11 quinquies-octies, docs/CONCEPTS-TRAITEMENT-DXF.md).
+  // `correctedErrorIds.size` est la référence déjà utilisée ailleurs (opacité/
+  // barré de la liste d'erreurs) pour « corrigé depuis le chargement » — décale
+  // les deux compteurs du même delta plutôt que de les recalculer de zéro.
+  const correctedSinceLoad = correctedErrorIds.size;
+  const displayConformeCount =
+    conformeCount != null ? conformeCount + correctedSinceLoad : null;
+  const displayErrorCount = Math.max(0, (analysis.errorCount ?? 0) - correctedSinceLoad);
 
   // Emprise globale pour le fit initial de la carte (rendu par tuiles) : servie
   // par map-meta, indépendante du chargement du GeoJSON complet.
@@ -1421,7 +1445,16 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         const result = data.result as {
           parcelsAssigned: number;
           unresolvedCount: number;
-          plans: { numSection: string; count: number; fromParcelle: string; toParcelle: string }[];
+          plans: {
+            numSection: string;
+            count: number;
+            fromParcelle: string;
+            toParcelle: string;
+            viaCommune2026?: boolean;
+            communeApprox?: boolean;
+            crossFileSection?: boolean;
+            sectionSourceFichier?: string;
+          }[];
         };
         if (result.parcelsAssigned === 0) {
           toast.info("Aucune parcelle n'a pu être numérotée.");
@@ -1435,6 +1468,18 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         if (result.unresolvedCount > 0) {
           toast.warning(
             `${result.unresolvedCount} parcelle(s) sans NICAD non traitée(s) (aucune parcelle déjà numérotée dans leur section pour servir de référence).`,
+          );
+        }
+        if (result.plans.some((p) => p.viaCommune2026)) {
+          toast.warning(
+            result.plans.some((p) => p.communeApprox)
+              ? "Préfixe territorial déduit de la commune 2026 par proximité pour au moins une section (aucune parcelle de référence disponible) — à vérifier."
+              : "Préfixe territorial déduit de la commune 2026 pour au moins une section (aucune parcelle de référence disponible) — à vérifier.",
+          );
+        }
+        if (result.plans.some((p) => p.crossFileSection)) {
+          toast.warning(
+            "Section trouvée dans un autre fichier importé que cette analyse (limites cadastrales existantes réutilisées par géométrie) — à vérifier.",
           );
         }
         setTileVersion((v) => v + 1);
@@ -1467,7 +1512,16 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       const result = data.result as {
         parcelsAssigned: number;
         unresolvedCount: number;
-        plans: { numSection: string; count: number; fromParcelle: string; toParcelle: string }[];
+        plans: {
+          numSection: string;
+          count: number;
+          fromParcelle: string;
+          toParcelle: string;
+          viaCommune2026?: boolean;
+          communeApprox?: boolean;
+          crossFileSection?: boolean;
+          sectionSourceFichier?: string;
+        }[];
       };
       if (result.parcelsAssigned === 0) {
         toast.info(
@@ -1594,12 +1648,12 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 className="text-green-400"
                 title="Parcelles sans erreur topologique"
               >
-                {conformeCount != null ? conformeCount.toLocaleString() : "…"}{" "}
+                {displayConformeCount != null ? displayConformeCount.toLocaleString() : "…"}{" "}
                 conformes
               </span>
               <span>·</span>
               <span className="text-red-400">
-                {analysis.errorCount ?? 0} erreurs
+                {displayErrorCount} erreurs
               </span>
               {(analysis.outOfSenegalCount ?? 0) > 0 && (
                 <>
@@ -2699,21 +2753,21 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                   className="text-xs text-primary hover:underline cursor-pointer"
                   onClick={() =>
                     setNicadFillSelection((prev) =>
-                      prev.size === nicadFillPreview.plans.length
+                      prev.size === new Set(nicadFillPreview.plans.map((p) => p.numSection)).size
                         ? new Set()
                         : new Set(nicadFillPreview.plans.map((p) => p.numSection)),
                     )
                   }
                 >
-                  {nicadFillSelection.size === nicadFillPreview.plans.length
+                  {nicadFillSelection.size === new Set(nicadFillPreview.plans.map((p) => p.numSection)).size
                     ? "Tout désélectionner"
                     : "Tout sélectionner"}
                 </button>
               </div>
               <div className="max-h-48 overflow-y-auto rounded-md border border-border divide-y divide-border">
-                {nicadFillPreview.plans.map((p) => (
+                {nicadFillPreview.plans.map((p, i) => (
                   <label
-                    key={p.numSection}
+                    key={`${p.numSection}-${p.sectionSourceFichier ?? ""}-${i}`}
                     className="flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer hover:bg-secondary/40"
                   >
                     <input
@@ -2730,6 +2784,23 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                     />
                     <span className="flex-1">
                       Section {p.numSection} — {p.count} ({p.fromParcelle} → {p.toParcelle})
+                      {p.viaCommune2026 && (
+                        <span className="ml-1 text-amber-600" title={
+                          p.communeApprox
+                            ? "Aucune parcelle de référence dans la section : préfixe déduit de la commune 2026 par proximité — à vérifier."
+                            : "Aucune parcelle de référence dans la section : préfixe déduit de la commune 2026 — à vérifier."
+                        }>
+                          ⚠ commune 2026{p.communeApprox ? " (approx.)" : ""}
+                        </span>
+                      )}
+                      {p.crossFileSection && (
+                        <span
+                          className="ml-1 text-amber-600"
+                          title={`Section absente de cette analyse : reprise par géométrie depuis ${p.sectionSourceFichier ?? "un autre fichier"} — à vérifier.`}
+                        >
+                          ⚠ autre fichier
+                        </span>
+                      )}
                     </span>
                   </label>
                 ))}
@@ -2738,7 +2809,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 Numérotation par plus proche voisin à partir du dernier numéro
                 connu de chaque section sélectionnée.
                 {nicadFillPreview.unresolvedCount > 0 &&
-                  ` ${nicadFillPreview.unresolvedCount} parcelle(s) sans NICAD non traitable(s) (aucune référence dans leur section).`}
+                  ` ${nicadFillPreview.unresolvedCount} parcelle(s) sans NICAD non traitable(s) (aucune référence dans leur section, ni commune 2026 correspondante).`}
               </p>
             </div>
           )

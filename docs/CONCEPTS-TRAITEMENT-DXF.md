@@ -33,6 +33,11 @@ est vu, il doit être ajouté ici (cf. règle dans `CLAUDE.md`).
     - [11 ter bis. Mise à jour automatique des NICAD lors de l'ajout/modification du numéro de section](#11-ter-bis-mise-à-jour-automatique-des-nicad-lors-de-lajoutmodification-du-numéro-de-section)
     - [11 quater. Import de sections depuis un shapefile : contourner le pipeline DXF](#11-quater-import-de-sections-depuis-un-shapefile--contourner-le-pipeline-dxf)
     - [11 quinquies. Attribution des NICAD manquants par incrémentation + plus proche voisin](#11-quinquies-attribution-des-nicad-manquants-par-incrémentation--plus-proche-voisin)
+    - [11 sexies. « Aucune parcelle sans NICAD » trompeur : rattachement fileName/sourceFichier cassé par un simple renommage](#11-sexies-aucune-parcelle-sans-nicad-trompeur--rattachement-filenamesourcefichier-cassé-par-un-simple-renommage)
+    - [11 septies. Section sans AUCUNE parcelle de référence : premier numéro `00001`, préfixe déduit de `cad_communes_2026`](#11-septies-section-sans-aucune-parcelle-de-référence--premier-numéro-00001-préfixe-déduit-de-cad_communes_2026)
+    - [11 octies. Analyse jamais passée par l'extraction de sections : repli spatial dans TOUTE `limite_section`](#11-octies-analyse-jamais-passée-par-lextraction-de-sections--repli-spatial-dans-toute-limite_section)
+    - [11 nonies. KPI conformes/erreurs figé après une attribution NICAD : deux couches de fraîcheur](#11-nonies-kpi-conformeserreurs-figé-après-une-attribution-nicad--deux-couches-de-fraîcheur)
+    - [11 decies. Point de départ du repli sans référence : coin nord-ouest, pas le centre](#11-decies-point-de-départ-du-repli-sans-référence--coin-nord-ouest-pas-le-centre)
 12. [Annexe — compteurs du rapport & variables d'environnement](#12-annexe--compteurs-du-rapport--variables-denvironnement)
 13. [Correction groupée des chevauchements de sections : règle « auto » et ordre séquentiel](#13-correction-groupée-des-chevauchements-de-sections--règle--auto--et-ordre-séquentiel)
 
@@ -1242,11 +1247,12 @@ irrégulière, ce qui reste acceptable puisque le but est un identifiant unique
 et localement cohérent, pas un ordre topographique garanti optimal.
 
 **Pièges.**
-- *Aucune référence ⇒ aucune attribution, jamais de préfixe inventé* : sans
-  parcelle déjà numérotée dans la section pour donner le préfixe territorial,
-  la fonction ne tente **rien** (`unresolvedCount`) plutôt que de deviner un
-  Syscol — contrairement à un NICAD reconstruit (§ 11 ter bis) qui réutilise
-  toujours un préfixe déjà présent sur la parcelle elle-même.
+- *Aucune référence locale ⇒ repli sur `cad_communes_2026`, jamais de préfixe
+  inventé au hasard* : sans parcelle déjà numérotée dans la section, la
+  fonction ne devine pas un Syscol arbitraire — elle le résout par la même
+  jointure spatiale que l'import initial (§ 11 septies). Seule l'absence de
+  commune 2026 correspondante (hors référentiel, > 50 m de toute commune)
+  ramène au comportement d'origine : rien n'est tenté (`unresolvedCount`).
 - *NICAD « court » (§ 10, longueur ≠ 16 mais pas vide) : ni référence fiable,
   ni cible* — ignoré silencieusement, car ni utilisable pour en dériver un
   préfixe fiable, ni considéré comme « manquant » au sens strict
@@ -1270,6 +1276,398 @@ et localement cohérent, pas un ordre topographique garanti optimal.
 (mêmes noms de handlers, scopés à l'analyse), `src/lib/analyses/feature-locator.ts`
 (`setFeatureNicad`/`setFeatureSection`, réutilisées), `src/lib/nicad.ts`
 (`buildNicad`, `normalizeSection`, `normalizeNumeroParcelle`, réutilisées).
+
+---
+
+## 11 sexies. « Aucune parcelle sans NICAD » trompeur : rattachement fileName/sourceFichier cassé par un simple renommage
+
+**Problème métier.** Le bouton « Attribuer les NICAD manquants » de
+`/map/[analysisId]` répond parfois *« Aucune parcelle sans NICAD dans les
+sections numérotées de cette analyse »* (`MapAnalysisClient.tsx ·
+handleFillMissingNicad`) alors que l'analyse contient bel et bien des
+parcelles sans NICAD — l'utilisateur les voit à l'écran, coloriées comme
+manquantes (§ 10). Le message laisse croire que le calcul a été fait et n'a
+rien trouvé, alors qu'en réalité **aucune section n'a même été examinée**.
+
+**Cause technique.** `fillMissingNicadForAnalysis` (§ 11 quinquies) rattache
+les sections d'une analyse par égalité de chaîne stricte :
+`LimiteSection.sourceFichier = Analysis.fileName` (aucune FK, aucune
+normalisation — ni `trim`, ni casse, ni séparateurs). Si `sections.length ===
+0`, la fonction retourne immédiatement `{ parcelsAssigned: 0, unresolvedCount:
+0, plans: [] }` (`nicad-fill-missing.ts:413`) — exactement les valeurs qui
+déclenchent, côté UI, le message « Aucune parcelle sans NICAD » plutôt que le
+message distinct réservé aux parcelles réellement détectées mais sans
+référence disponible (`unresolvedCount > 0`, cf. § 11 quinquies pièges). Deux
+imports peuvent produire des noms de fichier « presque » identiques pour la
+même zone : l'import DXF cadastral complet (`fileName` de l'`Analysis`) et
+l'import de sections en autonome (§ 11 quater, `sourceFichier` de
+`LimiteSection`) proviennent de deux uploads distincts, avec le nom de
+fichier retapé/renommé entre les deux — un espace remplacé par un
+underscore suffit à casser le rattachement.
+
+**Cas réel constaté** (base de production, 2026-08-07) :
+
+| Table | Colonne | Valeur |
+|---|---|---|
+| `Analysis` (id 24) | `fileName` | `Limite Parcelle Saly Ngap Section 042.dxf` (espaces) |
+| `LimiteSection` | `sourceFichier` | `Limite_Parcelle_Saly_Ngap_Section_042.dxf` (underscores) |
+
+L'analyse 24 contient réellement 17 parcelles sans NICAD sur 409, mais
+`fillMissingNicadForAnalysis` ne trouve `0` ligne `limite_section` pour son
+`fileName` exact → retour immédiat, message trompeur. Deux autres
+`sourceFichier` (`section_rufisque.shp`, `section_thies.shp`) n'ont, eux,
+**aucune** `Analysis` correspondante dans la base : sections orphelines,
+invisibles à toute analyse quel que soit son nom.
+
+**Par où commencer un diagnostic similaire.** `scripts/diag-nicad-check.ts`
+(nouveau, réutilise volontairement le même rattachement et la même
+classification NICAD que `nicad-fill-missing.ts` pour rester fidèle au
+comportement réel) :
+- `npx tsx scripts/diag-nicad-check.ts` : vue d'ensemble — nombre de
+  `sourceFichier` distincts sans `Analysis` correspondante, échantillon de
+  sections avec leur répartition NICAD manquant/référence/longueur atypique.
+- `npx tsx scripts/diag-nicad-check.ts <numSection>` : détail d'un numéro de
+  section précis, toutes occurrences confondues (une section peut avoir
+  plusieurs lignes `limite_section`, une par face/fichier source) — signale
+  explicitement le mismatch fileName/sourceFichier et les parcelles
+  « invisibles » (NICAD ni vide ni 16 caractères).
+En pratique : d'abord comparer `Analysis.fileName` et
+`LimiteSection.sourceFichier` **en octets** (`encode(col::bytea,'hex')`) avant
+de suspecter la géométrie ou l'algorithme — un espace, un underscore ou une
+casse différente est indétectable à l'œil dans les logs/toasts.
+
+**Pourquoi ce n'est pas signalé plus tôt.** Le même rattachement par égalité
+de chaîne est réutilisé tel quel par `nicad-section-sync.ts` (§ 11 ter bis) et
+`fillMissingNicadForSection` (§ 11 quinquies) : un import de sections dont le
+nom diverge, même légèrement, rend cette analyse invisible à **toutes** ces
+fonctionnalités simultanément, sans erreur explicite nulle part — chacune
+retombe sur son cas « rien à faire » plutôt que sur une erreur de
+rattachement, puisqu'aucune des deux tables ne référence l'autre par clé
+étrangère (choix assumé, cf. § 11 quinquies) et qu'aucune validation
+n'existe à l'import pour avertir qu'un `sourceFichier`/`fileName` fraîchement
+enregistré ne correspond à rien côté import inverse.
+
+**Fichiers · fonctions.** `src/lib/cadastre/nicad-fill-missing.ts`
+(`fillMissingNicadForAnalysis`, la requête `sections` sur `limite_section`),
+`src/components/MapAnalysisClient.tsx` (`handleFillMissingNicad`, message
+« Aucune parcelle sans NICAD »), `scripts/diag-nicad-check.ts` (nouvel outil
+de diagnostic, lecture seule).
+
+---
+
+## 11 septies. Section sans AUCUNE parcelle de référence : premier numéro `00001`, préfixe déduit de `cad_communes_2026`
+
+**Problème métier.** § 11 quinquies pose la règle « sans parcelle déjà
+numérotée dans la section, aucune attribution » (`unresolvedCount`) : le cas
+d'une section **entièrement** sans NICAD (ex. constaté en base : section 016
+de `PLAN-CADASTRAL_KAOLACK_FINAL_-11-12-2025.dxf`, 4 parcelles, 0 référence)
+restait donc bloqué en attente de correction manuelle, alors même que le
+numéro de parcelle à donner en premier ne fait aucun doute : `1` → `"00001"`
+(`normalizeNumeroParcelle` le formate déjà). Ce qui manquait réellement
+n'était pas le numéro, mais le **Syscol** (préfixe territorial, 8 premiers
+caractères) — rien dans une section 100 % sans NICAD ne permet de le lire.
+
+**Cause technique.** Le Syscol n'a jamais eu besoin d'être lu dans le dessin :
+à l'import initial d'un DXF, `assignNicad2026FromCommunes`
+(`src/lib/cadastre/assign-nicad-2026.ts`) le résout déjà par **jointure
+spatiale** contre le référentiel `cad_communes_2026` (`ST_Contains` puis
+repli `ST_DWithin` 50 m via `getSyscols2026ForPoints`,
+`src/lib/cadastre/data.ts`). `fillMissingNicadInFeatures` ne réutilisait pas
+ce mécanisme — il ne savait dériver un Syscol que d'une parcelle **déjà**
+numérotée dans la section.
+
+**Solution** (`src/lib/cadastre/nicad-fill-missing.ts ·
+fillMissingNicadInFeatures`) : quand aucune parcelle de référence n'est
+trouvée dans la section (`maxParcelleFeatureIdx === -1`), avant d'abandonner :
+1. Calcule un point représentatif de **la section elle-même**
+   (`turf.pointOnFeature` sur `sectionPoly`, pas sur une parcelle).
+2. Appelle `getSyscols2026ForPoints` sur ce point, exactement comme à l'import.
+3. Si une commune 2026 est trouvée, son `syscolPadded` devient `prefix8`, le
+   chaînage glouton (inchangé, § 11 quinquies) démarre à `nextNum = 1` depuis
+   ce point représentatif au lieu de la position d'une parcelle de référence.
+4. Sans commune 2026 correspondante (hors référentiel), comportement
+   d'origine inchangé : `unresolvedCount`, aucune attribution.
+
+**Traçabilité du repli.** `SectionAssignOutcome`/`NicadFillPlan`/
+`NicadFillSectionPlan` portent désormais `viaCommune2026` (Syscol déduit de la
+commune plutôt que d'une parcelle voisine) et `communeApprox` (résolu par
+proximité ≤ 50 m, pas par contenance stricte — donc moins fiable). Les deux
+routes (`/api/cadastre/sections/nicad-fill`, `/api/analyses/[id]/nicad-fill`)
+les renvoient telles quelles ; `SectionsClient.tsx` et `MapAnalysisClient.tsx`
+les affichent (toast d'avertissement après application, note dans l'aperçu
+`dryRun`/`ConfirmDialog`, badge « ⚠ commune 2026 » par section dans le
+sélecteur de `MapAnalysisClient.tsx`) — jamais d'attribution silencieuse d'un
+Syscol qui ne vient pas du dessin lui-même.
+
+**Pourquoi ce n'est pas le même niveau de confiance qu'un Syscol lu sur une
+parcelle voisine.** Une parcelle de référence dans la section est une preuve
+directe (quelqu'un a déjà validé ce Syscol pour cette zone) ; une commune 2026
+par jointure spatiale est une **déduction géométrique**, sujette aux mêmes
+limites que l'import (limites de commune imprécises, chevauchement de
+référentiel, repli 50 m en bordure de commune). D'où le double marquage
+`viaCommune2026`/`communeApprox` plutôt qu'un silence complet — l'utilisateur
+reste seul juge de la vraisemblance du Syscol proposé avant de confirmer.
+
+**Pièges.**
+- *Le point représentatif change de nature selon le cas* : `representativePoint`
+  (une parcelle) vs. le point calculé directement sur `sectionPoly` — les deux
+  utilisent `turf.pointOnFeature`/`centroid`, mais pas sur le même objet ; un
+  cast (`sectionPoly as unknown as GeoFeature`) est nécessaire uniquement pour
+  satisfaire le typage large de `GeoFeature` (`geometry: any`), sans changer
+  le calcul.
+- *Un seul point par jointure spatiale* : contrairement à l'import (un point
+  par parcelle, jointure par lots), ce repli ne résout qu'**un** point — celui
+  de la section — donc un seul appel réseau/PostGIS par section concernée, pas
+  de risque de lenteur à ce niveau (à la différence de `getSyscols2026ForPoints`
+  sur un DXF de 100k+ parcelles, cf. commentaire perf dans `data.ts`).
+- *N'élimine pas le cas réellement irrécupérable* : une section hors emprise de
+  `cad_communes_2026` (référentiel incomplet, zone non couverte) retombe
+  exactement sur le comportement pré-existant — `unresolvedCount`, jamais de
+  Syscol inventé arbitrairement.
+
+**Fichiers · fonctions.** `src/lib/cadastre/nicad-fill-missing.ts`
+(`fillMissingNicadInFeatures`, repli commune 2026), `src/lib/cadastre/data.ts`
+(`getSyscols2026ForPoints`, réutilisée telle quelle), `src/lib/cadastre/assign-nicad-2026.ts`
+(mécanisme d'origine, à l'import), `src/components/cadastre/SectionsClient.tsx`
+et `src/components/MapAnalysisClient.tsx` (affichage `viaCommune2026`/
+`communeApprox`).
+
+---
+
+## 11 octies. Analyse jamais passée par l'extraction de sections : repli spatial dans TOUTE `limite_section`
+
+**Problème métier.** § 11 sexies traite le cas d'un **nom de fichier mal
+orthographié** entre `Analysis.fileName` et `LimiteSection.sourceFichier`
+(les deux existent, mais ne se joignent pas). Un cas plus radical existe :
+une analyse dont le fichier source n'a **jamais** produit de ligne
+`limite_section` du tout, parce que ce n'est pas un plan cadastral DXF avec
+calques `limites_sections`/`numero_section` (§ 11) — cas réel constaté :
+`keurmoussa_indiv_LOT16_RAS.shp`, un shapefile d'**enquête foncière
+individuelle** (une ligne par déclarant : `Nom`, `Prenom`, `Region`,
+`Departe`, `Commune`, `Village`, `Nicad: null`…), sans aucun champ de section
+dans sa table attributaire. `fillMissingNicadForAnalysis` (§ 11 quinquies)
+trouvait `0` ligne `limite_section` pour ce `fileName` et abandonnait
+immédiatement — message « Aucune parcelle sans NICAD » malgré 400 parcelles
+réellement sans NICAD.
+
+**Cause technique.** Le rattachement `sourceFichier = Analysis.fileName`
+suppose que **cette** analyse a elle-même généré ses sections. Rien n'empêche
+pourtant que la zone couverte par cette analyse soit **déjà** découpée en
+sections numérotées par un **autre** import — le plan cadastral régional dont
+elle n'est qu'un sous-ensemble socio-économique. Vérifié en base : les 400
+parcelles de `keurmoussa_indiv_LOT16_RAS.shp` tombent, point par point, dans
+des sections déjà numérotées de `PLAN_CADASTRAL_THIES_FINAL01-10-2025.dxf`
+(le plan cadastral régional de Thiès, qui couvre aussi Keur Moussa) et de
+`section_rufisque.shp`.
+
+**Solution** (`src/lib/cadastre/nicad-fill-missing.ts ·
+fillMissingNicadForAnalysis`) : quand la requête exacte par `sourceFichier`
+ne renvoie aucune section, calcule l'emprise (bbox) du GeoJSON de l'analyse
+(`turf.bbox`) et relance la recherche sur **toute** la table `limite_section`
+(sans filtre `sourceFichier`), restreinte par cette emprise
+(`geom && ST_MakeEnvelope(...)`, filtre grossier — le point-dans-polygone
+précis reste fait par `fillMissingNicadInFeatures` comme avant, section par
+section). Combiné avec § 11 septies : une section trouvée par ce repli peut
+elle-même n'avoir aucune parcelle de référence dans le GeoJSON de *cette*
+analyse (normal, ses parcelles à elle n'ont jamais été numérotées) — le
+Syscol vient alors de `cad_communes_2026`, pas de la section externe.
+
+**Traçabilité.** `NicadFillSectionPlan` porte `crossFileSection` (section
+trouvée hors de `Analysis.fileName`) et `sectionSourceFichier` (le fichier
+d'où elle vient réellement) — affichés par `MapAnalysisClient.tsx` (badge
+« ⚠ autre fichier », toast d'avertissement après application). Comme pour
+§ 11 septies, jamais silencieux : réutiliser une section « empruntée » à un
+autre import reste une inférence géométrique, pas une déclaration explicite
+de l'utilisateur, donc marquée comme telle.
+
+**Pourquoi seulement en repli, jamais en premier essai.** La correspondance
+exacte par `sourceFichier` reste prioritaire et inchangée : elle est précise
+et déjà éprouvée (tuilage d'un même lot, § 11 quinquies). Le repli spatial
+n'intervient que si elle échoue totalement, pour deux raisons :
+1. Une bbox peut chevaucher plusieurs sections numérotées venant de **sources
+   concurrentes** qui se recouvrent (constaté : la même zone couverte à la
+   fois par `PLAN_CADASTRAL_THIES...dxf` et `section_rufisque.shp`, cf.
+   § 6 ter/§ 13 sur les chevauchements de sections) — appliquer ce repli
+   même quand la correspondance exacte fonctionne risquerait d'introduire une
+   ambiguïté que le rattachement direct n'a pas.
+2. Le calcul de bbox + la requête spatiale ont un coût qu'il est inutile de
+   payer pour les analyses déjà correctement rattachées (la grande majorité).
+
+**Pièges.**
+- *Un `numSection` peut apparaître plusieurs fois dans les plans* : une
+  section numérotée peut être découpée en plusieurs polygones/faces dans
+  `limite_section` (§ 11 quinquies), et le repli spatial peut en trouver
+  plusieurs pour le **même** numéro (parfois depuis des `sourceFichier`
+  différents, comme `039` trouvé à la fois dans le plan Thiès et
+  `section_rufisque.shp`). La clé React du sélecteur de sections
+  (`MapAnalysisClient.tsx`) doit donc être composite (`numSection` +
+  `sourceFichier` + index), pas `numSection` seul — et le compte « tout
+  sélectionné » doit comparer des ensembles de `numSection` **dédupliqués**,
+  pas la longueur brute de la liste des plans.
+- *`numSection` n'est pas une clé globale* : la même valeur (`"013"`, `"039"`)
+  désigne des sections différentes selon la commune — le filtre
+  `numSection = ANY(sections)` à l'application reste donc scopé à la bbox de
+  CETTE analyse, jamais à la table entière.
+- *Aucune commune 2026 trouvée dans l'emprise ⇒ retour au comportement
+  d'origine* : `unresolvedCount`, rien d'inventé — le repli spatial élargit
+  les sections candidates, mais ne contourne pas le garde-fou de § 11
+  quinquies/septies.
+
+**Fichiers · fonctions.** `src/lib/cadastre/nicad-fill-missing.ts`
+(`fillMissingNicadForAnalysis`, repli bbox spatial),
+`src/components/MapAnalysisClient.tsx` (badge « ⚠ autre fichier », clé
+composite du sélecteur, comparaison dédupliquée « tout sélectionner »).
+
+---
+
+## 11 nonies. KPI conformes/erreurs figé après une attribution NICAD : deux couches de fraîcheur
+
+**Problème métier.** Après avoir attribué des NICAD manquants sur une section
+(§ 11 quinquies-octies), le panneau gauche de `/map/[analysisId]` continuait
+d'afficher les compteurs d'AVANT la correction (constaté : 400 parcelles ·
+0 conformes · 400 erreurs, alors que 3 parcelles de la section 006 venaient de
+recevoir un NICAD et que leur erreur `MISSING_NICAD` était bien marquée
+`corrected = true` en base). Le symptôme survit même à un rechargement de
+page — pas un simple problème d'affichage React.
+
+**Cause technique — deux staleness indépendantes, pas une seule.**
+1. **Côté client (même session, sans recharger).** `conformeCount`/
+   `analysis.errorCount`, affichés dans `MapAnalysisClient.tsx`, sont calculés
+   une fois côté serveur à l'ouverture de la page et jamais recalculés après
+   une correction faite DANS cet onglet — ni par l'attribution NICAD, ni par
+   la correction manuelle d'une erreur (`handleCorrectError`), qui partagent
+   le même point faible.
+2. **Côté serveur (persistant, survit à un rechargement).** `Analysis.errorCount`
+   et `summaryStats` (dont `conformeCount`) sont des **instantanés** calculés
+   par `analyzeGeoJSON` à l'import puis au clic sur « Régénérer le rapport »
+   (`/api/analyses/[id]/regenerate-report`) — jamais mis à jour par
+   `fillMissingNicadForAnalysis`/`fillMissingNicadForSection`, qui ne
+   touchaient jusqu'ici que `correctedData` et `TopologicalError.corrected`.
+   Résultat : même après un rechargement complet, les compteurs restent faux
+   tant que personne ne clique explicitement sur « Régénérer le rapport » (qui,
+   de plus, relance l'analyse topologique complète — coûteux sur un gros DXF).
+
+**Solution.**
+- *Couche 1 (session)* — `MapAnalysisClient.tsx` : `displayConformeCount`/
+  `displayErrorCount` décalent les compteurs figés du nombre d'erreurs
+  corrigées depuis le chargement de la page (`correctedErrorIds.size`, déjà
+  utilisé ailleurs dans le composant pour l'opacité/barré de la liste
+  d'erreurs — même référence, pas un nouveau mécanisme parallèle).
+- *Couche 2 (persistance)* — `src/lib/cadastre/nicad-fill-missing.ts ·
+  patchAnalysisStatsAfterNicadFill` : appelée juste après qu'une transaction
+  de `fillMissingNicadFor{Section,Analysis}` a marqué des erreurs
+  `MISSING_NICAD` comme corrigées, elle **incrémente** directement
+  `Analysis.errorCount` et les compteurs `summaryStats`/`qgisControl`
+  concernés (`conformeCount`, `missingNicadCount`, `withNicadCount`, etc.),
+  sans relancer `analyzeGeoJSON` — un patch ciblé de quelques compteurs,
+  pas une réanalyse complète, pour rester bon marché même sur un DXF de
+  100k+ parcelles où `analyzeGeoJSON` prendrait un temps non négligeable.
+
+**`conformityScore` sans connaître la répartition par sévérité.** Le score
+dépend d'un `totalPenalty = critical×10 + high×5 + medium×2` (`geo-engine.ts ·
+analyzeGeoJSON`) ; `missing_nicad` est de sévérité `critical`. Reconstituer la
+répartition exacte demanderait de stocker le détail par sévérité (pas fait
+aujourd'hui). Solution : **inverser la formule** à partir du score déjà
+persisté plutôt que de la recalculer de zéro — en écartant le cas où le score
+est saturé par la double borne `max(0, min(100, ...))` :
+```
+ancienScore ≈ 100 − pénalité/totalFeatures×10   (si non saturé)
+⇒ nouveauScore = ancienScore + (nbErreursResolues / totalFeatures) × 100
+```
+Cette identité élimine le besoin de connaître `criticalErrors`/`highErrors`/
+`mediumErrors` séparément — seuls le score précédent et le nombre de features
+suffisent.
+
+**Pièges.**
+- *Approximation seulement si l'ancien score n'était pas saturé* : si le score
+  stocké était déjà à 0 (ou 100) à cause de la double borne alors que la
+  pénalité réelle allait au-delà, la formule inverse sous-estime légèrement le
+  score reconstruit — l'écart se résorbe de lui-même au fil des attributions
+  suivantes (le score remonte, cesse d'être saturé, redevient exact).
+- *Ne remplace pas « Régénérer le rapport »* : ce patch ne recalcule que les
+  compteurs affectés par une résolution `MISSING_NICAD` — un autre type
+  d'erreur (chevauchement, doublon, sliver) laissé en l'état ailleurs dans
+  l'analyse reste à la charge de la régénération complète si son propre
+  compteur dérive.
+- *Non transactionnel avec la correction elle-même* : comme l'écriture du
+  GeoJSON par clé (`writeGeoJsonByKey`), ce patch s'exécute **après** la
+  transaction Prisma qui marque les erreurs corrigées — fenêtre de
+  non-atomicité acceptée (même compromis que le reste du module), pas un
+  souci pratique pour une correction utilisateur ponctuelle.
+- *Rattrapage nécessaire pour les corrections faites AVANT ce patch* : les
+  attributions déjà appliquées quand ce mécanisme n'existait pas encore (cas
+  réel : section 006 de Keur Moussa, 3 parcelles) laissent `TopologicalError`
+  et `Analysis.errorCount`/`summaryStats` incohérents entre eux — un script
+  ponctuel a réappliqué la même logique après coup pour ces cas déjà traités.
+
+**Fichiers · fonctions.** `src/lib/cadastre/nicad-fill-missing.ts`
+(`patchAnalysisStatsAfterNicadFill`, appelée par `fillMissingNicadForSection`
+et `fillMissingNicadForAnalysis`), `src/components/MapAnalysisClient.tsx`
+(`displayConformeCount`/`displayErrorCount`), `src/app/api/analyses/[id]/regenerate-report/route.ts`
+(mécanisme de réanalyse complète existant, non modifié, toujours nécessaire
+pour les autres types d'erreurs).
+
+---
+
+## 11 decies. Point de départ du repli sans référence : coin nord-ouest, pas le centre
+
+**Problème métier.** Le repli § 11 septies (section sans aucune parcelle de
+référence) démarre le chaînage glouton au **centre géométrique** de la
+section (`turf.pointOnFeature`). Rien ne garantissait que ce choix corresponde
+à la façon dont un géomètre numérote réellement une section sur le terrain —
+question posée directement : « la parcelle 00001 est-elle plutôt au sud ? ».
+
+**Vérification empirique.** Échantillon de 15 sections **déjà numérotées par
+des humains** (donc jamais passées par cet algorithme), plusieurs communes/
+DXF distincts, ≥ 15 parcelles chacune — position de la parcelle portant le
+numéro `00001` par rapport à l'emprise (bbox) de sa section :
+
+| Coin le plus proche de `00001` | Sections |
+|---|---|
+| Nord-Ouest | 10 / 15 |
+| Nord-Est | 4 / 15 |
+| Sud-Est | 1 / 15 |
+| Sud-Ouest | **0 / 15** |
+
+Position moyenne dans l'emprise (0 = Sud-Ouest, 1 = Nord-Est) : **x ≈ 0.34,
+y ≈ 0.78** — nettement au nord, plutôt côté ouest. Aucune section
+échantillonnée n'avait sa première parcelle au sud-ouest : l'hypothèse
+« sud » est directement infirmée par la donnée réelle.
+
+**Solution** (`src/lib/cadastre/nicad-fill-missing.ts ·
+fillMissingNicadInFeatures`, branche repli) : le point utilisé pour la
+**jointure spatiale** (résoudre le Syscol via `cad_communes_2026`) reste un
+point garanti à l'intérieur du polygone (`representativePoint`, nécessaire
+pour `ST_Contains`) — mais le point de **départ du chaînage** devient le coin
+nord-ouest de la bbox de la section (`turf.bbox` → `[minX, maxY]`), pas ce
+même point intérieur. Le reste de l'algorithme (plus proche voisin glouton,
+§ 11 quinquies) est inchangé : c'est simplement la parcelle sans NICAD la plus
+proche de ce nouveau point de référence qui reçoit `00001`.
+
+**Pourquoi deux points différents plutôt qu'un seul.** Le point de départ du
+chaînage n'a pas besoin d'être à l'intérieur du polygone — il ne sert qu'à
+calculer des distances (`turf.distance`) vers les parcelles candidates. Le
+coin nord-ouest de la bbox peut très bien tomber hors d'une section à forme
+concave ou en L, sans que ça pose de problème : contrairement au point utilisé
+pour `getSyscols2026ForPoints` (qui DOIT être dans le polygone pour matcher la
+bonne commune), le point de chaînage ne fait qu'orienter le glouton vers le
+bon côté de la section.
+
+**Pièges.**
+- *`turf.bbox` renvoie `[minX, minY, maxX, maxY]`* : le coin nord-ouest est
+  `[minX, maxY]` (longitude minimale = ouest, latitude maximale = nord) — pas
+  `[minX, minY]` (ça, c'est le coin sud-ouest, exactement ce que la donnée
+  réelle exclut).
+- *Coin de bbox, pas point du terrain* : sur une section très irrégulière, ce
+  coin peut être loin de toute parcelle réelle — sans conséquence pratique
+  puisqu'il ne sert qu'à orienter la première comparaison de distances, la
+  parcelle choisie reste toujours une parcelle réelle de la section.
+- *N'affecte que le repli § 11 septies* : le cas courant (une parcelle de
+  référence existe déjà dans la section) garde son point de départ inchangé —
+  la position de la parcelle au numéro le plus élevé, pas un coin de bbox.
+
+**Fichiers · fonctions.** `src/lib/cadastre/nicad-fill-missing.ts`
+(`fillMissingNicadInFeatures`, branche repli commune 2026).
 
 ---
 
