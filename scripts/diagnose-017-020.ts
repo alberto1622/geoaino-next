@@ -76,9 +76,9 @@ async function main() {
         const ring = ringClosedOrNull(coords);
         network.push(ring ?? coords);
       };
-      if (geom.type === "Polygon") for (const r of geom.coordinates) push(r as Ring);
+      if (geom.type === "Polygon") for (const r of geom.coordinates as unknown as Ring[]) push(r);
       else if (geom.type === "MultiPolygon")
-        for (const p of geom.coordinates) for (const r of p) push(r as Ring);
+        for (const p of geom.coordinates as unknown as Ring[][]) for (const r of p) push(r);
       else if (geom.type === "LineString") push(geom.coordinates as Ring);
       else if (geom.type === "MultiLineString")
         for (const line of geom.coordinates as unknown as Ring[]) push(line);
