@@ -46,7 +46,7 @@ export async function POST(req: NextRequest, { params }: { params: Params }): Pr
 
   try {
     await prisma.$transaction(async (tx) => {
-      await revert(tx, entry.before);
+      await revert(tx, entry.before, entry.scopeKey);
       await tx.cadHistoryEntry.update({
         where: { id: entry.id },
         data: { restoredAt: new Date(), restoredBy: createdBy },

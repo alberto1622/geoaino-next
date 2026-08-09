@@ -14,6 +14,7 @@ import {
   deleteSectionsBySource,
   reinsertLimiteSections,
   reinsertLimiteSectionOverlaps,
+  updateSectionNumero,
   type LimiteSectionRow,
   type LimiteSectionOverlapRow,
 } from "@/lib/cadastre/sections-data";
@@ -33,6 +34,10 @@ export type HistoryAction =
 export interface SectionsDeleteSnapshot {
   sections: LimiteSectionRow[];
   overlaps: LimiteSectionOverlapRow[];
+}
+
+export interface SectionsNumeroSnapshot {
+  section: LimiteSectionRow;
 }
 
 /** Écrit une entrée d'historique — appeler DANS la même transaction que la
@@ -62,7 +67,11 @@ export async function recordHistory(
   });
 }
 
-export type RevertFn = (tx: Prisma.TransactionClient, before: unknown) => Promise<void>;
+export type RevertFn = (
+  tx: Prisma.TransactionClient,
+  before: unknown,
+  scopeKey: string | null,
+) => Promise<void>;
 
 async function revertDelete(tx: Prisma.TransactionClient, before: unknown): Promise<void> {
   const snapshot = before as SectionsDeleteSnapshot;
@@ -87,12 +96,23 @@ async function revertDelete(tx: Prisma.TransactionClient, before: unknown): Prom
   await reinsertLimiteSectionOverlaps(snapshot.overlaps, tx);
 }
 
-// Un handler par action instrumentée — grandit au fil des plans qui
-// instrumentent chacune des routes mutantes restantes (numero, correct,
-// correct-batch, merge, nicad-fill, map-delete, map-rename). Une action sans
-// handler ici ne peut pas encore être restaurée (la route restore répond 400).
+/** Restaure UNIQUEMENT `numSection` (et `updatedAt`) — ne rejoue pas une
+ * éventuelle resynchronisation NICAD déclenchée par le changement d'origine
+ * (`syncNicadForSectionChange`), limitation documentée dans le plan
+ * d'implémentation de cette action. */
+async function revertNumero(tx: Prisma.TransactionClient, before: unknown): Promise<void> {
+  const snapshot = before as SectionsNumeroSnapshot;
+  if (!snapshot?.section) {
+    throw new Error("Snapshot de numéro invalide — impossible de restaurer.");
+  }
+  await updateSectionNumero(snapshot.section.id, snapshot.section.numSection, tx);
+}
+
+// Un handler par action instrumentée. Une action sans handler ici ne peut pas
+// encore être restaurée (la route restore répond 400).
 const REVERT_HANDLERS: Partial<Record<string, RevertFn>> = {
-  delete: revertDelete,
+  delete: (tx, before) => revertDelete(tx, before),
+  numero: (tx, before) => revertNumero(tx, before),
 };
 
 export function getRevertHandler(action: string): RevertFn | undefined {
