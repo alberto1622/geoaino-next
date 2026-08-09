@@ -130,6 +130,7 @@ const REVERT_HANDLERS: Partial<Record<string, RevertFn>> = {
   numero: (tx, before) => revertNumero(tx, before),
   correct: (tx, before) => revertSectionsSnapshot(tx, before),
   "correct-batch": (tx, before) => revertSectionsSnapshot(tx, before),
+  merge: (tx, before) => revertSectionsSnapshot(tx, before),
 };
 
 export function getRevertHandler(action: string): RevertFn | undefined {
