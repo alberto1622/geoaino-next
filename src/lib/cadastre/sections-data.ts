@@ -148,9 +148,26 @@ export async function getOverlapsFullBySource(sourceFichier: string, db: Db = pr
   return rows.map(normalizeOverlapRow);
 }
 
-/** Réinsère des lignes `limite_section` avec leur id d'origine (restauration
- * d'historique). `ON CONFLICT DO NOTHING` : une restauration rejouée deux fois
- * ne doit pas échouer, juste ne rien changer la seconde fois. */
+/** Chevauchement complet (toutes colonnes) par id — snapshot pour l'historique
+ * de correction, à la différence de `getOverlap` qui ne renvoie que les
+ * champs utiles à la résolution. */
+export async function getOverlapFull(id: number, db: Db = prisma): Promise<LimiteSectionOverlapRow | null> {
+  const rows = await db.$queryRaw<RawOverlapRow[]>`
+    SELECT id, "sourceFichier", "sectionAId", "sectionBId", "intersectionGeoJson",
+           "overlapAreaM2", "status", "createdAt"
+    FROM "limite_section_overlap" WHERE id = ${id}
+  `;
+  const r = rows[0];
+  return r ? normalizeOverlapRow(r) : null;
+}
+
+/** Réinsère (ou remet à jour) des lignes `limite_section` avec leur id
+ * d'origine (restauration d'historique). `ON CONFLICT DO UPDATE` : la ligne
+ * peut avoir été supprimée entre-temps (revert de `delete`) OU exister encore
+ * avec des colonnes différentes (revert de `correct`/`merge`, où la section
+ * cible a été modifiée mais pas supprimée) — dans les deux cas, le résultat
+ * voulu est "cette ligne redevient exactement le snapshot". Idempotent : une
+ * restauration rejouée deux fois réécrit deux fois les mêmes valeurs. */
 export async function reinsertLimiteSections(rows: LimiteSectionRow[], db: Db = prisma): Promise<void> {
   for (const r of rows) {
     const geojson = JSON.stringify(r.geomGeoJson);
@@ -160,7 +177,17 @@ export async function reinsertLimiteSections(rows: LimiteSectionRow[], db: Db = 
         (id, "region","departement","commune","syscolCommune","numSection","surfaceM2",
          "geomGeoJson","geom","sourceFichier","createdAt","updatedAt")
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,${GEOM_FROM_GEOJSON("$8")},$9,$10,$11)
-      ON CONFLICT (id) DO NOTHING
+      ON CONFLICT (id) DO UPDATE SET
+        "region" = EXCLUDED."region",
+        "departement" = EXCLUDED."departement",
+        "commune" = EXCLUDED."commune",
+        "syscolCommune" = EXCLUDED."syscolCommune",
+        "numSection" = EXCLUDED."numSection",
+        "surfaceM2" = EXCLUDED."surfaceM2",
+        "geomGeoJson" = EXCLUDED."geomGeoJson",
+        "geom" = EXCLUDED."geom",
+        "sourceFichier" = EXCLUDED."sourceFichier",
+        "updatedAt" = EXCLUDED."updatedAt"
       `,
       r.id, r.region, r.departement, r.commune, r.syscolCommune, r.numSection, r.surfaceM2,
       geojson, r.sourceFichier, new Date(r.createdAt), new Date(r.updatedAt),
@@ -168,7 +195,10 @@ export async function reinsertLimiteSections(rows: LimiteSectionRow[], db: Db = 
   }
 }
 
-/** Réinsère des lignes `limite_section_overlap` avec leur id d'origine. */
+/** Réinsère (ou remet à jour) des lignes `limite_section_overlap` avec leur id
+ * d'origine — même raisonnement upsert que `reinsertLimiteSections` : le
+ * revert d'une action `ignore` cible un overlap dont seul le `status` a
+ * changé, la ligne existe toujours. */
 export async function reinsertLimiteSectionOverlaps(rows: LimiteSectionOverlapRow[], db: Db = prisma): Promise<void> {
   for (const r of rows) {
     await db.$executeRawUnsafe(
@@ -176,7 +206,13 @@ export async function reinsertLimiteSectionOverlaps(rows: LimiteSectionOverlapRo
       INSERT INTO "limite_section_overlap"
         (id, "sourceFichier","sectionAId","sectionBId","intersectionGeoJson","overlapAreaM2","status","createdAt")
       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8)
-      ON CONFLICT (id) DO NOTHING
+      ON CONFLICT (id) DO UPDATE SET
+        "sourceFichier" = EXCLUDED."sourceFichier",
+        "sectionAId" = EXCLUDED."sectionAId",
+        "sectionBId" = EXCLUDED."sectionBId",
+        "intersectionGeoJson" = EXCLUDED."intersectionGeoJson",
+        "overlapAreaM2" = EXCLUDED."overlapAreaM2",
+        "status" = EXCLUDED."status"
       `,
       r.id, r.sourceFichier, r.sectionAId, r.sectionBId, JSON.stringify(r.intersectionGeoJson), r.overlapAreaM2, r.status, new Date(r.createdAt),
     );
@@ -250,6 +286,7 @@ export async function listSections(sourceFichier: string | null): Promise<Sectio
 /** GeoJSON + lot d'une section (pour appliquer une correction géométrique ou attribuer un numéro). */
 export async function getSection(
   id: number,
+  db: Db = prisma,
 ): Promise<{
   geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon;
   sourceFichier: string;
@@ -257,7 +294,7 @@ export async function getSection(
   syscolCommune: string | null;
   commune: string | null;
 } | null> {
-  const rows = await prisma.$queryRaw<
+  const rows = await db.$queryRaw<
     Array<{
       geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon;
       sourceFichier: string;
@@ -275,9 +312,10 @@ export async function getSection(
 /** Sections par ids (fusion manuelle) — renvoyées dans l'ordre demandé. */
 export async function getSectionsByIds(
   ids: number[],
+  db: Db = prisma,
 ): Promise<Array<{ id: number; geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon; sourceFichier: string; numSection: string | null }>> {
   if (ids.length === 0) return [];
-  const rows = await prisma.$queryRaw<
+  const rows = await db.$queryRaw<
     Array<{ id: number | bigint; geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon; sourceFichier: string; numSection: string | null }>
   >`
     SELECT id, "geomGeoJson", "sourceFichier", "numSection"
@@ -287,14 +325,42 @@ export async function getSectionsByIds(
   return ids.map((id) => byId.get(id)).filter((r): r is NonNullable<typeof r> => r != null);
 }
 
+/** Lignes `limite_section` complètes par ids (fusion manuelle) — snapshot avant
+ * fusion, ordre préservé selon `ids` comme `getSectionsByIds`, à la différence
+ * que toutes les colonnes sont renvoyées (nécessaire pour restaurer). */
+export async function getSectionsFullByIds(ids: number[], db: Db = prisma): Promise<LimiteSectionRow[]> {
+  if (ids.length === 0) return [];
+  const rows = await db.$queryRaw<RawSectionRow[]>`
+    SELECT id, "region", "departement", "commune", "syscolCommune", "numSection",
+           "surfaceM2", "geomGeoJson", "sourceFichier", "createdAt", "updatedAt"
+    FROM "limite_section" WHERE id IN (${Prisma.join(ids)})
+  `;
+  const byId = new Map(rows.map((r) => [r.id, normalizeSectionRow(r)]));
+  return ids.map((id) => byId.get(id)).filter((r): r is LimiteSectionRow => r != null);
+}
+
+/** Chevauchements complets référençant au moins une des sections données —
+ * snapshot avant fusion/correction touchant plusieurs sections à la fois. */
+export async function getOverlapsForSections(ids: number[], db: Db = prisma): Promise<LimiteSectionOverlapRow[]> {
+  if (ids.length === 0) return [];
+  const rows = await db.$queryRaw<RawOverlapRow[]>`
+    SELECT id, "sourceFichier", "sectionAId", "sectionBId", "intersectionGeoJson",
+           "overlapAreaM2", "status", "createdAt"
+    FROM "limite_section_overlap"
+    WHERE "sectionAId" IN (${Prisma.join(ids)}) OR "sectionBId" IN (${Prisma.join(ids)})
+  `;
+  return rows.map(normalizeOverlapRow);
+}
+
 /** Met à jour la géométrie (GeoJSON + geom PostGIS) et la surface d'une section. */
 export async function updateSectionGeometry(
   id: number,
   geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon,
   surfaceM2: number,
+  db: Db = prisma,
 ): Promise<void> {
   const geojson = JSON.stringify(geomGeoJson);
-  await prisma.$executeRawUnsafe(
+  await db.$executeRawUnsafe(
     `
     UPDATE "limite_section"
     SET "geomGeoJson" = $2::jsonb,
@@ -328,9 +394,10 @@ export async function findSectionNumeroConflict(
   syscolCommune: string | null,
   numSection: string,
   excludeId: number,
+  db: Db = prisma,
 ): Promise<{ id: number; commune: string | null } | null> {
   if (!syscolCommune) return null;
-  const rows = await prisma.$queryRaw<Array<{ id: number | bigint; commune: string | null }>>`
+  const rows = await db.$queryRaw<Array<{ id: number | bigint; commune: string | null }>>`
     SELECT id, "commune" FROM "limite_section"
     WHERE "syscolCommune" = ${syscolCommune} AND "numSection" = ${numSection} AND id <> ${excludeId}
     LIMIT 1
@@ -339,9 +406,11 @@ export async function findSectionNumeroConflict(
   return r ? { id: Number(r.id), commune: r.commune } : null;
 }
 
-/** Attribue un numéro à une section (n'affecte pas la géométrie ni les chevauchements). */
-export async function updateSectionNumero(id: number, numSection: string): Promise<void> {
-  await prisma.$executeRaw`
+/** Attribue un numéro à une section (n'affecte pas la géométrie ni les
+ * chevauchements). `numSection: null` remet la section à l'état "sans
+ * numéro" — utilisé par le revert d'une action `numero`. */
+export async function updateSectionNumero(id: number, numSection: string | null, db: Db = prisma): Promise<void> {
+  await db.$executeRaw`
     UPDATE "limite_section" SET "numSection" = ${numSection}, "updatedAt" = now() WHERE id = ${id}
   `;
 }
@@ -406,8 +475,9 @@ export async function listOverlaps(sourceFichier: string | null): Promise<Overla
 /** Chevauchement seul (résolution d'une correction). */
 export async function getOverlap(
   id: number,
+  db: Db = prisma,
 ): Promise<{ id: number; sectionAId: number; sectionBId: number; sourceFichier: string; status: string } | null> {
-  const rows = await prisma.$queryRaw<
+  const rows = await db.$queryRaw<
     Array<{ id: number; sectionAId: number; sectionBId: number; sourceFichier: string; status: string }>
   >`
     SELECT id, "sectionAId", "sectionBId", "sourceFichier", "status"
@@ -418,8 +488,12 @@ export async function getOverlap(
 }
 
 /** Change le statut d'un chevauchement (ex. IGNORED). */
-export async function setOverlapStatus(id: number, status: "PENDING" | "RESOLVED" | "IGNORED"): Promise<void> {
-  await prisma.$executeRaw`UPDATE "limite_section_overlap" SET "status" = ${status} WHERE id = ${id}`;
+export async function setOverlapStatus(
+  id: number,
+  status: "PENDING" | "RESOLVED" | "IGNORED",
+  db: Db = prisma,
+): Promise<void> {
+  await db.$executeRaw`UPDATE "limite_section_overlap" SET "status" = ${status} WHERE id = ${id}`;
 }
 
 export interface SectionGeoItem {
