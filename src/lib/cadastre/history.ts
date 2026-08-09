@@ -108,11 +108,28 @@ async function revertNumero(tx: Prisma.TransactionClient, before: unknown): Prom
   await updateSectionNumero(snapshot.section.id, snapshot.section.numSection, tx);
 }
 
+/** Revert partagé par `correct`, `correct-batch` et `merge` — les trois
+ * n'écrivent jamais que des lignes `limite_section`/`limite_section_overlap`
+ * complètes dans `before` (même forme que `SectionsDeleteSnapshot`), donc le
+ * même "réinsère/upsère tout ce qui est capturé" suffit dans les trois cas.
+ * Contrairement à `revertDelete`, jamais de garde anti-duplication de lot :
+ * ces trois actions ne suppriment jamais un `sourceFichier` entier. */
+async function revertSectionsSnapshot(tx: Prisma.TransactionClient, before: unknown): Promise<void> {
+  const snapshot = before as SectionsDeleteSnapshot;
+  if (!Array.isArray(snapshot?.sections) || !Array.isArray(snapshot?.overlaps)) {
+    throw new Error("Snapshot invalide — impossible de restaurer.");
+  }
+  await reinsertLimiteSections(snapshot.sections, tx);
+  await reinsertLimiteSectionOverlaps(snapshot.overlaps, tx);
+}
+
 // Un handler par action instrumentée. Une action sans handler ici ne peut pas
 // encore être restaurée (la route restore répond 400).
 const REVERT_HANDLERS: Partial<Record<string, RevertFn>> = {
   delete: (tx, before) => revertDelete(tx, before),
   numero: (tx, before) => revertNumero(tx, before),
+  correct: (tx, before) => revertSectionsSnapshot(tx, before),
+  "correct-batch": (tx, before) => revertSectionsSnapshot(tx, before),
 };
 
 export function getRevertHandler(action: string): RevertFn | undefined {

@@ -1,7 +1,7 @@
 // src/app/api/cadastre/sections/correct-batch/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { applyOverlapCorrection, type OverlapAction } from "@/lib/cadastre/overlap-correction";
+import { applyOverlapCorrectionWithHistory, type OverlapAction } from "@/lib/cadastre/overlap-correction";
 import { refreshOverlaps, listSections, listOverlaps } from "@/lib/cadastre/sections-data";
 
 export const runtime = "nodejs";
@@ -25,7 +25,10 @@ interface BatchResult {
  * sections, un traitement parallèle pourrait lire une géométrie déjà
  * périmée par un item précédent du même lot. Continue même si un item
  * échoue (ex. section déjà supprimée par un item précédent) — `results`
- * distingue réussites/échecs, pas de rollback global du lot.
+ * distingue réussites/échecs, pas de rollback global du lot. Chaque item
+ * réussi capture + mute + enregistre son historique dans sa PROPRE
+ * transaction (`applyOverlapCorrectionWithHistory`) — un item raté ne fait
+ * disparaître ni la trace ni les mutations des items déjà réussis avant lui.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const session = await auth();
@@ -35,6 +38,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if ((session.user as { role?: string }).role !== "ADMIN") {
     return NextResponse.json({ error: "Opération réservée aux administrateurs" }, { status: 403 });
   }
+  const createdBy = (session.user as { id?: string }).id ?? null;
 
   let body: { overlapIds?: unknown; action?: string; sourceFichier?: string | null } = {};
   try {
@@ -64,7 +68,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const touchedSources = new Set<string>();
   for (const overlapId of overlapIds) {
     try {
-      const src = await applyOverlapCorrection(overlapId, action);
+      const src = await applyOverlapCorrectionWithHistory(overlapId, action, createdBy, "correct-batch");
       if (action !== "ignore") touchedSources.add(src);
       results.push({ overlapId, ok: true });
     } catch (err) {

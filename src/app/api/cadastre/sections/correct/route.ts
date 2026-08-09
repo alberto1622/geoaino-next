@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import {
-  applyOverlapCorrection,
+  applyOverlapCorrectionWithHistory,
   statusForOverlapError,
   type OverlapAction,
 } from "@/lib/cadastre/overlap-correction";
@@ -25,7 +25,9 @@ const SINGLE_CORRECT_ACTIONS = new Set<OverlapAction>([
 /**
  * POST /api/cadastre/sections/correct — résout un chevauchement entre deux
  * sections (une seule paire). Voir `applyOverlapCorrection` pour le détail
- * des actions. Renvoie les sections + chevauchements à jour du lot concerné.
+ * des actions. Capture + mutation + historique atomiques (cf.
+ * `applyOverlapCorrectionWithHistory`). Renvoie les sections + chevauchements
+ * à jour du lot concerné.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const session = await auth();
@@ -35,6 +37,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if ((session.user as { role?: string }).role !== "ADMIN") {
     return NextResponse.json({ error: "Opération réservée aux administrateurs" }, { status: 403 });
   }
+  const createdBy = (session.user as { id?: string }).id ?? null;
 
   let body: { overlapId?: number; action?: string } = {};
   try {
@@ -49,7 +52,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    const src = await applyOverlapCorrection(overlapId, action);
+    const src = await applyOverlapCorrectionWithHistory(overlapId, action, createdBy, "correct");
     if (action !== "ignore") {
       await refreshOverlaps(src);
     }
