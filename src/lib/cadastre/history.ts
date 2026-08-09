@@ -123,6 +123,39 @@ async function revertSectionsSnapshot(tx: Prisma.TransactionClient, before: unkn
   await reinsertLimiteSectionOverlaps(snapshot.overlaps, tx);
 }
 
+/** Revert de `nicad-fill` : réécrit `Analysis.correctedData`, les stats
+ * agrégées (`errorCount`/`conformityScore`/`summaryStats`) et remet
+ * `corrected = false` sur les `TopologicalError` que l'attribution avait
+ * résolues — une entrée par `Analysis` effectivement modifiée par l'appel
+ * d'origine (une section peut couvrir plusieurs tuiles/analyses). */
+async function revertNicadFill(tx: Prisma.TransactionClient, before: unknown): Promise<void> {
+  const snapshot = before as import("@/lib/cadastre/nicad-fill-missing").NicadFillSnapshot;
+  if (!Array.isArray(snapshot?.analyses)) {
+    throw new Error("Snapshot d'attribution NICAD invalide — impossible de restaurer.");
+  }
+  for (const entry of snapshot.analyses) {
+    await tx.analysis.update({
+      where: { id: entry.analysisId },
+      data: {
+        correctedData: entry.correctedGeoJsonBefore,
+        ...(entry.statsBefore
+          ? {
+              errorCount: entry.statsBefore.errorCount,
+              conformityScore: entry.statsBefore.conformityScore,
+              summaryStats: entry.statsBefore.summaryStats as Prisma.InputJsonValue,
+            }
+          : {}),
+      },
+    });
+    if (entry.resolvedErrorIds.length > 0) {
+      await tx.topologicalError.updateMany({
+        where: { id: { in: entry.resolvedErrorIds } },
+        data: { corrected: false },
+      });
+    }
+  }
+}
+
 // Un handler par action instrumentée. Une action sans handler ici ne peut pas
 // encore être restaurée (la route restore répond 400).
 const REVERT_HANDLERS: Partial<Record<string, RevertFn>> = {
@@ -131,6 +164,7 @@ const REVERT_HANDLERS: Partial<Record<string, RevertFn>> = {
   correct: (tx, before) => revertSectionsSnapshot(tx, before),
   "correct-batch": (tx, before) => revertSectionsSnapshot(tx, before),
   merge: (tx, before) => revertSectionsSnapshot(tx, before),
+  "nicad-fill": (tx, before) => revertNicadFill(tx, before),
 };
 
 export function getRevertHandler(action: string): RevertFn | undefined {

@@ -31,6 +31,8 @@
  */
 import * as turf from "@turf/turf";
 import { prisma } from "@/lib/prisma";
+import type { Db } from "@/lib/cadastre/sections-data";
+import type { Prisma } from "@prisma/client";
 import { loadGeoJsonFromKey, writeGeoJsonByKey } from "@/lib/geo-storage";
 import { extractNicad } from "@/lib/geo-engine";
 import { getSyscols2026ForPoints } from "@/lib/cadastre/data";
@@ -316,9 +318,10 @@ async function resolveMissingNicadErrors(
   analysisId: number,
   features: GeoFeature[],
   assignedIdx: number[],
+  db: Db = prisma,
 ): Promise<number[]> {
   if (assignedIdx.length === 0) return [];
-  const missingErrors = await prisma.topologicalError.findMany({
+  const missingErrors = await db.topologicalError.findMany({
     where: { analysisId, errorType: "MISSING_NICAD", corrected: false },
     select: { id: true, geometry: true },
   });
@@ -352,16 +355,31 @@ async function resolveMissingNicadErrors(
  * score était saturé à 0 par un pénalité déjà au-delà du plancher — se
  * corrige de lui-même au fil des attributions suivantes.
  */
+interface NicadFillStatsSnapshot {
+  errorCount: number;
+  conformityScore: string;
+  summaryStats: Prisma.JsonValue;
+}
+
+/** Comme avant, mais renvoie les valeurs PRÉ-patch (`null` si `resolvedCount <= 0`,
+ * cas où rien n'est modifié) — nécessaire pour capturer un `before` restaurable. */
 async function patchAnalysisStatsAfterNicadFill(
   analysisId: number,
   resolvedCount: number,
-): Promise<void> {
-  if (resolvedCount <= 0) return;
-  const analysis = await prisma.analysis.findUnique({
+  db: Db = prisma,
+): Promise<NicadFillStatsSnapshot | null> {
+  if (resolvedCount <= 0) return null;
+  const analysis = await db.analysis.findUnique({
     where: { id: analysisId },
     select: { errorCount: true, totalFeatures: true, conformityScore: true, summaryStats: true },
   });
-  if (!analysis) return;
+  if (!analysis) return null;
+
+  const statsBefore: NicadFillStatsSnapshot = {
+    errorCount: analysis.errorCount ?? 0,
+    conformityScore: String(analysis.conformityScore ?? "0"),
+    summaryStats: analysis.summaryStats,
+  };
 
   const prevStats = (analysis.summaryStats as Record<string, unknown> | null) ?? {};
   const prevQgis = (prevStats.qgisControl as Record<string, unknown> | null) ?? {};
@@ -391,7 +409,7 @@ async function patchAnalysisStatsAfterNicadFill(
     },
   };
 
-  await prisma.analysis.update({
+  await db.analysis.update({
     where: { id: analysisId },
     data: {
       errorCount: Math.max(0, (analysis.errorCount ?? 0) - resolvedCount),
@@ -399,13 +417,27 @@ async function patchAnalysisStatsAfterNicadFill(
       summaryStats: summaryStats as object,
     },
   });
+
+  return statsBefore;
+}
+
+export interface NicadFillAnalysisSnapshot {
+  analysisId: number;
+  correctedGeoJsonBefore: string;
+  resolvedErrorIds: number[];
+  statsBefore: NicadFillStatsSnapshot | null;
+}
+
+export interface NicadFillSnapshot {
+  analyses: NicadFillAnalysisSnapshot[];
 }
 
 export async function fillMissingNicadForSection(
   section: { geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon; sourceFichier: string },
   numSection: string,
   options: { dryRun: boolean },
-): Promise<NicadFillResult> {
+  db: Db = prisma,
+): Promise<{ result: NicadFillResult; snapshot: NicadFillSnapshot }> {
   const result: NicadFillResult = {
     analysesUpdated: 0,
     parcelsAssigned: 0,
@@ -414,13 +446,14 @@ export async function fillMissingNicadForSection(
     plans: [],
     unresolvedCount: 0,
   };
+  const snapshot: NicadFillSnapshot = { analyses: [] };
   const normalizedSection = normalizeSection(numSection) ?? numSection;
 
-  const analyses = await prisma.analysis.findMany({
+  const analyses = await db.analysis.findMany({
     where: { fileName: section.sourceFichier },
     select: { id: true, correctedData: true, geojsonKey: true, geoJsonData: true },
   });
-  if (analyses.length === 0) return result;
+  if (analyses.length === 0) return { result, snapshot };
 
   const sectionPoly = turf.feature(section.geomGeoJson);
 
@@ -466,23 +499,21 @@ export async function fillMissingNicadForSection(
 
     if (options.dryRun) continue;
 
-    const resolvedErrorIds = await resolveMissingNicadErrors(analysis.id, features, outcome.assignedIdx);
+    const resolvedErrorIds = await resolveMissingNicadErrors(analysis.id, features, outcome.assignedIdx, db);
 
     const correctedGeoJson = JSON.stringify(geoJson);
-    const txResults = await prisma.$transaction([
-      prisma.analysis.update({
-        where: { id: analysis.id },
-        data: { correctedData: correctedGeoJson },
-      }),
-      ...(resolvedErrorIds.length > 0
-        ? [
-            prisma.topologicalError.updateMany({
-              where: { id: { in: resolvedErrorIds } },
-              data: { corrected: true },
-            }),
-          ]
-        : []),
-    ]);
+    await db.analysis.update({
+      where: { id: analysis.id },
+      data: { correctedData: correctedGeoJson },
+    });
+    let resolvedCount = 0;
+    if (resolvedErrorIds.length > 0) {
+      const updateResult = await db.topologicalError.updateMany({
+        where: { id: { in: resolvedErrorIds } },
+        data: { corrected: true },
+      });
+      resolvedCount = updateResult.count;
+    }
     if (analysis.geojsonKey) {
       try {
         await writeGeoJsonByKey(analysis.geojsonKey, correctedGeoJson);
@@ -493,14 +524,21 @@ export async function fillMissingNicadForSection(
 
     result.analysesUpdated++;
     result.analysisIds.push(analysis.id);
-    if (resolvedErrorIds.length > 0) {
-      const resolvedCount = (txResults[1] as { count: number }).count;
+    let statsBefore: NicadFillStatsSnapshot | null = null;
+    if (resolvedCount > 0) {
       result.errorsResolved += resolvedCount;
-      await patchAnalysisStatsAfterNicadFill(analysis.id, resolvedCount);
+      statsBefore = await patchAnalysisStatsAfterNicadFill(analysis.id, resolvedCount, db);
     }
+
+    snapshot.analyses.push({
+      analysisId: analysis.id,
+      correctedGeoJsonBefore: raw,
+      resolvedErrorIds,
+      statsBefore,
+    });
   }
 
-  return result;
+  return { result, snapshot };
 }
 
 /**
