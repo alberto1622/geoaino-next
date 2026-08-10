@@ -156,6 +156,66 @@ async function revertNicadFill(tx: Prisma.TransactionClient, before: unknown): P
   }
 }
 
+export interface MapEditSnapshot {
+  correctedGeoJson: string;
+  errorPatches: { errorId: number; corrected: boolean }[];
+}
+
+/** Revert partagé par `map-delete` et `map-rename` — réécrit
+ * `Analysis.correctedData` avec le blob capturé AVANT l'édition et remet les
+ * `TopologicalError.corrected` visés à leur état d'alors. Même logique que la
+ * route déjà existante `/api/analyses/[id]/history/restore` (utilisée par
+ * l'annuler/rétablir en mémoire côté client) — dupliquée ici plutôt
+ * qu'appelée en HTTP, car ce revert doit s'exécuter DANS la transaction du
+ * generic restore route, pas dans un appel réseau séparé. `scopeKey` porte
+ * l'`Analysis.id` (cf. `String(analysisId)` posé par les routes d'édition à
+ * la capture) — sans lui, ce revert ne saurait pas QUELLE analyse réécrire. */
+async function revertMap(
+  tx: Prisma.TransactionClient,
+  before: unknown,
+  scopeKey: string | null,
+): Promise<void> {
+  const snapshot = before as MapEditSnapshot;
+  if (typeof snapshot?.correctedGeoJson !== "string" || !Array.isArray(snapshot.errorPatches)) {
+    throw new Error("Snapshot de modification carte invalide — impossible de restaurer.");
+  }
+  const analysisId = Number(scopeKey);
+  if (!Number.isInteger(analysisId)) {
+    throw new Error("scopeKey invalide pour une restauration carte (analysisId attendu).");
+  }
+
+  let totalFeatures: number | undefined;
+  try {
+    const parsed = JSON.parse(snapshot.correctedGeoJson) as { features?: unknown[] };
+    totalFeatures = Array.isArray(parsed.features) ? parsed.features.length : undefined;
+  } catch {
+    totalFeatures = undefined;
+  }
+
+  await tx.analysis.update({
+    where: { id: analysisId },
+    data: {
+      correctedData: snapshot.correctedGeoJson,
+      ...(totalFeatures != null ? { totalFeatures } : {}),
+    },
+  });
+
+  const correctedIds = snapshot.errorPatches.filter((p) => p.corrected).map((p) => p.errorId);
+  const uncorrectedIds = snapshot.errorPatches.filter((p) => !p.corrected).map((p) => p.errorId);
+  if (correctedIds.length > 0) {
+    await tx.topologicalError.updateMany({
+      where: { analysisId, id: { in: correctedIds } },
+      data: { corrected: true },
+    });
+  }
+  if (uncorrectedIds.length > 0) {
+    await tx.topologicalError.updateMany({
+      where: { analysisId, id: { in: uncorrectedIds } },
+      data: { corrected: false },
+    });
+  }
+}
+
 // Un handler par action instrumentée. Une action sans handler ici ne peut pas
 // encore être restaurée (la route restore répond 400).
 const REVERT_HANDLERS: Partial<Record<string, RevertFn>> = {
@@ -165,6 +225,8 @@ const REVERT_HANDLERS: Partial<Record<string, RevertFn>> = {
   "correct-batch": (tx, before) => revertSectionsSnapshot(tx, before),
   merge: (tx, before) => revertSectionsSnapshot(tx, before),
   "nicad-fill": (tx, before) => revertNicadFill(tx, before),
+  "map-delete": revertMap,
+  "map-rename": revertMap,
 };
 
 export function getRevertHandler(action: string): RevertFn | undefined {

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { loadGeoJsonFromKey, writeGeoJsonByKey } from "@/lib/geo-storage";
 import { resolveLocator, type GeoFeature, type Locator } from "@/lib/analyses/feature-locator";
-import { requireSession } from "@/lib/analyses/require-session";
+import { recordHistory, type MapEditSnapshot } from "@/lib/cadastre/history";
 
 type Params = Promise<{ id: string }>;
 
@@ -16,10 +17,18 @@ type GeoFC = { type: "FeatureCollection"; features: GeoFeature[] };
  * NICAD). L'édition est écrite dans `correctedData` (source lue par les tuiles
  * vectorielles), de façon cohérente avec le flux de correction des erreurs. Les
  * erreurs de topologie dont l'index est fourni sont marquées corrigées.
+ *
+ * Capture l'état AVANT édition (GeoJSON + statut `corrected` PRÉCÉDENT des
+ * erreurs ciblées) et l'enregistre comme entrée d'historique restaurable,
+ * dans la même transaction que l'écriture — cf.
+ * docs/superpowers/specs/2026-08-06-cadastre-history-restore-design.md.
  */
 export async function POST(req: NextRequest, { params }: { params: Params }) {
-  const unauthorized = await requireSession();
-  if (unauthorized) return unauthorized;
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
+  }
+  const createdBy = (session.user as { id?: string }).id ?? null;
 
   const { id } = await params;
   const analysisId = parseInt(id, 10);
@@ -74,20 +83,44 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
   const correctedGeoJson = JSON.stringify(geoJson);
   const errorIds = (body.errorIds ?? []).filter((n) => Number.isInteger(n));
 
-  await prisma.$transaction([
-    prisma.analysis.update({
+  await prisma.$transaction(async (tx) => {
+    const priorErrors =
+      errorIds.length > 0
+        ? await tx.topologicalError.findMany({
+            where: { analysisId, id: { in: errorIds } },
+            select: { id: true, corrected: true },
+          })
+        : [];
+
+    await tx.analysis.update({
       where: { id: analysisId },
       data: { correctedData: correctedGeoJson, totalFeatures: geoJson.features.length },
-    }),
-    ...(errorIds.length > 0
-      ? [
-          prisma.topologicalError.updateMany({
-            where: { analysisId, id: { in: errorIds } },
-            data: { corrected: true },
-          }),
-        ]
-      : []),
-  ]);
+    });
+    if (errorIds.length > 0) {
+      await tx.topologicalError.updateMany({
+        where: { analysisId, id: { in: errorIds } },
+        data: { corrected: true },
+      });
+    }
+
+    const before: MapEditSnapshot = {
+      correctedGeoJson: rawGeoJson,
+      errorPatches: priorErrors.map((e) => ({ errorId: e.id, corrected: e.corrected })),
+    };
+    const after: MapEditSnapshot = {
+      correctedGeoJson,
+      errorPatches: errorIds.map((eid) => ({ errorId: eid, corrected: true })),
+    };
+    await recordHistory(tx, {
+      scope: "map",
+      scopeKey: String(analysisId),
+      action: "map-delete",
+      summary: `Suppression de ${removed.size} parcelle(s) sur l'analyse #${analysisId}`,
+      before,
+      after,
+      createdBy,
+    });
+  });
 
   // Persiste aussi le GeoJSON de base (clé disque) quand il existe, pour que les
   // recalculs repartant de la source reflètent les suppressions. Hors transaction

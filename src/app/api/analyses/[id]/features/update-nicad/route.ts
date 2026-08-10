@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { loadGeoJsonFromKey, writeGeoJsonByKey } from "@/lib/geo-storage";
 import {
@@ -7,7 +8,7 @@ import {
   type GeoFeature,
   type Locator,
 } from "@/lib/analyses/feature-locator";
-import { requireSession } from "@/lib/analyses/require-session";
+import { recordHistory, type MapEditSnapshot } from "@/lib/cadastre/history";
 
 type Params = Promise<{ id: string }>;
 
@@ -22,10 +23,18 @@ type GeoFC = { type: "FeatureCollection"; features: GeoFeature[] };
  * `correctedData` (source des tuiles) comme le reste du flux d'édition ; si un
  * `errorId` (erreur DUPLICATE de cette occurrence) est fourni, il est marqué
  * corrigé.
+ *
+ * Capture l'état AVANT édition (GeoJSON + statut `corrected` PRÉCÉDENT de
+ * l'erreur ciblée) et l'enregistre comme entrée d'historique restaurable,
+ * dans la même transaction que l'écriture — cf.
+ * docs/superpowers/specs/2026-08-06-cadastre-history-restore-design.md.
  */
 export async function POST(req: NextRequest, { params }: { params: Params }) {
-  const unauthorized = await requireSession();
-  if (unauthorized) return unauthorized;
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
+  }
+  const createdBy = (session.user as { id?: string }).id ?? null;
 
   const { id } = await params;
   const analysisId = parseInt(id, 10);
@@ -73,20 +82,41 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
   const correctedGeoJson = JSON.stringify(geoJson);
   const errorId = Number.isInteger(body.errorId) ? (body.errorId as number) : null;
 
-  await prisma.$transaction([
-    prisma.analysis.update({
+  await prisma.$transaction(async (tx) => {
+    const priorError =
+      errorId !== null
+        ? await tx.topologicalError.findUnique({ where: { id: errorId }, select: { id: true, corrected: true } })
+        : null;
+
+    await tx.analysis.update({
       where: { id: analysisId },
       data: { correctedData: correctedGeoJson },
-    }),
-    ...(errorId !== null
-      ? [
-          prisma.topologicalError.updateMany({
-            where: { analysisId, id: errorId },
-            data: { corrected: true },
-          }),
-        ]
-      : []),
-  ]);
+    });
+    if (errorId !== null) {
+      await tx.topologicalError.updateMany({
+        where: { analysisId, id: errorId },
+        data: { corrected: true },
+      });
+    }
+
+    const before: MapEditSnapshot = {
+      correctedGeoJson: rawGeoJson,
+      errorPatches: priorError ? [{ errorId: priorError.id, corrected: priorError.corrected }] : [],
+    };
+    const after: MapEditSnapshot = {
+      correctedGeoJson,
+      errorPatches: errorId !== null ? [{ errorId, corrected: true }] : [],
+    };
+    await recordHistory(tx, {
+      scope: "map",
+      scopeKey: String(analysisId),
+      action: "map-rename",
+      summary: `Réassignation du NICAD ${nicad} sur l'analyse #${analysisId}`,
+      before,
+      after,
+      createdBy,
+    });
+  });
 
   // Persiste aussi le GeoJSON de base (clé disque) pour que les recalculs repartant
   // de la source reflètent la réassignation. Hors transaction (store non
