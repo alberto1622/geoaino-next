@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getRevertHandler, recordHistory, type HistoryScope } from "@/lib/cadastre/history";
+import { writeGeoJsonByKey } from "@/lib/geo-storage";
 
 export const runtime = "nodejs";
 
@@ -45,8 +46,8 @@ export async function POST(req: NextRequest, { params }: { params: Params }): Pr
   }
 
   try {
-    await prisma.$transaction(async (tx) => {
-      await revert(tx, entry.before, entry.scopeKey);
+    const diskWrites = await prisma.$transaction(async (tx) => {
+      const outcome = await revert(tx, entry.before, entry.scopeKey);
       await tx.cadHistoryEntry.update({
         where: { id: entry.id },
         data: { restoredAt: new Date(), restoredBy: createdBy },
@@ -60,10 +61,20 @@ export async function POST(req: NextRequest, { params }: { params: Params }): Pr
         after: entry.before,
         createdBy,
       });
+      return outcome?.diskWrites ?? [];
     }, {
       maxWait: 10_000,
       timeout: 120_000,
     });
+
+    for (const w of diskWrites) {
+      try {
+        await writeGeoJsonByKey(w.geojsonKey, w.content);
+      } catch {
+        /* ignore : correctedData (DB) reste la source d'affichage */
+      }
+    }
+
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("[cadastre/history/restore] POST", err);

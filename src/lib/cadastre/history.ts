@@ -67,11 +67,16 @@ export async function recordHistory(
   });
 }
 
+export interface RevertDiskWrite {
+  geojsonKey: string;
+  content: string;
+}
+
 export type RevertFn = (
   tx: Prisma.TransactionClient,
   before: unknown,
   scopeKey: string | null,
-) => Promise<void>;
+) => Promise<{ diskWrites?: RevertDiskWrite[] } | void>;
 
 async function revertDelete(tx: Prisma.TransactionClient, before: unknown): Promise<void> {
   const snapshot = before as SectionsDeleteSnapshot;
@@ -127,14 +132,21 @@ async function revertSectionsSnapshot(tx: Prisma.TransactionClient, before: unkn
  * agrégées (`errorCount`/`conformityScore`/`summaryStats`) et remet
  * `corrected = false` sur les `TopologicalError` que l'attribution avait
  * résolues — une entrée par `Analysis` effectivement modifiée par l'appel
- * d'origine (une section peut couvrir plusieurs tuiles/analyses). */
-async function revertNicadFill(tx: Prisma.TransactionClient, before: unknown): Promise<void> {
+ * d'origine (une section peut couvrir plusieurs tuiles/analyses). Comme
+ * `revertMap`, ne touche pas au disque elle-même : accumule une écriture en
+ * attente par `Analysis` ayant un `geojsonKey`, à flusher par l'appelant une
+ * fois la transaction commitée. */
+async function revertNicadFill(
+  tx: Prisma.TransactionClient,
+  before: unknown,
+): Promise<{ diskWrites?: RevertDiskWrite[] }> {
   const snapshot = before as import("@/lib/cadastre/nicad-fill-missing").NicadFillSnapshot;
   if (!Array.isArray(snapshot?.analyses)) {
     throw new Error("Snapshot d'attribution NICAD invalide — impossible de restaurer.");
   }
+  const diskWrites: RevertDiskWrite[] = [];
   for (const entry of snapshot.analyses) {
-    await tx.analysis.update({
+    const updated = await tx.analysis.update({
       where: { id: entry.analysisId },
       data: {
         correctedData: entry.correctedGeoJsonBefore,
@@ -147,6 +159,9 @@ async function revertNicadFill(tx: Prisma.TransactionClient, before: unknown): P
           : {}),
       },
     });
+    if (updated.geojsonKey) {
+      diskWrites.push({ geojsonKey: updated.geojsonKey, content: entry.correctedGeoJsonBefore });
+    }
     if (entry.resolvedErrorIds.length > 0) {
       await tx.topologicalError.updateMany({
         where: { id: { in: entry.resolvedErrorIds } },
@@ -154,6 +169,7 @@ async function revertNicadFill(tx: Prisma.TransactionClient, before: unknown): P
       });
     }
   }
+  return { diskWrites };
 }
 
 export interface MapEditSnapshot {
@@ -169,12 +185,20 @@ export interface MapEditSnapshot {
  * qu'appelée en HTTP, car ce revert doit s'exécuter DANS la transaction du
  * generic restore route, pas dans un appel réseau séparé. `scopeKey` porte
  * l'`Analysis.id` (cf. `String(analysisId)` posé par les routes d'édition à
- * la capture) — sans lui, ce revert ne saurait pas QUELLE analyse réécrire. */
+ * la capture) — sans lui, ce revert ne saurait pas QUELLE analyse réécrire.
+ *
+ * Ne réécrit PAS le fichier GeoJSON sur disque elle-même — la mutation
+ * `tx.analysis.update` doit rester DANS la transaction (atomique avec le
+ * reste du revert), alors que l'écriture disque doit se produire APRÈS son
+ * commit (même posture que `features/delete/route.ts` : le store fichier
+ * n'est pas transactionnel, un rollback ne doit jamais laisser un fichier
+ * en avance sur la DB). Renvoie donc l'écriture en attente à l'appelant, qui
+ * la exécute une fois la transaction résolue. */
 async function revertMap(
   tx: Prisma.TransactionClient,
   before: unknown,
   scopeKey: string | null,
-): Promise<void> {
+): Promise<{ diskWrites?: RevertDiskWrite[] }> {
   const snapshot = before as MapEditSnapshot;
   if (typeof snapshot?.correctedGeoJson !== "string" || !Array.isArray(snapshot.errorPatches)) {
     throw new Error("Snapshot de modification carte invalide — impossible de restaurer.");
@@ -192,7 +216,7 @@ async function revertMap(
     totalFeatures = undefined;
   }
 
-  await tx.analysis.update({
+  const updated = await tx.analysis.update({
     where: { id: analysisId },
     data: {
       correctedData: snapshot.correctedGeoJson,
@@ -214,6 +238,10 @@ async function revertMap(
       data: { corrected: false },
     });
   }
+
+  return updated.geojsonKey
+    ? { diskWrites: [{ geojsonKey: updated.geojsonKey, content: snapshot.correctedGeoJson }] }
+    : {};
 }
 
 // Un handler par action instrumentée. Une action sans handler ici ne peut pas

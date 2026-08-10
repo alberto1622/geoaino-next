@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { getSection } from "@/lib/cadastre/sections-data";
 import { fillMissingNicadForSection } from "@/lib/cadastre/nicad-fill-missing";
 import { recordHistory } from "@/lib/cadastre/history";
+import { writeGeoJsonByKey } from "@/lib/geo-storage";
 
 export const runtime = "nodejs";
 
@@ -64,7 +65,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ success: true, sectionId, dryRun: true, result });
     }
 
-    const { result } = await prisma.$transaction(
+    const { result, diskWrites } = await prisma.$transaction(
       async (tx) => {
         const out = await fillMissingNicadForSection(section, numSection, { dryRun: false }, tx);
         if (out.snapshot.analyses.length > 0) {
@@ -82,6 +83,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       },
       { maxWait: 10_000, timeout: 120_000 },
     );
+
+    for (const w of diskWrites) {
+      try {
+        await writeGeoJsonByKey(w.geojsonKey, w.content);
+      } catch {
+        /* ignore : correctedData reste la source d'affichage */
+      }
+    }
 
     return NextResponse.json({ success: true, sectionId, dryRun: false, result });
   } catch (err) {

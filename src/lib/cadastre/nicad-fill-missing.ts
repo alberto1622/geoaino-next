@@ -437,7 +437,11 @@ export async function fillMissingNicadForSection(
   numSection: string,
   options: { dryRun: boolean },
   db: Db = prisma,
-): Promise<{ result: NicadFillResult; snapshot: NicadFillSnapshot }> {
+): Promise<{
+  result: NicadFillResult;
+  snapshot: NicadFillSnapshot;
+  diskWrites: { geojsonKey: string; content: string }[];
+}> {
   const result: NicadFillResult = {
     analysesUpdated: 0,
     parcelsAssigned: 0,
@@ -447,13 +451,14 @@ export async function fillMissingNicadForSection(
     unresolvedCount: 0,
   };
   const snapshot: NicadFillSnapshot = { analyses: [] };
+  const diskWrites: { geojsonKey: string; content: string }[] = [];
   const normalizedSection = normalizeSection(numSection) ?? numSection;
 
   const analyses = await db.analysis.findMany({
     where: { fileName: section.sourceFichier },
     select: { id: true, correctedData: true, geojsonKey: true, geoJsonData: true },
   });
-  if (analyses.length === 0) return { result, snapshot };
+  if (analyses.length === 0) return { result, snapshot, diskWrites };
 
   const sectionPoly = turf.feature(section.geomGeoJson);
 
@@ -515,11 +520,7 @@ export async function fillMissingNicadForSection(
       resolvedCount = updateResult.count;
     }
     if (analysis.geojsonKey) {
-      try {
-        await writeGeoJsonByKey(analysis.geojsonKey, correctedGeoJson);
-      } catch {
-        /* ignore : correctedData reste la source d'affichage */
-      }
+      diskWrites.push({ geojsonKey: analysis.geojsonKey, content: correctedGeoJson });
     }
 
     result.analysesUpdated++;
@@ -538,7 +539,7 @@ export async function fillMissingNicadForSection(
     });
   }
 
-  return { result, snapshot };
+  return { result, snapshot, diskWrites };
 }
 
 /**
