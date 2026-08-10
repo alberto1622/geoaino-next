@@ -9,7 +9,7 @@
  * restauration est elle-même annulable. Cf.
  * docs/superpowers/specs/2026-08-06-cadastre-history-restore-design.md.
  */
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import {
   deleteSectionsBySource,
   reinsertLimiteSections,
@@ -142,7 +142,7 @@ async function revertNicadFill(tx: Prisma.TransactionClient, before: unknown): P
           ? {
               errorCount: entry.statsBefore.errorCount,
               conformityScore: entry.statsBefore.conformityScore,
-              summaryStats: entry.statsBefore.summaryStats as Prisma.InputJsonValue,
+              summaryStats: entry.statsBefore.summaryStats === null ? Prisma.DbNull : entry.statsBefore.summaryStats,
             }
           : {}),
       },
