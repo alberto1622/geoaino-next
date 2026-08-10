@@ -14,7 +14,7 @@ topologiquement et identifiées par un **NICAD**, stockées en **PostGIS**.
 | Document | Pour qui | Contenu |
 |---|---|---|
 | **[Support de cours — Géomatique, topologie & SIG](./SUPPORT-COURS-GEOMATIQUE.md)** | ingénieur·e de données, nouvel arrivant | cours complet ancré sur le code : projections, formats, polygonisation, topologie, NICAD, PostGIS, basculement 2013→2026, **+ glossaire** et **diagrammes Mermaid** |
-| **[Concepts de traitement — récupération & qualité des parcelles DXF](./CONCEPTS-TRAITEMENT-DXF.md)** | intervenant·e sur l'import DXF | retours de terrain sur les gros DXF cadastraux : diagnostic de fuite de parcelles, lecture des `3DFACE`, réparation `buffer(0)`, noding robuste (snap-rounding), dédoublonnage **coïncidence vs contenance** (enveloppes/îlots), nettoyage **MTEXT**, suppression manuelle, **table `limite_section`** (extraction sections + contrôle des chevauchements) |
+| **[Concepts de traitement — récupération & qualité des parcelles DXF](./CONCEPTS-TRAITEMENT-DXF.md)** | intervenant·e sur l'import DXF | retours de terrain sur les gros DXF cadastraux : diagnostic de fuite de parcelles, lecture des `3DFACE`, réparation `buffer(0)`, noding robuste (snap-rounding), dédoublonnage **coïncidence vs contenance** (enveloppes/îlots), nettoyage **MTEXT**, suppression manuelle, **table `limite_section`** (extraction sections + contrôle des chevauchements), **historique & restauration** des actions destructrices (upsert vs `DO NOTHING`, transaction par item pour un lot) |
 
 *(Cette page sera enrichie au fil de l'ajout de nouveaux documents. **Tout concept
 de traitement géométrique/géospatial/topologique vu doit être ajouté au document

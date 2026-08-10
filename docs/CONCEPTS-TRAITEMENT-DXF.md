@@ -40,6 +40,8 @@ est vu, il doit être ajouté ici (cf. règle dans `CLAUDE.md`).
     - [11 decies. Point de départ du repli sans référence : coin nord-ouest, pas le centre](#11-decies-point-de-départ-du-repli-sans-référence--coin-nord-ouest-pas-le-centre)
 12. [Annexe — compteurs du rapport & variables d'environnement](#12-annexe--compteurs-du-rapport--variables-denvironnement)
 13. [Correction groupée des chevauchements de sections : règle « auto » et ordre séquentiel](#13-correction-groupée-des-chevauchements-de-sections--règle--auto--et-ordre-séquentiel)
+14. [Historique & restauration : upsert au lieu de `DO NOTHING`](#14-historique--restauration--upsert-au-lieu-de-do-nothing)
+    - [14 bis. Historique par lot : une transaction par item, pas une transaction globale](#14-bis-historique-par-lot--une-transaction-par-item-pas-une-transaction-globale)
 
 ---
 
@@ -1774,6 +1776,96 @@ précédent du même lot (section supprimée car entièrement couverte) fait
 `docs/superpowers/specs/2026-07-30-decoupage-groupe-chevauchements-design.md`) :
 le rapport `results[]` distingue réussites/échecs plutôt que de bloquer tout
 le lot pour un seul cas déjà résolu par ailleurs.
+
+---
+
+## 14. Historique & restauration : upsert au lieu de `DO NOTHING`
+
+**Problème métier** : chaque action destructrice/mutante sur `limite_section`
+(suppression, correction de chevauchement, fusion, numérotation, attribution
+NICAD) capture un snapshot « avant » et l'enregistre dans `CadHistoryEntry`
+pour permettre une restauration (cf.
+`docs/superpowers/specs/2026-08-06-cadastre-history-restore-design.md`). Le
+revert réinsère les lignes capturées — mais la ligne ciblée n'a pas toujours
+disparu : une correction (`correct`, `ignore`) ou une fusion ne supprime
+qu'UNE des deux sections/chevauchements impliqués, l'autre reste en base avec
+des colonnes modifiées. Réinsérer avec `ON CONFLICT (id) DO NOTHING` (le
+comportement d'origine, pensé pour `delete` où la ligne a vraiment disparu)
+ignore silencieusement la restauration dans ce second cas : la ligne « existe
+déjà » du point de vue de Postgres, donc rien ne se passe, et l'utilisateur
+voit un restore qui répond succès sans avoir rien changé.
+
+**Cause technique** : `ON CONFLICT DO NOTHING` traite « la ligne existe » et
+« la ligne est déjà dans l'état voulu » comme équivalents. Ce n'est vrai que
+pour `delete` (id jamais réutilisé par la séquence Postgres → un conflit ne
+peut survenir qu'en rejouant deux fois la même restauration, cas où ne rien
+faire est effectivement le bon comportement). Pour `correct`/`correct-batch`/
+`merge`, un conflit signifie au contraire « la ligne existe mais avec de
+mauvaises valeurs » : c'est exactement le cas qu'il faut corriger, pas
+ignorer.
+
+**Solution** (`src/lib/cadastre/sections-data.ts` ·
+`reinsertLimiteSections`, `reinsertLimiteSectionOverlaps`) : les deux
+fonctions de réinsertion utilisées par tous les revert (`revertDelete`,
+`revertSectionsSnapshot`) sont passées de `ON CONFLICT (id) DO NOTHING` à
+`ON CONFLICT (id) DO UPDATE SET <toutes les colonnes> = EXCLUDED.<colonne>`.
+C'est une généralisation stricte, pas un changement de comportement pour
+`delete` : quand la ligne n'existe pas, `INSERT ... ON CONFLICT DO UPDATE` se
+comporte comme un `INSERT` normal (rien à mettre à jour, pas de conflit).
+Rejouer une restauration déjà appliquée reste idempotent : la deuxième fois,
+`DO UPDATE` réécrit les mêmes valeurs, résultat identique.
+
+**Pourquoi (pièges inclus)** : ce piège ne se voit qu'en testant le revert
+d'une action qui ne supprime PAS sa cible (ex. `correct` avec l'action
+`ignore` sur un chevauchement : seul son `status` passe à `IGNORED`, la ligne
+`limite_section_overlap` reste). Un test qui ne couvre que `delete` (où la
+ligne disparaît vraiment) ne détecte jamais cette régression — c'est
+pourquoi le plan d'implémentation de cette fonctionnalité exige un scénario
+de vérification manuel dédié à `ignore` (restaurer et confirmer que le
+`status` revient bien à `PENDING`), en plus du scénario `delete`.
+
+### 14 bis. Historique par lot : une transaction par item, pas une transaction globale
+
+**Problème métier** : `correct-batch` applique la même règle de résolution à
+plusieurs chevauchements en une requête, et son comportement documenté est de
+**continuer même si un item échoue** (ex. une section déjà supprimée par un
+item précédent du même lot) — pas de rollback global sur un lot de 50 dont un
+seul item est en échec. Mais chaque item qui *réussit* doit quand même
+laisser une trace restaurable individuelle, comme n'importe quelle autre
+action mutante du même système d'historique.
+
+**Cause technique** : ces deux exigences sont contradictoires si on les
+implémente naïvement avec UNE transaction pour tout le lot. Une transaction
+unique (`prisma.$transaction(async (tx) => { for (...) {...} })`) garantit
+soit que tout le lot est validé, soit que tout le lot est annulé dès la
+première erreur (all-or-nothing) — ce qui casserait silencieusement la
+tolérance aux échecs partiels déjà documentée et voulue pour ce endpoint.
+
+**Solution** (`src/lib/cadastre/overlap-correction.ts` ·
+`applyOverlapCorrectionWithHistory`, `src/app/api/cadastre/sections/correct-batch/route.ts`) :
+chaque item du lot obtient sa **propre** transaction (capture snapshot →
+mutation → `recordHistory`), via la même fonction partagée
+`applyOverlapCorrectionWithHistory` qu'utilise la route à chevauchement
+unique `correct/route.ts`. La route `correct-batch` boucle
+**séquentiellement** (`for...of`, cf. §13) sur la liste des `overlapId`,
+appelle cette fonction pour chacun, et catch l'erreur par item sans
+interrompre la boucle : `results[]` distingue réussites/échecs, exactement
+comme avant. Résultat : un lot de 50 corrections peut produire jusqu'à 50
+entrées d'historique indépendamment restaurables, taguées
+`action: "correct-batch"` (plutôt que `"correct"`) pour distinguer leur
+origine dans l'audit, mais partageant le même handler de revert
+(`revertSectionsSnapshot`) que l'action `correct` unitaire.
+
+**Pourquoi (pièges inclus)** : la tentation naturelle est d'ouvrir UNE
+transaction par appel HTTP (« c'est plus simple, une seule connexion »).
+C'est le bon réflexe pour une action qui *doit* être all-or-nothing (ex.
+`numero`, `merge` — une seule paire modifiée, aucune raison d'accepter un
+état à moitié appliqué), mais c'est un piège pour un endpoint qui a
+explicitement documenté un contrat de tolérance aux pannes partielles : la
+transaction globale semble plus « sûre » mais viole en réalité le contrat
+déjà en place. La règle générale : la granularité de la transaction doit
+suivre la granularité du contrat métier déjà documenté pour l'endpoint, pas
+une préférence de simplicité d'implémentation.
 
 ---
 
