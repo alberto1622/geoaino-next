@@ -59,8 +59,18 @@ function propByAlias(props: Record<string, unknown>, ...aliases: string[]): unkn
   return undefined;
 }
 
-/** Numéro de section : mêmes alias d'attributs que l'import shapefile du module Cadastre. */
-function extractNumSection(props: Record<string, unknown>): string | null {
+/**
+ * Numéro de section : priorité à la colonne mappée par l'utilisateur
+ * (`FieldMappingModal`), repli sur les mêmes alias d'attributs que l'import
+ * shapefile du module Cadastre si non mappée ou absente de la feature.
+ */
+function extractNumSection(props: Record<string, unknown>, mappedColumn?: string): string | null {
+  if (mappedColumn) {
+    const raw = props[mappedColumn];
+    const digits = raw !== undefined && raw !== null ? String(raw).replace(/\D/g, "") : "";
+    if (digits.length === 11) return digits.substring(8, 11);
+    if (digits) return digits.padStart(3, "0");
+  }
   const numSectN = propByAlias(props, "num_sect_n");
   if (numSectN && String(numSectN).replace(/\D/g, "").length === 11) {
     return String(numSectN).replace(/\D/g, "").substring(8, 11);
@@ -126,6 +136,7 @@ export interface ShapefileInput {
 /** Lit un shapefile (.shp requis, .dbf pour les attributs) et construit les candidates de section. */
 export async function sectionCandidatesFromShapefile(
   files: ShapefileInput[],
+  fieldMapping?: { numSection?: string },
 ): Promise<SectionCandidate[]> {
   const shp = files.find((f) => f.name.toLowerCase().endsWith(".shp"));
   const dbf = files.find((f) => f.name.toLowerCase().endsWith(".dbf"));
@@ -152,7 +163,7 @@ export async function sectionCandidatesFromShapefile(
       const geom = toClosedPolyGeom(convertGeometryToWgs84(feature.geometry));
       if (!geom) continue;
       const props = (feature.properties ?? {}) as Record<string, unknown>;
-      const numSection = extractNumSection(props);
+      const numSection = extractNumSection(props, fieldMapping?.numSection);
       if (!numSection) {
         if (nbPolygonesSansNumero === 0) {
           console.warn(
@@ -165,7 +176,7 @@ export async function sectionCandidatesFromShapefile(
       continue;
     }
     if (geomType === "LineString" || geomType === "MultiLineString") {
-      const numSection = extractNumSection((feature.properties ?? {}) as Record<string, unknown>);
+      const numSection = extractNumSection((feature.properties ?? {}) as Record<string, unknown>, fieldMapping?.numSection);
       if (!numSection) {
         nbLignesSansNumero++;
         continue;
