@@ -30,9 +30,9 @@ export const PARCELLE_TARGET_FIELDS: TargetFieldDef[] = [
   { key: "quartier", label: "Quartier", aliases: ["quartier", "nom_quart"] },
   { key: "numLot", label: "N° de lot", aliases: ["numlot", "num_lot"] },
   { key: "titreParce", label: "Dénomination (titre)", aliases: ["titreparce", "titre_parc"] },
-  { key: "typeDocFon", label: "Type de document foncier", aliases: ["typedocfon", "type_doc"] },
+  { key: "typeDocFon", label: "Type de document foncier", aliases: ["typedocfon", "type_doc", "typedoc"] },
   { key: "natJuri", label: "Nature juridique", aliases: ["natjuri", "nat_juri"] },
-  { key: "typeDestin", label: "Type de destination", aliases: ["typedestin", "type_dest"] },
+  { key: "typeDestin", label: "Type de destination", aliases: ["typedestin", "type_dest", "typedest"] },
   { key: "catOcup", label: "Catégorie d'occupation", aliases: ["catocup", "cat_ocup"] },
   { key: "superficie", label: "Superficie", aliases: ["suplegale", "supreelle", "superficie", "shape_area"] },
   { key: "proprietaire", label: "Propriétaire", aliases: ["titulaired", "occupant", "nomproprietaire"] },
@@ -40,7 +40,7 @@ export const PARCELLE_TARGET_FIELDS: TargetFieldDef[] = [
 
 export const CAD_SECTION_TARGET_FIELDS: TargetFieldDef[] = [
   { key: "numSectionCode", label: "Code section (11 chiffres, syscol+section)", aliases: ["num_sect_n"], required: true },
-  { key: "nomSection", label: "Nom de la section", aliases: ["nom_sect", "nomsect", "nom_section"] },
+  { key: "nomSection", label: "Nom de la section", aliases: ["nom_sect", "nomsect", "nom_section", "nomsection", "name"] },
   { key: "nomCommune", label: "Commune", aliases: ["com_arrond", "nomcommune", "nom_commun", "nom"] },
   { key: "region", label: "Région", aliases: ["region"] },
   { key: "departement", label: "Département/Arrondissement", aliases: ["arrondisse", "departement"] },
