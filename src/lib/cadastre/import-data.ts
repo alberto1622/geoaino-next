@@ -6,6 +6,13 @@
 import { prisma } from "@/lib/prisma";
 import * as shapefile from "shapefile";
 import proj4 from "proj4";
+import type { FieldMapping } from "@/lib/import/field-mapping";
+
+/** Lit un champ via le mappage utilisateur si présent, sinon `undefined` (repli sur la devinette d'alias historique). */
+function mapped(props: Record<string, unknown>, fieldMapping: FieldMapping | undefined, key: string): unknown {
+  const col = fieldMapping?.[key];
+  return col ? props[col] : undefined;
+}
 
 // Projection UTM Zone 28N (WGS84) — utilisée par les shapefiles cadastraux sénégalais
 const UTM28N = "+proj=utm +zone=28 +datum=WGS84 +units=m +no_defs";
@@ -352,28 +359,29 @@ export async function importCommunes2026(fichiers: FichierInput[]): Promise<Impo
 }
 
 // ─── Import Sections ──────────────────────────────────────────────────────────
-export async function importSections(fichiers: FichierInput[]): Promise<ImportResult> {
+export async function importSectionsFromFeatures(
+  features: GeoJSON.Feature[],
+  fieldMapping: FieldMapping | undefined,
+  onProgress?: (done: number, total: number) => Promise<void> | void,
+): Promise<ImportResult> {
   const warnings: string[] = [];
   let nbImportes = 0;
   let nbIgnores = 0;
   let nbErreurs = 0;
+  const total = features.length;
 
-  const geojson = await resolveGeoJSON(fichiers);
-  if (!geojson) {
-    throw new Error("Format non reconnu. Fournissez un shapefile (.shp + .dbf) ou GeoJSON (.geojson)");
-  }
-  const features = geojson.type === "FeatureCollection" ? geojson.features : [geojson];
-
-  for (const feature of features) {
+  for (let i = 0; i < features.length; i++) {
+    const feature = features[i];
     try {
-      const props = feature.properties ?? {};
-      const numSectN = props.Num_sect_N ?? props.NUM_SECT_N ?? "";
+      const props = (feature.properties ?? {}) as Record<string, unknown>;
+      const numSectN =
+        mapped(props, fieldMapping, "numSectionCode") ?? props.Num_sect_N ?? props.NUM_SECT_N ?? "";
       const numSectioRaw =
         props.Num_sectio ?? props.NUM_SECTIO ?? props.Num_sect ?? props.NUM_SECT ?? props.NUMSECT ?? props.numSection ?? props.NUM_SECTION ?? props.SECTION ?? "";
-      const nomSection = props.NOM_SECT ?? props.NOMSECT ?? props.nomSection ?? props.NOM_SECTION ?? props.NAME ?? "";
-      const nomCommune = props.COM_ARROND ?? props.NomCommune ?? props.NOM_COMMUN ?? props.NOM ?? props.nom ?? "";
-      const region = props.REGION ?? props.region ?? "";
-      const departement = props.ARRONDISSE ?? props.DEPARTEMENT ?? props.departement ?? "";
+      const nomSection = mapped(props, fieldMapping, "nomSection") ?? props.NOM_SECT ?? props.NOMSECT ?? props.nomSection ?? props.NOM_SECTION ?? props.NAME ?? "";
+      const nomCommune = mapped(props, fieldMapping, "nomCommune") ?? props.COM_ARROND ?? props.NomCommune ?? props.NOM_COMMUN ?? props.NOM ?? props.nom ?? "";
+      const region = mapped(props, fieldMapping, "region") ?? props.REGION ?? props.region ?? "";
+      const departement = mapped(props, fieldMapping, "departement") ?? props.ARRONDISSE ?? props.DEPARTEMENT ?? props.departement ?? "";
 
       let syscolPadded = "";
       let numSectionPadded = "";
@@ -382,7 +390,10 @@ export async function importSections(fichiers: FichierInput[]): Promise<ImportRe
         syscolPadded = code11.substring(0, 8);
         numSectionPadded = code11.substring(8, 11);
       } else {
-        const syscolRaw = props.COD_SYSCOL ?? props.Syscol ?? props.SYSCOL ?? props.syscol ?? props.COMMUNE_SYS ?? "";
+        const syscolRaw = (props.COD_SYSCOL ?? props.Syscol ?? props.SYSCOL ?? props.syscol ?? props.COMMUNE_SYS ?? "") as
+          | string
+          | number
+          | undefined;
         if (!syscolRaw || !numSectioRaw) {
           nbIgnores++;
           continue;
@@ -403,8 +414,8 @@ export async function importSections(fichiers: FichierInput[]): Promise<ImportRe
         await prisma.cadSection.update({
           where: { id: existingSection.id },
           data: {
-            nomSection: nomSection || undefined,
-            nomCommune: nomCommune || undefined,
+            nomSection: nomSection ? String(nomSection) : undefined,
+            nomCommune: nomCommune ? String(nomCommune) : undefined,
             geojson: geomStr ?? undefined,
           },
         });
@@ -413,10 +424,10 @@ export async function importSections(fichiers: FichierInput[]): Promise<ImportRe
           data: {
             syscolCommune: syscolPadded,
             numSection: numSectionPadded,
-            nomSection: nomSection || undefined,
-            nomCommune: nomCommune || undefined,
-            region: region || undefined,
-            departement: departement || undefined,
+            nomSection: nomSection ? String(nomSection) : undefined,
+            nomCommune: nomCommune ? String(nomCommune) : undefined,
+            region: region ? String(region) : undefined,
+            departement: departement ? String(departement) : undefined,
             version: "2013",
             geojson: geomStr ?? undefined,
           },
@@ -427,30 +438,42 @@ export async function importSections(fichiers: FichierInput[]): Promise<ImportRe
       nbErreurs++;
       if (nbErreurs <= 5) warnings.push(`Erreur feature: ${err instanceof Error ? err.message : String(err)}`);
     }
+    if (onProgress && (i % 100 === 0 || i === total - 1)) await onProgress(i + 1, total);
   }
   return { nbImportes, nbIgnores, nbErreurs, warnings };
 }
 
-// ─── Import Parcelles ─────────────────────────────────────────────────────────
-export async function importParcelles(fichiers: FichierInput[]): Promise<ImportResult> {
-  const warnings: string[] = [];
-  let nbImportes = 0;
-  let nbIgnores = 0;
-  let nbErreurs = 0;
-
+export async function importSections(fichiers: FichierInput[]): Promise<ImportResult> {
   const geojson = await resolveGeoJSON(fichiers);
   if (!geojson) {
     throw new Error("Format non reconnu. Fournissez un shapefile (.shp + .dbf) ou GeoJSON (.geojson)");
   }
   const features = geojson.type === "FeatureCollection" ? geojson.features : [geojson];
+  return importSectionsFromFeatures(features, undefined);
+}
+
+// ─── Import Parcelles ─────────────────────────────────────────────────────────
+export async function importParcellesFromFeatures(
+  features: GeoJSON.Feature[],
+  fieldMapping: FieldMapping | undefined,
+  onProgress?: (done: number, total: number) => Promise<void> | void,
+): Promise<ImportResult> {
+  const warnings: string[] = [];
+  let nbImportes = 0;
+  let nbIgnores = 0;
+  let nbErreurs = 0;
+  const total = features.length;
 
   for (let i = 0; i < features.length; i++) {
     const feature = features[i];
     try {
-      const props = feature.properties ?? {};
-      const nicadRaw = String(props.nicad ?? props.NICAD ?? "").replace(/\D/g, "");
-      const codesectio = String(props.Codesectio ?? props.CODESECTIO ?? props.COD_SECT ?? "").replace(/\D/g, "");
-      const numParcelleRaw = props.numParcell ?? props.NUM_PARCE ?? props.NUMPARCE ?? props.numParcelle ?? "";
+      const props = (feature.properties ?? {}) as Record<string, unknown>;
+      const nicadRaw = String(mapped(props, fieldMapping, "nicad") ?? props.nicad ?? props.NICAD ?? "").replace(/\D/g, "");
+      const codesectio = String(
+        mapped(props, fieldMapping, "codeSection") ?? props.Codesectio ?? props.CODESECTIO ?? props.COD_SECT ?? "",
+      ).replace(/\D/g, "");
+      const numParcelleRaw =
+        mapped(props, fieldMapping, "numParcelle") ?? props.numParcell ?? props.NUM_PARCE ?? props.NUMPARCE ?? props.numParcelle ?? "";
 
       let syscolPadded = "";
       let numSectionPadded = "";
@@ -469,7 +492,10 @@ export async function importParcelles(fichiers: FichierInput[]): Promise<ImportR
           ? String(numParcelleRaw).replace(/\D/g, "").padStart(5, "0")
           : String(i + 1).padStart(5, "0");
       } else {
-        const syscolRaw = props.COD_SYSCOL ?? props.Syscol ?? props.SYSCOL ?? props.syscol ?? props.COMMUNE_SYS ?? "";
+        const syscolRaw = (props.COD_SYSCOL ?? props.Syscol ?? props.SYSCOL ?? props.syscol ?? props.COMMUNE_SYS ?? "") as
+          | string
+          | number
+          | undefined;
         if (!syscolRaw) {
           nbIgnores++;
           continue;
@@ -486,18 +512,18 @@ export async function importParcelles(fichiers: FichierInput[]): Promise<ImportR
         continue;
       }
 
-      const nomCommune = props.commune ?? props.NomCommune ?? props.NOM_COMMUN ?? props.NOM ?? "";
-      const region = props.region ?? props.REGION ?? "";
-      const departement = props.departemen ?? props.DEPARTEMENT ?? props.departement ?? "";
-      const quartier = props.Quartier ?? props.QUARTIER ?? props.quartier ?? props.NOM_QUART ?? "";
-      const numLot = props.NumLot ?? props.NUM_LOT ?? props.NUMLOT ?? props.numLot ?? "";
-      const titreParce = props.TitreParce ?? props.TITRE_PARC ?? props.TITREPARCE ?? props.titreParce ?? "";
-      const typeDocFon = props.TypeDocFon ?? props.TYPE_DOC ?? props.TYPEDOC ?? props.typeDocFon ?? "";
-      const natJuri = props.NatJuri ?? props.NAT_JURI ?? props.NATJURI ?? props.natJuri ?? "";
-      const typeDestin = props.TypeDestin ?? props.TYPE_DEST ?? props.TYPEDEST ?? props.typeDestin ?? "";
-      const catOcup = props.CatOcup ?? props.CAT_OCUP ?? props.CATOCUP ?? props.catOcup ?? "";
-      const superficie = props.SupLegale ?? props.SupReelle ?? props.SUPERFICIE ?? props.superficie ?? props.Shape_Area ?? "";
-      const nomProprietaire = props.TitulaireD ?? props.Occupant ?? props.nomProprietaire ?? "";
+      const nomCommune = mapped(props, fieldMapping, "commune") ?? props.commune ?? props.NomCommune ?? props.NOM_COMMUN ?? props.NOM ?? "";
+      const region = mapped(props, fieldMapping, "region") ?? props.region ?? props.REGION ?? "";
+      const departement = mapped(props, fieldMapping, "departement") ?? props.departemen ?? props.DEPARTEMENT ?? props.departement ?? "";
+      const quartier = mapped(props, fieldMapping, "quartier") ?? props.Quartier ?? props.QUARTIER ?? props.quartier ?? props.NOM_QUART ?? "";
+      const numLot = mapped(props, fieldMapping, "numLot") ?? props.NumLot ?? props.NUM_LOT ?? props.NUMLOT ?? props.numLot ?? "";
+      const titreParce = mapped(props, fieldMapping, "titreParce") ?? props.TitreParce ?? props.TITRE_PARC ?? props.TITREPARCE ?? props.titreParce ?? "";
+      const typeDocFon = mapped(props, fieldMapping, "typeDocFon") ?? props.TypeDocFon ?? props.TYPE_DOC ?? props.TYPEDOC ?? props.typeDocFon ?? "";
+      const natJuri = mapped(props, fieldMapping, "natJuri") ?? props.NatJuri ?? props.NAT_JURI ?? props.NATJURI ?? props.natJuri ?? "";
+      const typeDestin = mapped(props, fieldMapping, "typeDestin") ?? props.TypeDestin ?? props.TYPE_DEST ?? props.TYPEDEST ?? props.typeDestin ?? "";
+      const catOcup = mapped(props, fieldMapping, "catOcup") ?? props.CatOcup ?? props.CAT_OCUP ?? props.CATOCUP ?? props.catOcup ?? "";
+      const superficie = mapped(props, fieldMapping, "superficie") ?? props.SupLegale ?? props.SupReelle ?? props.SUPERFICIE ?? props.superficie ?? props.Shape_Area ?? "";
+      const nomProprietaire = mapped(props, fieldMapping, "proprietaire") ?? props.TitulaireD ?? props.Occupant ?? props.nomProprietaire ?? "";
 
       const geomConverted = feature.geometry ? convertGeometryToWgs84(feature.geometry) : null;
       const geomStr = geomConverted ? JSON.stringify(geomConverted) : null;
@@ -512,17 +538,17 @@ export async function importParcelles(fichiers: FichierInput[]): Promise<ImportR
           version: "2013",
           statut: nicadCode ? "actif" : "sans_nicad",
           nicad: nicadCode || undefined,
-          nomCommune: nomCommune || undefined,
-          region: region || undefined,
-          departement: departement || undefined,
-          quartier: quartier || undefined,
-          numLot: numLot || undefined,
-          titreParce: titreParce || undefined,
-          typeDocFon: typeDocFon || undefined,
-          natJuri: natJuri || undefined,
-          typeDestin: typeDestin || undefined,
-          catOcup: catOcup || undefined,
-          nomProprietaire: nomProprietaire || undefined,
+          nomCommune: nomCommune ? String(nomCommune) : undefined,
+          region: region ? String(region) : undefined,
+          departement: departement ? String(departement) : undefined,
+          quartier: quartier ? String(quartier) : undefined,
+          numLot: numLot ? String(numLot) : undefined,
+          titreParce: titreParce ? String(titreParce) : undefined,
+          typeDocFon: typeDocFon ? String(typeDocFon) : undefined,
+          natJuri: natJuri ? String(natJuri) : undefined,
+          typeDestin: typeDestin ? String(typeDestin) : undefined,
+          catOcup: catOcup ? String(catOcup) : undefined,
+          nomProprietaire: nomProprietaire ? String(nomProprietaire) : undefined,
           superficie: superficieNum && !isNaN(superficieNum) ? superficieNum : undefined,
           geojson: geomStr ?? undefined,
           longitude: centroid ? centroid.lon : undefined,
@@ -534,8 +560,18 @@ export async function importParcelles(fichiers: FichierInput[]): Promise<ImportR
       nbErreurs++;
       if (nbErreurs <= 5) warnings.push(`Erreur feature ${i}: ${err instanceof Error ? err.message : String(err)}`);
     }
+    if (onProgress && (i % 100 === 0 || i === total - 1)) await onProgress(i + 1, total);
   }
   return { nbImportes, nbIgnores, nbErreurs, warnings };
+}
+
+export async function importParcelles(fichiers: FichierInput[]): Promise<ImportResult> {
+  const geojson = await resolveGeoJSON(fichiers);
+  if (!geojson) {
+    throw new Error("Format non reconnu. Fournissez un shapefile (.shp + .dbf) ou GeoJSON (.geojson)");
+  }
+  const features = geojson.type === "FeatureCollection" ? geojson.features : [geojson];
+  return importParcellesFromFeatures(features, undefined);
 }
 
 // ─── Import NICAD ─────────────────────────────────────────────────────────────
