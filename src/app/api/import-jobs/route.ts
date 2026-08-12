@@ -3,9 +3,10 @@ import { after } from "next/server";
 import { auth } from "@/lib/auth";
 import { saveImportUpload } from "@/lib/import/storage";
 import { resolveSource, type ResolvedSource } from "@/lib/import/source";
-import { createImportJob, listImportJobs, type SourceType } from "@/lib/import/jobs";
+import { createImportJob, listImportJobs, type SourceType, type JobKind } from "@/lib/import/jobs";
 import { runImportJob } from "@/lib/import/run-job";
 import { CADASTRAL_CLASSES, type LayerMapping } from "@/lib/cadastral-filter";
+import { targetFieldsFor, type ShapefileTarget } from "@/lib/import/field-mapping";
 
 // Lecture DXF + polygonisation = travail lourd exécuté APRÈS la réponse via
 // `after()` : on force le runtime Node (fs, child_process, ogr2ogr) et on relève
@@ -27,6 +28,26 @@ function sanitizeLayerMapping(input: unknown): LayerMapping | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
+/** Cible shapefile (`ShapefileTarget`) correspondant au `kind` de job reçu du client. */
+function shapefileTargetForKind(kind: string | undefined): ShapefileTarget {
+  if (kind === "cad-sections") return "cad-sections";
+  if (kind === "sections") return "sections-limite";
+  return "cad-parcelles";
+}
+
+/** Valide/assainit un mappage champ cible → colonne .dbf reçu du client (job shapefile). */
+function sanitizeFieldMapping(input: unknown, kind: string | undefined): Record<string, string> | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const allowedKeys = new Set(targetFieldsFor(shapefileTargetForKind(kind)).map((f) => f.key));
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (allowedKeys.has(key) && typeof value === "string" && value.trim()) {
+      out[key] = value;
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 /**
  * Démarre le job depuis une source résolue + un mappage optionnel, puis planifie
  * le traitement en arrière-plan (`after()`).
@@ -34,8 +55,9 @@ function sanitizeLayerMapping(input: unknown): LayerMapping | undefined {
 async function startJob(
   source: ResolvedSource,
   userId: string | null,
-  layerMapping: LayerMapping | undefined,
+  layerMapping: LayerMapping | Record<string, string> | undefined,
   fileKey: string,
+  kind?: JobKind,
 ): Promise<NextResponse> {
   const job = await createImportJob({
     fileName: source.fileName,
@@ -43,6 +65,7 @@ async function startJob(
     sourceType: source.sourceType,
     userId,
     layerMapping,
+    kind,
   });
 
   // Exécution après la réponse (serveur Node persistant) : la requête ne bloque
@@ -79,11 +102,37 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         fileKey?: string;
         fileName?: string;
         sourceType?: string;
+        kind?: string;
         layerMapping?: unknown;
       };
-      if (!body.fileKey || !body.fileName || (body.sourceType !== "DXF" && body.sourceType !== "DGN")) {
+      if (!body.fileKey || !body.fileName) {
+        return NextResponse.json({ error: "Requête invalide : fileKey et fileName requis." }, { status: 400 });
+      }
+
+      if (body.sourceType === "SHP") {
+        if (!body.kind || !["cad-parcelles", "cad-sections", "sections"].includes(body.kind)) {
+          return NextResponse.json(
+            { error: "kind requis pour un job shapefile (cad-parcelles|cad-sections|sections)." },
+            { status: 400 },
+          );
+        }
+        const source: ResolvedSource = {
+          buffer: Buffer.alloc(0), // non utilisé (fichier déjà persisté sous fileKey)
+          fileName: body.fileName,
+          sourceType: "SHP" as SourceType,
+        };
+        return startJob(
+          source,
+          userId,
+          sanitizeFieldMapping(body.layerMapping, body.kind),
+          body.fileKey,
+          body.kind as JobKind,
+        );
+      }
+
+      if (body.sourceType !== "DXF" && body.sourceType !== "DGN") {
         return NextResponse.json(
-          { error: "Requête invalide : fileKey, fileName et sourceType (DXF|DGN) requis." },
+          { error: "Requête invalide : sourceType doit être DXF, DGN ou SHP." },
           { status: 400 },
         );
       }
