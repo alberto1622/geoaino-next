@@ -89,6 +89,7 @@ export default function HomeClient({ user, stats }: Props) {
   const [jobProgress, setJobProgress] = useState(0);
   // Inventaire des calques en attente de validation (variante « simple »).
   const [pendingInventory, setPendingInventory] = useState<LayerInventory | null>(null);
+  const [currentJobId, setCurrentJobId] = useState<number | null>(null);
 
   const resetUpload = useCallback(() => {
     setIsUploading(false);
@@ -99,6 +100,7 @@ export default function HomeClient({ user, stats }: Props) {
     setJobPhase(null);
     setJobProgress(0);
     setPendingInventory(null);
+    setCurrentJobId(null);
   }, []);
 
   /**
@@ -110,6 +112,7 @@ export default function HomeClient({ user, stats }: Props) {
    */
   /** Sonde l'avancement d'un job d'import jusqu'à `completed`/`failed`. */
   const pollImportJob = useCallback(async (jobId: number) => {
+    setCurrentJobId(jobId);
     const startedAt = Date.now();
     const TIMEOUT_MS = 20 * 60 * 1000; // garde-fou : 20 min
     let netErrors = 0;
@@ -161,9 +164,18 @@ export default function HomeClient({ user, stats }: Props) {
       if (job.status === "failed") {
         throw new Error(job.error || "Import échoué.");
       }
+      if (job.status === "cancelled") {
+        toast.info("Import annulé.");
+        return;
+      }
       setUploadStep("analyzing"); // conserve le spinner pendant le traitement
     }
   }, []);
+
+  const handleCancelImport = useCallback(async () => {
+    if (!currentJobId) return;
+    await fetch(`/api/import-jobs/${currentJobId}/cancel`, { method: "POST" });
+  }, [currentJobId]);
 
   /** Démarre un job depuis un fichier déjà téléversé (inventaire) + mappage validé. */
   const startMappedImport = useCallback(
@@ -531,6 +543,11 @@ export default function HomeClient({ user, stats }: Props) {
                             />
                           </div>
                           <div className="text-center text-xs text-muted-foreground">{jobProgress}%</div>
+                          <div className="text-center">
+                            <Button variant="ghost" size="sm" onClick={handleCancelImport}>
+                              Annuler
+                            </Button>
+                          </div>
                         </div>
                       ) : (
                         <div className="text-sm text-primary font-medium">
