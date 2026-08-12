@@ -44,6 +44,7 @@ est vu, il doit être ajouté ici (cf. règle dans `CLAUDE.md`).
     - [14 bis. Historique par lot : une transaction par item, pas une transaction globale](#14-bis-historique-par-lot--une-transaction-par-item-pas-une-transaction-globale)
 15. [Mappage des champs shapefile & import asynchrone avec progression](#15-mappage-des-champs-shapefile--import-asynchrone-avec-progression)
 16. [Import shapefile depuis la page d'accueil : bascule vers le job asynchrone (sans mappage)](#16-import-shapefile-depuis-la-page-daccueil--bascule-vers-le-job-asynchrone-sans-mappage)
+17. [NICAD du shapefile page d'accueil : jointure spatiale sur `limite_section`](#17-nicad-du-shapefile-page-daccueil--jointure-spatiale-sur-limite_section)
 
 ---
 
@@ -1996,18 +1997,73 @@ multipart de `POST /api/import-jobs`) :
 AUCUNE étape de confirmation utilisateur (pas de `FieldMappingModal`, pas
 d'endpoint d'inventaire) — les propriétés `.dbf` sont conservées telles
 quelles dans le GeoJSON résultant, exactement comme un DXF ingéré conserve
-ses propres attributs. Le NICAD n'est pas construit ici par jointure
-spatiale (réservée au DXF, dont le dessin ne porte aucun NICAD) : il est
-extrait génériquement au moment de l'analyse, via `extractNicad()`
-(`src/lib/geo-engine.ts`), qui lit simplement les alias connus dans les
-propriétés déjà présentes sur chaque feature — qu'elle vienne d'un DXF
-ingéré ou d'un shapefile dont le `.dbf` porte déjà un champ NICAD. C'est ce
-qui explique pourquoi le « traitement complet » de ce chemin reste plus
-léger que celui du § 15 : job asynchrone + progression + annulation
-suffisent, sans modale de mappage — le bon niveau de traitement dépend de la
-cible (`Analysis`, qui accepte des attributs arbitraires, contre
-`CadParcelle`/`CadSection`, qui exigent des colonnes précises), pas du seul
-fait qu'il s'agisse d'un shapefile.
+ses propres attributs. Le NICAD est d'abord extrait génériquement des
+propriétés déjà présentes sur chaque feature, via `extractNicad()`
+(`src/lib/geo-engine.ts`) — qu'elle vienne d'un DXF ingéré ou d'un shapefile
+dont le `.dbf` porte déjà un champ NICAD exploitable. *Mise à jour (§ 17) :*
+quand cette extraction échoue ou renvoie un NICAD invalide, une jointure
+spatiale sur `limite_section` vient désormais combler le manque avant
+`finishParcellesJob`, spécifiquement sur ce chemin — un filet de sécurité
+qui ne change pas le constat de fond : job asynchrone + progression +
+annulation restent suffisants, sans modale de mappage — le bon niveau de
+traitement dépend de la cible (`Analysis`, qui accepte des attributs
+arbitraires, contre `CadParcelle`/`CadSection`, qui exigent des colonnes
+précises), pas du seul fait qu'il s'agisse d'un shapefile.
+
+---
+
+## 17. NICAD du shapefile page d'accueil : jointure spatiale sur `limite_section`
+
+**Problème métier** : une parcelle importée par le chemin shapefile →
+`Analysis` de la page d'accueil (§ 16) dont le `.dbf` ne portait aucun NICAD
+exploitable restait purement et simplement sans identifiant cadastral —
+alors que sa section, et donc son Syscol, est très souvent déjà connue dans
+`limite_section` (§ 11), le référentiel construit à partir des imports
+Sections. Le job se terminait « completed » avec des parcelles orphelines de
+NICAD, sans qu'aucune tentative de résolution n'ait été faite.
+
+**Cause technique** : contrairement au DXF, qui résout systématiquement le
+Syscol par jointure spatiale sur les communes (`assign-nicad-2026.ts`) — la
+section, elle, étant déjà portée par le dessin —, ce chemin shapefile ne
+bénéficiait d'AUCUNE résolution : ni commune, ni section. `finishParcellesJob`
+enchaînait directement sur l'analyse, qui se contente d'extraire
+génériquement ce qui existe déjà dans les propriétés (`extractNicad()`, § 16)
+sans jamais chercher à combler un NICAD absent ou invalide.
+
+**Solution** (`getSectionsForPoints`, `src/lib/cadastre/sections-data.ts` ·
+`assignSectionNicad`, `src/lib/cadastre/assign-section-nicad.ts`) :
+- `getSectionsForPoints` effectue une jointure spatiale batch contre
+  `limite_section`, selon le même pattern à deux passes que
+  `getSyscols2026ForPoints` (qui résout les communes 2026) : passe 1 en
+  contenance stricte (`ST_Contains`) sur tous les points, puis, pour les
+  points non résolus, passe 2 en repli de proximité (`ST_DWithin` 50 m,
+  tri par distance). Contrairement à la jointure commune, elle renvoie
+  Syscol ET numéro de section en un seul aller-retour, `limite_section`
+  portant les deux colonnes.
+- `assignSectionNicad` ne traite que les features SANS NICAD déjà valide
+  (`extractNicad` + `validateNicadFormat`) : pour chacune, un point
+  représentatif (`turf.pointOnFeature`) est résolu via
+  `getSectionsForPoints`, puis le NICAD est construit par
+  `buildNicad(syscolCommune, numSection, numParcelle)` — le numéro de
+  parcelle étant lu tel quel dans les propriétés `.dbf` (alias
+  `numparcell`/`num_parce`/…), jamais généré. La fonction est branchée dans
+  `run-shapefile-job.ts` juste avant `finishParcellesJob`, et ses
+  avertissements (parcelles hors emprise, rattachement approximatif, numéro
+  de parcelle manquant) sont reportés dans le rapport du job.
+
+**Pourquoi (pièges inclus)** : `limite_section` porte à la fois Syscol ET
+numéro de section — contrairement à `cad_communes_2026`, qui ne porte que la
+commune — une seule jointure suffit donc à construire un NICAD complet, et le
+résultat est plus précis qu'une simple jointure commune (les sections sont
+plus fines que les communes). Deux pièges à retenir, tous deux des décisions
+humaines explicites et non des oublis : (1) un NICAD déjà valide n'est
+JAMAIS écrasé — il peut provenir d'un traitement antérieur plus fiable que
+cette jointure géométrique (levé terrain, import CSV NICAD, etc.) ; (2)
+aucun numéro de parcelle n'est attribué par incrémentation à cette étape —
+cette responsabilité reste exclusivement celle de l'outil dédié
+`fillMissingNicadForSection` (§ 11 quinquies), qui opère après coup, sur des
+sections déjà validées, avec une décision utilisateur explicite à chaque
+attribution, jamais silencieusement au moment de l'import.
 
 ---
 
