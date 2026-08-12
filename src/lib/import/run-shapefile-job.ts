@@ -21,6 +21,7 @@ import { loadImportUpload } from "./storage";
 import { getImportJob, setJobPhase, setJobProgress, markJobFailed, assertNotCancelled, JobCancelledError, type SourceType } from "./jobs";
 import { reprojectFeaturesToWgs84 } from "./geo-parse";
 import { finishParcellesJob } from "./run-job";
+import { assignSectionNicad } from "@/lib/cadastre/assign-section-nicad";
 
 async function loadShapefilePair(fileKey: string): Promise<{ shpBuf: Buffer; dbfBuf: Buffer; prjBuf?: Buffer }> {
   const zipBuf = await loadImportUpload(fileKey);
@@ -105,8 +106,15 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
       }
 
       await assertNotCancelled(jobId);
+      const sectionNicad = await assignSectionNicad(features);
+
       await setJobPhase(jobId, "read", 20);
-      await finishParcellesJob(jobId, { fileName: job.fileName, userId: job.userId, sourceType: job.sourceType as SourceType }, features);
+      await finishParcellesJob(
+        jobId,
+        { fileName: job.fileName, userId: job.userId, sourceType: job.sourceType as SourceType },
+        features,
+        sectionNicad.warnings.length > 0 ? { reportExtra: { warnings: sectionNicad.warnings } } : undefined,
+      );
       return;
     }
 
