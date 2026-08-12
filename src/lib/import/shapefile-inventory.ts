@@ -32,12 +32,19 @@ export async function buildShapefileFieldInventory(
   dbfBuf: Buffer,
   target: ShapefileTarget,
 ): Promise<ShapefileFieldInventory> {
-  const source = await shapefile.read(shpBuf, dbfBuf);
-  const features = (source.features ?? []) as GeoJSON.Feature[];
+  // Lit uniquement le .dbf (pas le .shp) : cette fonction n'énumère que des
+  // noms de colonnes et quelques valeurs d'exemple, la géométrie ne sert à
+  // rien ici. Sur les gros shapefiles (chemin page d'accueil, 100k+
+  // parcelles), parser toute la géométrie via shapefile.read() rien que pour
+  // lister les colonnes risquait de dépasser maxDuration=120 de la route.
+  const source = await shapefile.openDbf(dbfBuf);
   const byName = new Map<string, { sampleValues: string[]; nonEmptyCount: number }>();
+  let featureCount = 0;
 
-  for (const feature of features) {
-    const props = (feature.properties ?? {}) as Record<string, unknown>;
+  let result = await source.read();
+  while (!result.done) {
+    featureCount++;
+    const props = (result.value ?? {}) as Record<string, unknown>;
     for (const [name, value] of Object.entries(props)) {
       const entry = byName.get(name) ?? { sampleValues: [], nonEmptyCount: 0 };
       const str = value === null || value === undefined ? "" : String(value).trim();
@@ -49,6 +56,7 @@ export async function buildShapefileFieldInventory(
       }
       byName.set(name, entry);
     }
+    result = await source.read();
   }
 
   const fields: ShapefileFieldEntry[] = Array.from(byName.entries())
@@ -58,5 +66,5 @@ export async function buildShapefileFieldInventory(
   const targetFields = targetFieldsFor(target);
   const proposedMapping = proposeFieldMapping(fields.map((f) => f.name), targetFields);
 
-  return { featureCount: features.length, fields, targetFields, proposedMapping };
+  return { featureCount, fields, targetFields, proposedMapping };
 }

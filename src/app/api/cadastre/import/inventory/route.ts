@@ -29,7 +29,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const target = String(formData.get("target") ?? "") as ShapefileTarget;
     if (!VALID_TARGETS.includes(target)) {
       return NextResponse.json(
-        { error: "target invalide (cad-parcelles|cad-sections|sections-limite)." },
+        { error: "target invalide (cad-parcelles|cad-sections|sections-limite|parcelles-home)." },
         { status: 400 },
       );
     }

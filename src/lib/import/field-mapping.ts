@@ -45,12 +45,19 @@ export const PARCELLE_TARGET_FIELDS: TargetFieldDef[] = [
  * ce chemin conserve TOUTES les propriétés .dbf telles quelles dans le
  * GeoJSON — seuls nicad et numParcelle sont mappés ici, car ce sont les 2
  * seuls champs dont dépend la construction automatique du NICAD
- * (assignSectionNicad, section-join). Mêmes alias que leurs homologues
- * PARCELLE_TARGET_FIELDS (aucune perte de couverture par rapport au
- * devinage actuel de assign-section-nicad.ts).
+ * (assignSectionNicad, section-join). `numParcelle` reprend exactement les
+ * alias de NUM_PARCELLE_ALIASES (assign-section-nicad.ts) — aucune perte de
+ * couverture par rapport au devinage actuel. `nicad` reprend les variantes
+ * reconnues par `extractNicad` (geo-engine.ts) — la comparaison ci-dessous
+ * (proposeFieldMapping) étant insensible à la casse, seules les variantes
+ * lexicalement distinctes une fois en minuscules sont listées.
  */
 export const PARCELLES_HOME_TARGET_FIELDS: TargetFieldDef[] = [
-  { key: "nicad", label: "NICAD (16 caractères)", aliases: ["nicad"] },
+  {
+    key: "nicad",
+    label: "NICAD (16 caractères)",
+    aliases: ["nicad", "nic", "num_nicad", "code_nicad", "codif"],
+  },
   { key: "numParcelle", label: "N° de parcelle", aliases: ["numparcell", "num_parce", "numparce", "numparcelle"] },
 ];
 

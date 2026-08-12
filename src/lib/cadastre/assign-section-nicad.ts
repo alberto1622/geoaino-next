@@ -35,12 +35,11 @@ const NUM_PARCELLE_ALIASES = ["numparcell", "num_parce", "numparce", "numparcell
  * (attributs `.dbf` de shapefile, alias `field-mapping.ts`), plutôt qu'avec
  * `extractNicad` qui traite un problème différent (une seule propriété
  * canonique connue sous quelques variantes fixes).
- */
-/**
- * Colonne mappée explicitement par l'utilisateur (FieldMappingModal),
- * prioritaire sur le devinage par alias : une correspondance validée par
- * l'utilisateur ne doit jamais être contournée par une correspondance
- * fortuite avec un alias générique.
+ *
+ * `mappedColumn` (colonne mappée explicitement par l'utilisateur via
+ * FieldMappingModal) est prioritaire sur ce devinage par alias : une
+ * correspondance validée par l'utilisateur ne doit jamais être contournée
+ * par une correspondance fortuite avec un alias générique.
  */
 function extractNumParcelle(
   props: Record<string, unknown> | undefined | null,
@@ -49,7 +48,7 @@ function extractNumParcelle(
   if (!props) return null;
 
   if (mappedColumn) {
-    const raw = props[mappedColumn];
+    const raw = Object.prototype.hasOwnProperty.call(props, mappedColumn) ? props[mappedColumn] : undefined;
     if (raw != null && String(raw).trim()) {
       return normalizeNumeroParcelle(String(raw)).value;
     }
@@ -93,11 +92,16 @@ export async function assignSectionNicad(
   const candidates: { index: number; point: [number, number] }[] = [];
   for (let i = 0; i < features.length; i++) {
     const props = (features[i].properties ?? {}) as Record<string, unknown>;
-    const mappedNicadRaw = fieldMapping?.nicad ? props[fieldMapping.nicad] : undefined;
+    const mappedNicadRaw = fieldMapping?.nicad && Object.prototype.hasOwnProperty.call(props, fieldMapping.nicad)
+      ? props[fieldMapping.nicad]
+      : undefined;
     const existing = mappedNicadRaw != null && String(mappedNicadRaw).trim()
       ? String(mappedNicadRaw).trim()
       : extractNicad(props);
-    if (existing && validateNicadFormat(existing).valid) continue;
+    if (existing && validateNicadFormat(existing).valid) {
+      if (props.nicad !== existing) features[i].properties = { ...props, nicad: existing };
+      continue;
+    }
 
     const point = representativePoint(features[i].geometry);
     if (!point) continue;

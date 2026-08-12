@@ -368,7 +368,7 @@ export default function HomeClient({ user, stats }: Props) {
   }, [runCaoImport, startMappedImport]);
 
   const handleFiles = useCallback(async (fileList: File[]) => {
-    if (!fileList.length || isUploading || pendingInventory) return;
+    if (!fileList.length || isUploading || pendingInventory || pendingFieldInventory) return;
 
     const mainFile = fileList.find(
       (f) => !f.name.toLowerCase().endsWith(".dbf") && !f.name.toLowerCase().endsWith(".prj")
@@ -458,7 +458,7 @@ export default function HomeClient({ user, stats }: Props) {
       setUploadStep(null);
       setUploadFileName(null);
     }
-  }, [isUploading, pendingInventory, requestLayerInventory, requestShapefileFieldInventory]);
+  }, [isUploading, pendingInventory, pendingFieldInventory, requestLayerInventory, requestShapefileFieldInventory]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {

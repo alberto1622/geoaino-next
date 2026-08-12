@@ -2104,9 +2104,14 @@ d'introduire une confirmation.
 `src/components/HomeClient.tsx`) :
 - `PARCELLES_HOME_TARGET_FIELDS` (`field-mapping.ts`) définit une cible de
   mappage dédiée, `parcelles-home`, restreinte à **2 champs** : `nicad` et
-  `numParcelle` — les 2 seuls dont dépend `assignSectionNicad` (§ 17), avec
-  les mêmes alias que leurs homologues de `PARCELLE_TARGET_FIELDS` (aucune
-  perte de couverture par rapport au devinage antérieur).
+  `numParcelle` — les 2 seuls dont dépend `assignSectionNicad` (§ 17).
+  `numParcelle` reprend exactement les alias de `NUM_PARCELLE_ALIASES`
+  (`assign-section-nicad.ts`, aucune perte de couverture). `nicad` reprend les
+  10 variantes reconnues par `extractNicad` (`geo-engine.ts`, § 16) —
+  `proposeFieldMapping` comparant par nom normalisé insensible à la casse
+  (`normalizeText`), seules les variantes lexicalement distinctes une fois en
+  minuscules (`nicad`, `nic`, `num_nicad`, `code_nicad`, `codif`) sont listées
+  dans les alias.
   `POST /api/cadastre/import/inventory` accepte désormais `target:
   "parcelles-home"` en plus de ses 3 cibles existantes, et persiste le `.prj`
   dans l'archive ZIP aux côtés du `.shp`/`.dbf` quand il est fourni — un
@@ -2121,6 +2126,12 @@ d'introduire une confirmation.
   aucun mappage n'a été fourni (repli de compatibilité, ex. import direct
   sans passer par la modale). De même, un NICAD déjà présent sous la colonne
   mappée (`fieldMapping.nicad`) est prioritaire sur `extractNicad` générique.
+  Ce NICAD trouvé via une colonne mappée non standard est en plus recopié
+  dans la propriété canonique `nicad` de la feature (si elle diffère) avant
+  d'être considéré traité : les consommateurs en aval (analyse de topologie,
+  détection de doublons, affichage carte) ne lisent jamais que cette clé
+  canonique via `extractNicad`, et un NICAD validé mais laissé sous son nom
+  de colonne d'origine serait sinon silencieusement invisible pour eux.
   `run-shapefile-job.ts` relit ce mappage depuis `job.layerMapping` (même
   mécanique de stockage que pour `cad-parcelles`/`cad-sections`, § 15) et le
   transmet à `assignSectionNicad`.
