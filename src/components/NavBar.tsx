@@ -1,15 +1,35 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Globe, BarChart2, History, FileText, MapPin, LogOut, LogIn, Landmark, Users, Menu } from "lucide-react";
+import {
+  Globe,
+  BarChart2,
+  History,
+  FileText,
+  MapPin,
+  LogOut,
+  LogIn,
+  Landmark,
+  Users,
+  Menu,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetTrigger, SheetClose, SheetContent } from "@/components/ui/sheet";
+import {
+  Sheet,
+  SheetTrigger,
+  SheetClose,
+  SheetContent,
+} from "@/components/ui/sheet";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { signOutAction } from "@/app/_actions/auth";
 import { cn } from "@/lib/utils";
 
 interface NavBarProps {
-  user?: { name?: string | null; email?: string | null; role?: string | null } | null;
+  user?: {
+    name?: string | null;
+    email?: string | null;
+    role?: string | null;
+  } | null;
 }
 
 const NAV_LINKS = [
@@ -23,7 +43,10 @@ export function NavBar({ user }: NavBarProps) {
   const pathname = usePathname();
   const links =
     user?.role === "ADMIN"
-      ? [...NAV_LINKS, { label: "Utilisateurs", href: "/admin/utilisateurs", icon: Users }]
+      ? [
+          ...NAV_LINKS,
+          { label: "Utilisateurs", href: "/admin/utilisateurs", icon: Users },
+        ]
       : NAV_LINKS;
 
   return (
@@ -88,7 +111,7 @@ export function NavBar({ user }: NavBarProps) {
                 "flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm transition-all",
                 pathname === href
                   ? "text-foreground bg-secondary"
-                  : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+                  : "text-muted-foreground hover:text-foreground hover:bg-secondary",
               )}
             >
               <Icon className="w-3.5 h-3.5" />
@@ -98,16 +121,21 @@ export function NavBar({ user }: NavBarProps) {
         </nav>
 
         <div className="flex items-center gap-2">
-          <ThemeToggle />
+          {/* <ThemeToggle />
           <Link href="/map">
             <Button size="sm" className="gap-2 shadow-lg shadow-primary/20">
               <MapPin className="w-4 h-4" />
               Carte
             </Button>
-          </Link>
+          </Link> */}
           {user ? (
             <form action={signOutAction}>
-              <Button variant="ghost" size="sm" className="gap-2" title="Se déconnecter">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-2"
+                title="Se déconnecter"
+              >
                 <LogOut className="w-4 h-4" />
                 {user.name || user.email}
               </Button>

@@ -116,7 +116,7 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
       after,
       createdBy,
     });
-  });
+  }, { maxWait: 10_000, timeout: 120_000 });
 
   // Persiste aussi le GeoJSON de base (clé disque) pour que les recalculs repartant
   // de la source reflètent la réassignation. Hors transaction (store non

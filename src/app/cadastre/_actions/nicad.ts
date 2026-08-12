@@ -56,7 +56,10 @@ export async function verifierNicad(input: { nicad: string }) {
     };
   }
 
-  const existingNicad = await getNicadByCode(formatResult.nicad);
+  const [existingNicad, commune2026] = await Promise.all([
+    getNicadByCode(formatResult.nicad),
+    getCommune2026BySyscol(formatResult.parts!.syscol),
+  ]);
 
   await insertOperation({
     typeOperation: "verification",
@@ -77,6 +80,9 @@ export async function verifierNicad(input: { nicad: string }) {
     warnings: formatResult.warnings,
     parts: formatResult.parts,
     details: existingNicad ?? null,
+    commune2026: commune2026
+      ? { nomCommune: commune2026.nomCommune, region: commune2026.region, departement: commune2026.departement }
+      : null,
   };
 }
 

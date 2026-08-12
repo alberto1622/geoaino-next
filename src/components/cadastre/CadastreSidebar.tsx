@@ -38,10 +38,10 @@ export const CADASTRE_NAV = [
     icon: LayoutDashboard,
   },
   {
-    label: "Limites de section",
+    label: "Gestion des sections",
     href: "/cadastre/sections",
     icon: Shapes,
-    badge: "DXF",
+    // badge: "DXF, shp",
   },
   {
     label: "Vérification NICAD",

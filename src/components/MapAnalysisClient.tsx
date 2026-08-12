@@ -952,6 +952,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         .filter((x): x is number => x !== null);
 
       setDeletingRows(true);
+      const toastId = toast.loading(
+        `Suppression de ${rows.length} parcelle${rows.length > 1 ? "s" : ""} en cours…`,
+      );
       try {
         const res = await fetch(
           `/api/analyses/${analysis.id}/features/delete`,
@@ -1019,6 +1022,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         // bien CETTE suppression (si une autre action a lieu entre-temps,
         // Annuler annule celle-là à la place, comme le ferait Ctrl+Z).
         toast.success(`${data.deleted} parcelle(s) supprimée(s)`, {
+          id: toastId,
           action: {
             label: "Annuler",
             onClick: () => void performUndoRef.current(),
@@ -1029,7 +1033,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
             `${data.notFound} parcelle(s) non localisée(s) — ignorée(s)`,
           );
       } catch (err) {
-        toast.error(String(err));
+        toast.error(String(err), { id: toastId });
       } finally {
         setDeletingRows(false);
       }
@@ -2599,7 +2603,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                       disabled={selectedRows.size === 0 || deletingRows}
                       className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium bg-red-500/15 text-red-400 hover:bg-red-500/25 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
                     >
-                      <Trash2 className="w-3 h-3" />
+                      <Trash2
+                        className={`w-3 h-3 ${deletingRows ? "animate-spin" : ""}`}
+                      />
                       {deletingRows
                         ? "Suppression…"
                         : `Supprimer${selectedRows.size ? ` (${selectedRows.size})` : " les parcelles"}`}

@@ -94,6 +94,19 @@ const SANS_SECTION_COLOR = "#f97316";
 
 /** Couleur des limites/étiquettes de sections (rouge, distinct des parcelles grises). */
 const SECTION_COLOR = "#ef4444";
+
+/** Libellés FR pour la légende — mêmes types que errorTypeColor() (lib/utils.ts).
+ * missing_nicad/short_nicad en sont exclus : traités séparément dans `legendItems`
+ * car toujours affichés (couches non conditionnelles, cf. commentaire ligne ~550). */
+const ERROR_TYPE_LABELS: Record<string, string> = {
+  overlap: "Chevauchement",
+  gap: "Trou",
+  sliver: "Esquille",
+  duplicate: "Doublon NICAD",
+  invalid_geom: "Géométrie invalide",
+  boundary_cross: "Sort des limites administratives",
+  self_intersect: "Auto-intersection",
+};
 /** Zoom minimal d'affichage des étiquettes de numéros de section (marqueurs DOM). */
 const SECTION_LABEL_MIN_ZOOM = 10;
 
@@ -292,6 +305,29 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
   }, [errors]);
   const errorTypes = useMemo(() => Object.keys(nicadsByType), [nicadsByType]);
 
+  // ── Légende dynamique : uniquement les couleurs effectivement à l'écran ──
+  // Parcelle/NICAD manquant/NICAD trop court sont toujours affichés (couches
+  // non conditionnelles) ; le reste suit exactement les mêmes conditions que
+  // les couches correspondantes plus bas dans le rendu.
+  const legendItems = useMemo(() => {
+    const items: { label: string; color: string }[] = [
+      { label: "Parcelle", color: "#6b7280" },
+      { label: "NICAD manquant", color: errorTypeColor("missing_nicad") },
+      { label: "NICAD trop court", color: errorTypeColor("short_nicad") },
+    ];
+    if (conformeHighlight) items.push({ label: "Conforme", color: "#22c55e" });
+    if (sansSectionHighlight) items.push({ label: "Sans section", color: SANS_SECTION_COLOR });
+    if (showSections && sectionsData) items.push({ label: "Limite de section", color: SECTION_COLOR });
+    if (selectedNicads.length > 0) items.push({ label: "Sélectionné", color: "#3b82f6" });
+    if (searchedNicads.length > 0) items.push({ label: "Recherché", color: "#facc15" });
+    for (const type of errorTypes) {
+      const key = type.toLowerCase();
+      if (key === "missing_nicad" || key === "short_nicad") continue;
+      items.push({ label: ERROR_TYPE_LABELS[key] ?? type, color: errorTypeColor(type) });
+    }
+    return items;
+  }, [errorTypes, conformeHighlight, sansSectionHighlight, showSections, sectionsData, selectedNicads, searchedNicads]);
+
   // Filtre « parcelle conforme » : NICAD d'au moins 8 caractères, non listé comme
   // valeur « vide », et absent des NICAD en erreur. Aligné sur le décompte client.
   const conformeFilter = useMemo(
@@ -416,7 +452,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
   }, []);
 
   return (
-    <div className="w-full h-full">
+    <div className="w-full h-full relative">
       <RMap
         ref={mapRef}
         initialViewState={INITIAL_VIEW}
@@ -756,6 +792,22 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
           </Popup>
         )}
       </RMap>
+
+      {/* ── Légende (petite, dynamique) ── */}
+      <div className="pointer-events-none absolute bottom-3 right-3 z-10 max-w-[180px] rounded-lg border border-border/60 bg-background/90 p-2 text-[11px] shadow-md backdrop-blur">
+        <p className="mb-1 font-medium text-muted-foreground">Légende</p>
+        <div className="space-y-1">
+          {legendItems.map((item) => (
+            <div key={item.label} className="flex items-center gap-1.5">
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                style={{ background: item.color }}
+              />
+              <span className="text-foreground/90">{item.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

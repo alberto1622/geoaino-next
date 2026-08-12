@@ -3,7 +3,13 @@ import { PageTitle } from "@/components/PageTitle";
 
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { ShieldCheck, Search, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
+import {
+  ShieldCheck,
+  Search,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,9 +37,9 @@ export default function VerificationPage() {
       try {
         const res = await verifierNicad({ nicad });
         setResult(res);
-        if (res.valid && res.existeEnDB) toast.success("NICAD valide et présent en base.");
-        else if (res.valid) toast.warning("NICAD au format valide mais absent de la base.");
-        else toast.error("NICAD invalide.");
+        // if (res.valid && res.existeEnDB) toast.success("NICAD valide et présent en base.");
+        // else if (res.valid) toast.warning("NICAD au format valide mais absent de la base.");
+        // else toast.error("NICAD invalide.");
       } catch {
         toast.error("Erreur lors de la vérification.");
       }
@@ -48,9 +54,12 @@ export default function VerificationPage() {
           <ShieldCheck className="h-5 w-5" />
         </div>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Vérification NICAD</h1>
+          <h1 className="text-2xl font-bold tracking-tight">
+            Vérification NICAD
+          </h1>
           <p className="text-sm text-muted-foreground">
-            Contrôle du format (16 caractères : Syscol×8 · Section×3 · Parcelle×5) et de l&apos;existence en base.
+            Contrôle du format (16 caractères : Syscol×8 · Section×3 ·
+            Parcelle×5) et de l&apos;existence en base.
           </p>
         </div>
       </div>
@@ -84,13 +93,17 @@ export default function VerificationPage() {
               <NicadDisplay nicad={cleaned} size="lg" />
             ) : (
               <p className="text-sm text-muted-foreground">
-                Saisissez 16 chiffres pour voir la décomposition Syscol · Section · Parcelle.
+                Saisissez 16 chiffres pour voir la décomposition Syscol ·
+                Section · Parcelle.
               </p>
             )}
             {live.errors.length > 0 && cleaned.length > 0 && (
               <ul className="mt-3 space-y-1">
                 {live.errors.map((e, i) => (
-                  <li key={i} className="flex items-start gap-1.5 text-xs text-rose-500">
+                  <li
+                    key={i}
+                    className="flex items-start gap-1.5 text-xs text-rose-500"
+                  >
                     <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {e}
                   </li>
                 ))}
@@ -116,13 +129,23 @@ export default function VerificationPage() {
             <div className="grid grid-cols-2 gap-3">
               <div className="rounded-lg border border-border/60 p-3">
                 <p className="text-xs text-muted-foreground">Format</p>
-                <p className={result.formatValide ? "text-emerald-500" : "text-rose-500"}>
+                <p
+                  className={
+                    result.formatValide ? "text-emerald-500" : "text-rose-500"
+                  }
+                >
                   {result.formatValide ? "Valide" : "Invalide"}
                 </p>
               </div>
               <div className="rounded-lg border border-border/60 p-3">
-                <p className="text-xs text-muted-foreground">En base de données</p>
-                <p className={result.existeEnDB ? "text-emerald-500" : "text-amber-500"}>
+                <p className="text-xs text-muted-foreground">
+                  En base de données
+                </p>
+                <p
+                  className={
+                    result.existeEnDB ? "text-emerald-500" : "text-amber-500"
+                  }
+                >
                   {result.existeEnDB ? "Présent" : "Absent"}
                 </p>
               </div>
@@ -133,7 +156,10 @@ export default function VerificationPage() {
             {result.errors.length > 0 && (
               <ul className="space-y-1">
                 {result.errors.map((e, i) => (
-                  <li key={i} className="flex items-start gap-1.5 text-rose-500">
+                  <li
+                    key={i}
+                    className="flex items-start gap-1.5 text-rose-500"
+                  >
                     <XCircle className="mt-0.5 h-4 w-4 shrink-0" /> {e}
                   </li>
                 ))}
@@ -142,23 +168,40 @@ export default function VerificationPage() {
             {result.warnings.length > 0 && (
               <ul className="space-y-1">
                 {result.warnings.map((w, i) => (
-                  <li key={i} className="flex items-start gap-1.5 text-amber-500">
+                  <li
+                    key={i}
+                    className="flex items-start gap-1.5 text-amber-500"
+                  >
                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {w}
                   </li>
                 ))}
               </ul>
             )}
 
-            {result.details && (
+            {(result.commune2026 || result.details) && (
               <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
-                <p className="mb-1 text-xs font-medium text-muted-foreground">Détails en base</p>
+                <p className="mb-1 text-xs font-medium text-muted-foreground">
+                  Localisation &amp; détails
+                </p>
                 <div className="grid grid-cols-2 gap-1 text-xs">
-                  <span className="text-muted-foreground">Commune</span>
-                  <span>{result.details.nomCommune ?? "—"}</span>
-                  <span className="text-muted-foreground">Version</span>
-                  <span>{result.details.version}</span>
-                  <span className="text-muted-foreground">Statut</span>
-                  <span>{result.details.statut}</span>
+                  {result.commune2026 && (
+                    <>
+                      <span className="text-muted-foreground">Commune</span>
+                      <span>{result.commune2026.nomCommune ?? "—"}</span>
+                      <span className="text-muted-foreground">Département</span>
+                      <span>{result.commune2026.departement ?? "—"}</span>
+                      <span className="text-muted-foreground">Région</span>
+                      <span>{result.commune2026.region ?? "—"}</span>
+                    </>
+                  )}
+                  {result.details && (
+                    <>
+                      <span className="text-muted-foreground">Version</span>
+                      <span>{result.details.version}</span>
+                      <span className="text-muted-foreground">Statut</span>
+                      <span>{result.details.statut}</span>
+                    </>
+                  )}
                 </div>
               </div>
             )}

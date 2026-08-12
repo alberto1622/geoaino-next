@@ -90,3 +90,56 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 - Appliquer la possibilité de mise à jour automatique des nicad d'une numero de section ajouter ou modifier
 - Ajouter l'affichage des numero_section dans le map cadastre/sections
 - Qiusheng Wu - Building open-source tools for geospatial data science and GeoAI
+
+# Notes — Gestion Cadastrale / Sections / Parcelles
+
+**Date : 11/08/2026**
+
+---
+
+## 1. Limites de section → Gestion des sections
+
+**Parcelles :**
+
+- → Activer la barre d'évolution
+- → Effectuer les mêmes corrections avec les shapefiles que...
+- → Ajouter le mappage des fichiers .shp
+- Web-cache pour charger de gros volumes de données WFS
+- → Ajouter le départage des départements, syscol
+
+## claude --resume cf625d72-d092-4437-b99f-7ae0525999ac
+
+## 2. Parcelle / Titre foncier — Plan cadastral / Plan foncier
+
+- → Récupération
+- → Erreur : limites parcelles avec 2 numéros de parcelles
+- → Récupérer le numéro même s'il y a débordement d'un numéro
+- → Désactiver les limites sections
+- → Récupérer les sections depuis la base de données des sections
+
+---
+
+## 3. Vérification du NICAD
+
+- → Ajouter de quel syscol il s'agit : 2013 / 2026
+- → Basculement :
+  - Niveau : 2013 syscol
+  - syscol 2026
+  - Niveau section
+
+**Attribution de NICAD**
+
+- → Ajouter...
+
+---
+
+## 4. Points du 11/08/2026
+
+- → Gérer les contraintes sur le n° section (3 caractères)
+- → Loading lors des modifications
+- → Identifier et exporter les sections ayant des anomalies
+- → Sélection suivant les fichiers
+- → Corriger l'affichage (Mark)
+- → Chevauchement / Intersection
+- → Différencier les gaps et les chevauchements
+- → Effectuer le mappage des champs avant le traitement
