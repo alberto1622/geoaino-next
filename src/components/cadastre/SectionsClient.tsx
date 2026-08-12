@@ -35,6 +35,8 @@ import {
   DropdownMenuContent,
   DropdownMenuCheckboxItem,
 } from "@/components/ui/dropdown-menu";
+import FieldMappingModal from "@/components/FieldMappingModal";
+import type { TargetFieldDef } from "@/lib/import/field-mapping";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -169,6 +171,13 @@ export default function SectionsClient() {
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [job, setJob] = useState<JobState | null>(null);
+  const [pendingShapefileInventory, setPendingShapefileInventory] = useState<{
+    fileKey: string;
+    fileName: string;
+    fields: { name: string; sampleValues: string[] }[];
+    targetFields: TargetFieldDef[];
+    proposedMapping: Record<string, string>;
+  } | null>(null);
   const [sourceFichier, setSourceFichier] = useState<string | null>(null);
   const [sections, setSections] = useState<SectionItem[]>([]);
   const [overlaps, setOverlaps] = useState<OverlapItem[]>([]);
@@ -372,14 +381,22 @@ export default function SectionsClient() {
       for (const f of files) fd.append("files", f);
 
       if (isShapefile) {
-        // Shapefile : polygones déjà valides → construction synchrone, pas de job.
-        const res = await fetch("/api/cadastre/sections/import-shapefile", {
+        // Shapefile : même parcours que le DXF désormais — inventaire des
+        // colonnes .dbf, mappage du numéro de section, puis job asynchrone
+        // (kind "sections", même table limite_section).
+        const invRes = await fetch("/api/cadastre/import/inventory", {
           method: "POST",
-          body: fd,
+          body: (() => {
+            const invFd = new FormData();
+            invFd.append("target", "sections-limite");
+            for (const f of files) invFd.append("files", f);
+            return invFd;
+          })(),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Import échoué");
-        await reportBuildResult(data);
+        const inv = await invRes.json();
+        if (!invRes.ok) throw new Error(inv.error || "Inventaire échoué");
+        setUploading(false);
+        setPendingShapefileInventory(inv);
         return;
       }
 
@@ -400,7 +417,42 @@ export default function SectionsClient() {
       toast.error(String(err));
       setUploading(false);
     }
-  }, [files, reportBuildResult]);
+  }, [files]);
+
+  const startShapefileSectionsJob = useCallback(
+    async (mapping: Record<string, string>) => {
+      if (!pendingShapefileInventory) return;
+      const inv = pendingShapefileInventory;
+      setPendingShapefileInventory(null);
+      setUploading(true);
+      try {
+        const res = await fetch("/api/import-jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileKey: inv.fileKey,
+            fileName: inv.fileName,
+            sourceType: "SHP",
+            kind: "sections",
+            layerMapping: mapping,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Import échoué");
+        setSourceFichier(inv.fileName);
+        setJob({ id: data.jobId, status: data.status, phase: "read", progress: 0 });
+      } catch (err) {
+        toast.error(String(err));
+        setUploading(false);
+      }
+    },
+    [pendingShapefileInventory],
+  );
+
+  const handleCancelJob = useCallback(async () => {
+    if (!job) return;
+    await fetch(`/api/import-jobs/${job.id}/cancel`, { method: "POST" });
+  }, [job]);
 
   // ── Polling du job jusqu'à complétion ──────────────────────────────────────
   useEffect(() => {
@@ -433,6 +485,9 @@ export default function SectionsClient() {
         } else if (j.status === "failed") {
           setUploading(false);
           toast.error(j.error || "Traitement échoué");
+        } else if (j.status === "cancelled") {
+          setUploading(false);
+          toast.info("Import annulé.");
         }
       } catch {
         /* réessaie au prochain tick */
@@ -1635,7 +1690,7 @@ export default function SectionsClient() {
         </div>
         {/* Progression du job d'import */}
         {job && (job.status === "pending" || job.status === "running") && (
-          <div className="rounded-xl border border-border/60 p-3">
+          <div className="rounded-xl border border-border/60 p-3 space-y-1.5">
             <div className="mb-1 flex justify-between text-[11px] text-muted-foreground">
               <span>Phase : {job.phase ?? "…"}</span>
               <span>{job.progress}%</span>
@@ -1646,6 +1701,9 @@ export default function SectionsClient() {
                 style={{ width: `${job.progress}%` }}
               />
             </div>
+            <Button variant="ghost" size="sm" onClick={handleCancelJob}>
+              Annuler
+            </Button>
           </div>
         )}
 
@@ -2208,6 +2266,17 @@ export default function SectionsClient() {
         scopeKey={null}
         onRestored={() => void fetchData(sourceFichier)}
       />
+
+      {pendingShapefileInventory && (
+        <FieldMappingModal
+          fileName={pendingShapefileInventory.fileName}
+          targetFields={pendingShapefileInventory.targetFields}
+          availableFields={pendingShapefileInventory.fields}
+          proposedMapping={pendingShapefileInventory.proposedMapping}
+          onCancel={() => setPendingShapefileInventory(null)}
+          onConfirm={(mapping) => void startShapefileSectionsJob(mapping)}
+        />
+      )}
     </div>
   );
 }
