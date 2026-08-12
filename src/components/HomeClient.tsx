@@ -11,6 +11,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { NavBar } from "@/components/NavBar";
 import LayerMappingModal, { type LayerInventoryEntry } from "@/components/LayerMappingModal";
+import FieldMappingModal from "@/components/FieldMappingModal";
+import type { TargetFieldDef } from "@/lib/import/field-mapping";
 import { toNum } from "@/lib/utils";
 
 interface LayerInventory {
@@ -18,6 +20,14 @@ interface LayerInventory {
   fileName: string;
   sourceType: "DXF" | "DGN";
   layers: LayerInventoryEntry[];
+}
+
+interface ShapefileFieldInventory {
+  fileKey: string;
+  fileName: string;
+  fields: { name: string; sampleValues: string[] }[];
+  targetFields: TargetFieldDef[];
+  proposedMapping: Record<string, string>;
 }
 
 const FORMATS = ["SHP", "GeoJSON", "DGN v7", "DXF", "KML", "CSV"];
@@ -89,6 +99,8 @@ export default function HomeClient({ user, stats }: Props) {
   const [jobProgress, setJobProgress] = useState(0);
   // Inventaire des calques en attente de validation (variante « simple »).
   const [pendingInventory, setPendingInventory] = useState<LayerInventory | null>(null);
+  // Inventaire des champs .dbf en attente de validation (shapefile page d'accueil).
+  const [pendingFieldInventory, setPendingFieldInventory] = useState<ShapefileFieldInventory | null>(null);
   const [currentJobId, setCurrentJobId] = useState<number | null>(null);
 
   const resetUpload = useCallback(() => {
@@ -100,6 +112,7 @@ export default function HomeClient({ user, stats }: Props) {
     setJobPhase(null);
     setJobProgress(0);
     setPendingInventory(null);
+    setPendingFieldInventory(null);
     setCurrentJobId(null);
   }, []);
 
@@ -214,6 +227,48 @@ export default function HomeClient({ user, stats }: Props) {
   );
 
   /**
+   * Démarre le job `parcelles` (page d'accueil) depuis un fichier déjà
+   * téléversé (inventaire de champs) + mappage nicad/numParcelle validé.
+   * Symétrique de `startMappedImport` (DXF/DGN, mappage de calques) pour le
+   * mappage d'attributs shapefile.
+   */
+  const startFieldMappedShapefileImport = useCallback(
+    async (fileKey: string, fileName: string, layerMapping: Record<string, string> | undefined) => {
+      setMode("import");
+      setIsUploading(true);
+      setUploadFileName(fileName);
+      setUploadStep("reading");
+      setJobPhase("read");
+      setJobProgress(0);
+      setAnalysisResult(null);
+
+      try {
+        const res = await fetch("/api/import-jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileKey,
+            fileName,
+            sourceType: "SHP",
+            kind: "parcelles",
+            layerMapping,
+          }),
+        });
+        if (!res.ok) {
+          const e = await res.json().catch(() => ({ error: res.statusText }));
+          throw new Error(e.error || `Erreur serveur: ${res.status}`);
+        }
+        const { jobId } = (await res.json()) as { jobId: number };
+        await pollImportJob(jobId);
+      } catch (err) {
+        toast.error("Erreur d'import", { description: String(err) });
+        resetUpload();
+      }
+    },
+    [pollImportJob, resetUpload],
+  );
+
+  /**
    * Import direct (voie historique multipart, sans mappage) — repli si
    * l'inventaire des calques échoue.
    */
@@ -242,6 +297,39 @@ export default function HomeClient({ user, stats }: Props) {
       resetUpload();
     }
   }, [pollImportJob, resetUpload]);
+
+  /**
+   * Étape « mappage » pour un shapefile page d'accueil : inventorie les
+   * colonnes .dbf (target `parcelles-home` : nicad + numParcelle
+   * uniquement) puis ouvre la modale de mappage. En cas d'échec (fichier
+   * illisible, erreur réseau), repli sur l'import direct sans mappage —
+   * même contrat que `requestLayerInventory` pour les DXF.
+   */
+  const requestShapefileFieldInventory = useCallback(async (fileList: File[], shpFile: File) => {
+    setMode("import");
+    setIsUploading(true);
+    setUploadFileName(shpFile.name);
+    setUploadStep("reading");
+    setAnalysisResult(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("target", "parcelles-home");
+      fileList.forEach((f) => formData.append("files", f));
+
+      const res = await fetch("/api/cadastre/import/inventory", { method: "POST", body: formData });
+      if (!res.ok) throw new Error(String(res.status));
+      const inv = (await res.json()) as ShapefileFieldInventory;
+
+      // Suspend le spinner, la modale prend le relais jusqu'à validation.
+      setIsUploading(false);
+      setUploadStep(null);
+      setPendingFieldInventory(inv);
+    } catch {
+      // Repli robuste : import direct via la voie multipart historique.
+      await runCaoImport(fileList, shpFile);
+    }
+  }, [runCaoImport]);
 
   /**
    * Étape « variante simple » : inventorie les calques du fichier CAO puis ouvre
@@ -299,7 +387,7 @@ export default function HomeClient({ user, stats }: Props) {
 
     const shpFile = fileList.find((f) => f.name.toLowerCase().endsWith(".shp"));
     if (shpFile) {
-      void runCaoImport(fileList, shpFile);
+      void requestShapefileFieldInventory(fileList, shpFile);
       return;
     }
 
@@ -370,7 +458,7 @@ export default function HomeClient({ user, stats }: Props) {
       setUploadStep(null);
       setUploadFileName(null);
     }
-  }, [isUploading, pendingInventory, requestLayerInventory, runCaoImport]);
+  }, [isUploading, pendingInventory, requestLayerInventory, requestShapefileFieldInventory]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -716,6 +804,21 @@ export default function HomeClient({ user, stats }: Props) {
             const inv = pendingInventory;
             setPendingInventory(null);
             void startMappedImport(inv, mapping);
+          }}
+        />
+      )}
+
+      {pendingFieldInventory && (
+        <FieldMappingModal
+          fileName={pendingFieldInventory.fileName}
+          targetFields={pendingFieldInventory.targetFields}
+          availableFields={pendingFieldInventory.fields}
+          proposedMapping={pendingFieldInventory.proposedMapping}
+          onCancel={resetUpload}
+          onConfirm={(mapping) => {
+            const inv = pendingFieldInventory;
+            setPendingFieldInventory(null);
+            void startFieldMappedShapefileImport(inv.fileKey, inv.fileName, mapping);
           }}
         />
       )}
