@@ -113,7 +113,7 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
         warnings: [],
       };
       try {
-        sectionNicad = await assignSectionNicad(features);
+        sectionNicad = await assignSectionNicad(features, fieldMapping);
       } catch (err) {
         // Construction du NICAD = valeur ajoutée au-dessus d'un import shapefile
         // réussi, pas un prérequis : une erreur ici (ex. jointure spatiale KO)
