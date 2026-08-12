@@ -18,17 +18,21 @@ import { buildLimiteSections } from "@/lib/cadastre/build-sections";
 import { insertOperation, updateOperation } from "@/lib/cadastre/data";
 import type { FieldMapping } from "./field-mapping";
 import { loadImportUpload } from "./storage";
-import { getImportJob, setJobPhase, setJobProgress, markJobFailed, assertNotCancelled, JobCancelledError } from "./jobs";
+import { getImportJob, setJobPhase, setJobProgress, markJobFailed, assertNotCancelled, JobCancelledError, type SourceType } from "./jobs";
+import { reprojectFeaturesToWgs84 } from "@/lib/import/geo-parse";
+import { finishParcellesJob } from "./run-job";
 
-async function loadShapefilePair(fileKey: string): Promise<{ shpBuf: Buffer; dbfBuf: Buffer }> {
+async function loadShapefilePair(fileKey: string): Promise<{ shpBuf: Buffer; dbfBuf: Buffer; prjBuf?: Buffer }> {
   const zipBuf = await loadImportUpload(fileKey);
   const zip = await JSZip.loadAsync(zipBuf);
   const shpEntry = Object.values(zip.files).find((f) => f.name.toLowerCase().endsWith(".shp"));
   const dbfEntry = Object.values(zip.files).find((f) => f.name.toLowerCase().endsWith(".dbf"));
   if (!shpEntry || !dbfEntry) throw new Error("Archive shapefile incomplète (.shp/.dbf manquant).");
+  const prjEntry = Object.values(zip.files).find((f) => f.name.toLowerCase().endsWith(".prj"));
   return {
     shpBuf: Buffer.from(await shpEntry.async("arraybuffer")),
     dbfBuf: Buffer.from(await dbfEntry.async("arraybuffer")),
+    prjBuf: prjEntry ? Buffer.from(await prjEntry.async("arraybuffer")) : undefined,
   };
 }
 
@@ -43,7 +47,7 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
 
   try {
     await setJobPhase(jobId, "read", 5, "running");
-    const { shpBuf, dbfBuf } = await loadShapefilePair(job.fileKey);
+    const { shpBuf, dbfBuf, prjBuf } = await loadShapefilePair(job.fileKey);
     const fieldMapping = (job.layerMapping as FieldMapping | null) ?? undefined;
 
     if (job.kind === "sections") {
@@ -74,6 +78,23 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
           report: { kind: "sections", ...built },
         },
       });
+      return;
+    }
+
+    if (job.kind === "parcelles") {
+      const source = await shapefile.read(shpBuf, dbfBuf);
+      let features = (source.features ?? []) as GeoJSON.Feature[];
+
+      if (prjBuf) {
+        const prjText = prjBuf.toString("utf8");
+        if (prjText.includes("UTM") && prjText.includes("28")) {
+          features = reprojectFeaturesToWgs84(features) as GeoJSON.Feature[];
+        }
+      }
+
+      await assertNotCancelled(jobId);
+      await setJobPhase(jobId, "read", 20);
+      await finishParcellesJob(jobId, { fileName: job.fileName, userId: job.userId, sourceType: job.sourceType as SourceType }, features);
       return;
     }
 
