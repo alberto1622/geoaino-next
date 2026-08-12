@@ -12,7 +12,7 @@
 import * as shapefile from "shapefile";
 import JSZip from "jszip";
 import { prisma } from "@/lib/prisma";
-import { importParcellesFromFeatures, importSectionsFromFeatures } from "@/lib/cadastre/import-data";
+import { importParcellesFromFeatures, importSectionsFromFeatures, convertGeometryToWgs84 } from "@/lib/cadastre/import-data";
 import { sectionCandidatesFromShapefile } from "@/lib/cadastre/sections-from-shapefile";
 import { buildLimiteSections } from "@/lib/cadastre/build-sections";
 import { insertOperation, updateOperation } from "@/lib/cadastre/data";
@@ -85,11 +85,23 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
       const source = await shapefile.read(shpBuf, dbfBuf);
       let features = (source.features ?? []) as GeoJSON.Feature[];
 
-      if (prjBuf) {
-        const prjText = prjBuf.toString("utf8");
-        if (prjText.includes("UTM") && prjText.includes("28")) {
-          features = reprojectFeaturesToWgs84(features) as GeoJSON.Feature[];
-        }
+      const prjText = prjBuf?.toString("utf8");
+      if (prjText && prjText.includes("UTM") && prjText.includes("28")) {
+        features = reprojectFeaturesToWgs84(features) as GeoJSON.Feature[];
+      } else {
+        // Pas de .prj (fréquent dans les exports réels) ou .prj non reconnu
+        // comme UTM28N : repli sur la détection par magnitude de coordonnées
+        // déjà utilisée pour les shapefiles cad-parcelles/cad-sections
+        // (`convertGeometryToWgs84`) — convertit UTM28N → WGS84 coordonnée par
+        // coordonnée, sans effet sur des coordonnées déjà valides. Sans ce
+        // repli, un shapefile UTM sans .prj voit son filtrage "hors Sénégal"
+        // (`finishParcellesJob` → `filterOutOfSenegal`) retirer silencieusement
+        // toutes ses parcelles : le job se termine "completed" avec une carte
+        // vide, sans aucune erreur visible.
+        features = features.map((f) => ({
+          ...f,
+          geometry: convertGeometryToWgs84(f.geometry) as typeof f.geometry,
+        }));
       }
 
       await assertNotCancelled(jobId);

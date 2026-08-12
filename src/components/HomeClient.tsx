@@ -287,14 +287,19 @@ export default function HomeClient({ user, stats }: Props) {
     ) || fileList[0];
 
     // Fichiers CAO volumineux (DXF/DGN) → inventaire des calques + mappage, puis
-    // import asynchrone vers cad_parcelles (cf. Phase 1).
-    if (/\.(dxf|dgn)$/i.test(mainFile.name)) {
-      void requestLayerInventory(fileList, mainFile);
+    // import asynchrone vers cad_parcelles (cf. Phase 1). Cherché dans TOUTE la
+    // sélection (pas seulement `mainFile`) : l'ordre des fichiers rendu par le
+    // navigateur est alphabétique, pas garanti mettre le fichier pertinent en
+    // premier (ex. un export QGIS inclut souvent un .cpg qui trie avant .shp).
+    const dxfDgnFile = fileList.find((f) => /\.(dxf|dgn)$/i.test(f.name));
+    if (dxfDgnFile) {
+      void requestLayerInventory(fileList, dxfDgnFile);
       return;
     }
 
-    if (mainFile.name.toLowerCase().endsWith(".shp")) {
-      void runCaoImport(fileList, mainFile);
+    const shpFile = fileList.find((f) => f.name.toLowerCase().endsWith(".shp"));
+    if (shpFile) {
+      void runCaoImport(fileList, shpFile);
       return;
     }
 
