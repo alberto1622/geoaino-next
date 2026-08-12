@@ -90,7 +90,7 @@ export async function assignSectionNicad(
   let nbApprox = 0;
   candidates.forEach((c, k) => {
     const m = matches[k];
-    if (!m.syscolCommune) {
+    if (!m.syscolCommune || !m.numSection) {
       nbSansSection++;
       return;
     }

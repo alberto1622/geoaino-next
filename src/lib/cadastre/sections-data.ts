@@ -582,6 +582,15 @@ export async function getSectionsForPoints(
   const result: Array<{ syscolCommune: string | null; numSection: string | null; commune: string | null; approx: boolean }> =
     points.map(() => ({ syscolCommune: null, numSection: null, commune: null, approx: false }));
 
+  // Table vide (bootstrapping : aucune section importée pour la zone) → rien
+  // ne résoudra jamais, ni en passe 1 ni en passe 2. Court-circuite les deux
+  // pour éviter à chaque point le ST_DWithin + tri par proximité de la passe
+  // 2, coûteux et voué à l'échec. Ne traite QUE ce cas total (0 ligne) : une
+  // fois l'index GiST en place (cf. migration 20260812130000), la couverture
+  // partielle reste bon marché et n'a pas besoin de ce court-circuit.
+  const [{ count }] = await db.$queryRaw<Array<{ count: bigint }>>`SELECT count(*) AS count FROM "limite_section"`;
+  if (Number(count) === 0) return result;
+
   // ── Passe 1 : contenance stricte, par lots (TOUS les points). ──────────────
   const unresolved: number[] = [];
   for (let start = 0; start < points.length; start += SECTION_RESOLVE_CHUNK) {

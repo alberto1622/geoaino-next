@@ -106,14 +106,35 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
       }
 
       await assertNotCancelled(jobId);
-      const sectionNicad = await assignSectionNicad(features);
+      let sectionNicad: Awaited<ReturnType<typeof assignSectionNicad>> = {
+        nbConstruits: 0,
+        nbSansSection: 0,
+        nbSansNumeroParcelle: 0,
+        warnings: [],
+      };
+      try {
+        sectionNicad = await assignSectionNicad(features);
+      } catch (err) {
+        // Construction du NICAD = valeur ajoutée au-dessus d'un import shapefile
+        // réussi, pas un prérequis : une erreur ici (ex. jointure spatiale KO)
+        // ne doit jamais faire échouer tout le job d'import.
+        console.error(`[import/run-shapefile] assignSectionNicad échoué (job ${jobId}), import poursuivi sans NICAD construit:`, err);
+        sectionNicad.warnings.push(
+          "Construction automatique du NICAD indisponible pour cet import (erreur technique) — NICAD non construit.",
+        );
+      }
 
       await setJobPhase(jobId, "read", 20);
       await finishParcellesJob(
         jobId,
         { fileName: job.fileName, userId: job.userId, sourceType: job.sourceType as SourceType },
         features,
-        sectionNicad.warnings.length > 0 ? { reportExtra: { warnings: sectionNicad.warnings } } : undefined,
+        {
+          reportExtra: {
+            nicadConstruits: sectionNicad.nbConstruits,
+            ...(sectionNicad.warnings.length > 0 ? { warnings: sectionNicad.warnings } : {}),
+          },
+        },
       );
       return;
     }
