@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
+import JSZip from "jszip";
 import { auth } from "@/lib/auth";
 import { saveImportUpload } from "@/lib/import/storage";
 import { resolveSource, type ResolvedSource } from "@/lib/import/source";
@@ -152,6 +153,32 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const files = formData.getAll("files") as File[];
     if (!files.length) {
       return NextResponse.json({ error: "Aucun fichier fourni" }, { status: 400 });
+    }
+
+    const shpFile = files.find((f) => f.name.toLowerCase().endsWith(".shp"));
+    if (shpFile) {
+      const dbfFile = files.find((f) => f.name.toLowerCase().endsWith(".dbf"));
+      if (!dbfFile) {
+        return NextResponse.json(
+          { error: "Sélectionnez le .shp ET son .dbf ensemble." },
+          { status: 400 },
+        );
+      }
+      const prjFile = files.find((f) => f.name.toLowerCase().endsWith(".prj"));
+
+      const zip = new JSZip();
+      zip.file(shpFile.name, Buffer.from(await shpFile.arrayBuffer()));
+      zip.file(dbfFile.name, Buffer.from(await dbfFile.arrayBuffer()));
+      if (prjFile) zip.file(prjFile.name, Buffer.from(await prjFile.arrayBuffer()));
+      const zipBuf = Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
+      const fileKey = await saveImportUpload(`${shpFile.name.replace(/\.shp$/i, "")}.zip`, zipBuf);
+
+      const source: ResolvedSource = {
+        buffer: Buffer.alloc(0), // non utilisé (fichier déjà persisté sous fileKey)
+        fileName: shpFile.name,
+        sourceType: "SHP" as SourceType,
+      };
+      return startJob(source, userId, undefined, fileKey, "parcelles");
     }
 
     const candidate = files.find((f) => /\.(dxf|dgn|zip)$/i.test(f.name)) ?? files[0];
