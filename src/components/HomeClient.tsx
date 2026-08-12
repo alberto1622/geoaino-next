@@ -293,6 +293,11 @@ export default function HomeClient({ user, stats }: Props) {
       return;
     }
 
+    if (mainFile.name.toLowerCase().endsWith(".shp")) {
+      void runCaoImport(fileList, mainFile);
+      return;
+    }
+
     setIsUploading(true);
     setUploadFileName(mainFile.name);
     setUploadStep("reading");
@@ -360,7 +365,7 @@ export default function HomeClient({ user, stats }: Props) {
       setUploadStep(null);
       setUploadFileName(null);
     }
-  }, [isUploading, pendingInventory, requestLayerInventory]);
+  }, [isUploading, pendingInventory, requestLayerInventory, runCaoImport]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
