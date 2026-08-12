@@ -8,7 +8,7 @@
  */
 import { normalizeText } from "../cadastral-filter";
 
-export type ShapefileTarget = "cad-parcelles" | "cad-sections" | "sections-limite";
+export type ShapefileTarget = "cad-parcelles" | "cad-sections" | "sections-limite" | "parcelles-home";
 
 export interface TargetFieldDef {
   key: string;
@@ -38,6 +38,22 @@ export const PARCELLE_TARGET_FIELDS: TargetFieldDef[] = [
   { key: "proprietaire", label: "Propriétaire", aliases: ["titulaired", "occupant", "nomproprietaire"] },
 ];
 
+/**
+ * Cibles de mappage pour le chemin shapefile de la page d'accueil
+ * (job.kind === "parcelles" → Analysis.geoJsonData). Contrairement à
+ * PARCELLE_TARGET_FIELDS (15 champs, colonnes DB typées de cad_parcelles),
+ * ce chemin conserve TOUTES les propriétés .dbf telles quelles dans le
+ * GeoJSON — seuls nicad et numParcelle sont mappés ici, car ce sont les 2
+ * seuls champs dont dépend la construction automatique du NICAD
+ * (assignSectionNicad, section-join). Mêmes alias que leurs homologues
+ * PARCELLE_TARGET_FIELDS (aucune perte de couverture par rapport au
+ * devinage actuel de assign-section-nicad.ts).
+ */
+export const PARCELLES_HOME_TARGET_FIELDS: TargetFieldDef[] = [
+  { key: "nicad", label: "NICAD (16 caractères)", aliases: ["nicad"] },
+  { key: "numParcelle", label: "N° de parcelle", aliases: ["numparcell", "num_parce", "numparce", "numparcelle"] },
+];
+
 export const CAD_SECTION_TARGET_FIELDS: TargetFieldDef[] = [
   { key: "numSectionCode", label: "Code section (11 chiffres, syscol+section)", aliases: ["num_sect_n"] },
   { key: "nomSection", label: "Nom de la section", aliases: ["nom_sect", "nomsect", "nom_section", "nomsection", "name"] },
@@ -58,6 +74,7 @@ export const LIMITE_SECTION_TARGET_FIELDS: TargetFieldDef[] = [
 export function targetFieldsFor(target: ShapefileTarget): TargetFieldDef[] {
   if (target === "cad-parcelles") return PARCELLE_TARGET_FIELDS;
   if (target === "cad-sections") return CAD_SECTION_TARGET_FIELDS;
+  if (target === "parcelles-home") return PARCELLES_HOME_TARGET_FIELDS;
   return LIMITE_SECTION_TARGET_FIELDS;
 }
 
