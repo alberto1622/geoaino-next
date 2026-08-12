@@ -43,6 +43,7 @@ est vu, il doit être ajouté ici (cf. règle dans `CLAUDE.md`).
 14. [Historique & restauration : upsert au lieu de `DO NOTHING`](#14-historique--restauration--upsert-au-lieu-de-do-nothing)
     - [14 bis. Historique par lot : une transaction par item, pas une transaction globale](#14-bis-historique-par-lot--une-transaction-par-item-pas-une-transaction-globale)
 15. [Mappage des champs shapefile & import asynchrone avec progression](#15-mappage-des-champs-shapefile--import-asynchrone-avec-progression)
+16. [Import shapefile depuis la page d'accueil : bascule vers le job asynchrone (sans mappage)](#16-import-shapefile-depuis-la-page-daccueil--bascule-vers-le-job-asynchrone-sans-mappage)
 
 ---
 
@@ -1948,6 +1949,65 @@ Communes 2013/2026 et CSV NICAD, eux, restent volontairement sur l'ancien
 chemin synchrone (schémas plus simples, volumes bien plus faibles), ce n'est
 pas un oubli mais un choix de périmètre (cf.
 `docs/superpowers/specs/2026-08-11-shapefile-mapping-progression-design.md`).
+
+---
+
+## 16. Import shapefile depuis la page d'accueil : bascule vers le job asynchrone (sans mappage)
+
+**Problème métier** : un shapefile déposé depuis la page d'accueil (menant à
+`/map`, à ne pas confondre avec les shapefiles de `/cadastre/import`/
+`SectionsClient` du § 15, qui visent `CadParcelle`/`CadSection`/
+`limite_section`) traitait jusqu'ici tout le pipeline — lecture, analyse
+topologique, rapport IA — de façon synchrone dans le cycle de vie de la
+requête HTTP : aucun retour de progression pendant le traitement, et un
+risque de timeout sur un gros fichier, exactement le symptôme déjà corrigé
+pour le DXF (§ 5) mais jamais étendu à ce chemin shapefile.
+
+**Cause technique** : `handleFiles()` (`src/components/HomeClient.tsx`) ne
+routait vers le job asynchrone (`ImportJob`, suivi par polling, barre de
+progression et bouton d'annulation) que les fichiers `.dxf`/`.dgn` ; tout le
+reste — dont `.shp` — partait par `POST /api/upload-geo` puis
+`POST /api/analyses`, un chemin plus ancien, entièrement synchrone, qui ne
+partage aucune infrastructure de suivi avec le pipeline DXF.
+
+**Solution** (`src/lib/import/geo-parse.ts` ; `finishParcellesJob`,
+`src/lib/import/run-job.ts` ; branche `job.kind === "parcelles"`,
+`src/lib/import/run-shapefile-job.ts` ; détection `.shp` dans la voie
+multipart de `POST /api/import-jobs`) :
+- `geo-parse.ts` extrait (sans changement de logique) le parsing shapefile
+  auparavant enfoui dans `src/app/api/upload-geo/route.ts` — dont
+  `reprojectFeaturesToWgs84` — pour le rendre réutilisable par le job.
+- La voie multipart de `POST /api/import-jobs` détecte un `.shp` parmi les
+  fichiers envoyés, exige son `.dbf` (erreur explicite sinon), zippe
+  `.shp`+`.dbf` (+`.prj` si présent) ensemble sous un seul `fileKey`
+  (`saveImportUpload`), puis démarre un `ImportJob` de type
+  `kind: "parcelles"`, `sourceType: "SHP"`.
+- `run-shapefile-job.ts` gagne une branche `job.kind === "parcelles"` : elle
+  lit le `.shp`/`.dbf` (`shapefile.read`), reprojette si le `.prj` indique de
+  l'UTM 28N, puis délègue la suite à `finishParcellesJob` — la même queue
+  partagée (filtrage Sénégal → sauvegarde disque → `Analysis.create` →
+  `analyzeGeoJSON` → rapport IA → `Analysis.update` → complétion du job) que
+  la branche DXF de `run-job.ts` utilise déjà pour produire une `Analysis`.
+- `finishParcellesJob`, extraite de `run-job.ts` en amont de ce plan, devient
+  ainsi le point de convergence commun DXF/shapefile pour la cible
+  `Analysis` : aucune duplication de la queue de post-traitement.
+
+**Pourquoi (pièges inclus)** : contrairement au § 15, ce chemin ne nécessite
+AUCUNE étape de confirmation utilisateur (pas de `FieldMappingModal`, pas
+d'endpoint d'inventaire) — les propriétés `.dbf` sont conservées telles
+quelles dans le GeoJSON résultant, exactement comme un DXF ingéré conserve
+ses propres attributs. Le NICAD n'est pas construit ici par jointure
+spatiale (réservée au DXF, dont le dessin ne porte aucun NICAD) : il est
+extrait génériquement au moment de l'analyse, via `extractNicad()`
+(`src/lib/geo-engine.ts`), qui lit simplement les alias connus dans les
+propriétés déjà présentes sur chaque feature — qu'elle vienne d'un DXF
+ingéré ou d'un shapefile dont le `.dbf` porte déjà un champ NICAD. C'est ce
+qui explique pourquoi le « traitement complet » de ce chemin reste plus
+léger que celui du § 15 : job asynchrone + progression + annulation
+suffisent, sans modale de mappage — le bon niveau de traitement dépend de la
+cible (`Analysis`, qui accepte des attributs arbitraires, contre
+`CadParcelle`/`CadSection`, qui exigent des colonnes précises), pas du seul
+fait qu'il s'agisse d'un shapefile.
 
 ---
 
