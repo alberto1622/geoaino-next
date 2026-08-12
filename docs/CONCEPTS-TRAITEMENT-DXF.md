@@ -1134,14 +1134,19 @@ diverge ensuite selon le type de géométrie de chaque feature :
   repasse par le même `convertGeometryToWgs84` en sortie, exactement comme un
   polygone déjà fermé.
 
-**Traitement synchrone, pas de job.** Le DXF passe par `ImportJob` (asynchrone,
-suivi par polling) car le tuilage de 100k+ segments peut prendre plusieurs
-minutes (§ 5). Un shapefile de sections (quelques centaines de polygones) se lit
-et se construit en quelques secondes : `POST /api/cadastre/sections/import-shapefile`
-traite la requête **dans le cycle HTTP** et renvoie directement le
-`BuildSectionsResult`, sans créer de `ImportJob`. Piège si le volume grossit un
-jour : repasser par un job dès que le shapefile dépasse un seuil de taille,
-plutôt que de bloquer la requête.
+**Traitement asynchrone via `ImportJob`, comme le DXF (mise à jour § 15).**
+Initialement, un shapefile de sections (quelques centaines de polygones en
+général) se lisait et se construisait en quelques secondes dans le cycle HTTP :
+`POST /api/cadastre/sections/import-shapefile` traitait la requête directement
+et renvoyait le `BuildSectionsResult`, sans créer de `ImportJob`. Cette route a
+depuis été **retirée** : le mappage de champs + progression asynchrone (§ 15)
+fait désormais transiter ce même traitement (`sectionCandidatesFromShapefile` +
+`buildLimiteSections`, inchangés) par `runShapefileImportJob` (`kind: "sections"`,
+`src/lib/import/run-shapefile-job.ts`), au même titre que les cibles
+`cad-parcelles`/`cad-sections`. Le piège que ce paragraphe signalait à l'origine
+(« repasser par un job si le volume grossit ») est donc résolu — mais la cause
+première (mappage de colonnes .dbf non vérifiable par l'utilisateur) reste le
+sujet principal du § 15, pas la taille du fichier.
 
 **Piège de typage — `shapefile.read()` non déclaré.** Le fichier `src/types/shapefile.d.ts`
 (déclaration ambiante, le paquet `shapefile` ne fournit aucun `.d.ts`) ne
