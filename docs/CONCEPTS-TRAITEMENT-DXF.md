@@ -2063,7 +2063,13 @@ aucun numéro de parcelle n'est attribué par incrémentation à cette étape �
 cette responsabilité reste exclusivement celle de l'outil dédié
 `fillMissingNicadForSection` (§ 11 quinquies), qui opère après coup, sur des
 sections déjà validées, avec une décision utilisateur explicite à chaque
-attribution, jamais silencieusement au moment de l'import.
+attribution, jamais silencieusement au moment de l'import. (3) la garde de
+« section non résolue » (`nbSansSection`) vérifie aussi bien `syscolCommune`
+QUE `numSection` : une ligne `limite_section` avec un Syscol renseigné mais un
+`numSection` `NULL`/vide (section dont le numéro n'a jamais été saisi) doit
+être traitée comme non résolue, sans quoi `buildNicad` produirait un NICAD à
+la section « 000 » silencieusement bidon plutôt que de remonter l'absence via
+l'avertissement.
 
 ---
 
