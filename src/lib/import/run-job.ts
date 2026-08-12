@@ -110,7 +110,6 @@ async function runDxfImportJob(jobId: number): Promise<void> {
     // Construction de la FeatureCollection 4326 complète (aucune troncature :
     // on ne la renvoie pas au navigateur, on l'analyse et on la stocke).
     const fc = parcellesToFeatureCollection(withNicad.parcelles);
-    const totalBuilt = fc.features.length;
 
     await finishParcellesJob(
       jobId,
