@@ -1988,9 +1988,9 @@ multipart de `POST /api/import-jobs`) :
   partagée (filtrage Sénégal → sauvegarde disque → `Analysis.create` →
   `analyzeGeoJSON` → rapport IA → `Analysis.update` → complétion du job) que
   la branche DXF de `run-job.ts` utilise déjà pour produire une `Analysis`.
-- `finishParcellesJob`, extraite de `run-job.ts` en amont de ce plan, devient
-  ainsi le point de convergence commun DXF/shapefile pour la cible
-  `Analysis` : aucune duplication de la queue de post-traitement.
+- `finishParcellesJob`, extraite de `run-job.ts` par ce plan, devient ainsi
+  le point de convergence commun DXF/shapefile pour la cible `Analysis` :
+  aucune duplication de la queue de post-traitement.
 
 **Pourquoi (pièges inclus)** : contrairement au § 15, ce chemin ne nécessite
 AUCUNE étape de confirmation utilisateur (pas de `FieldMappingModal`, pas

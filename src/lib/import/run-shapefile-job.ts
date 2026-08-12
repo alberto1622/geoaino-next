@@ -19,7 +19,7 @@ import { insertOperation, updateOperation } from "@/lib/cadastre/data";
 import type { FieldMapping } from "./field-mapping";
 import { loadImportUpload } from "./storage";
 import { getImportJob, setJobPhase, setJobProgress, markJobFailed, assertNotCancelled, JobCancelledError, type SourceType } from "./jobs";
-import { reprojectFeaturesToWgs84 } from "@/lib/import/geo-parse";
+import { reprojectFeaturesToWgs84 } from "./geo-parse";
 import { finishParcellesJob } from "./run-job";
 
 async function loadShapefilePair(fileKey: string): Promise<{ shpBuf: Buffer; dbfBuf: Buffer; prjBuf?: Buffer }> {
