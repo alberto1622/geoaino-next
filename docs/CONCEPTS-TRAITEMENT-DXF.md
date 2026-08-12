@@ -42,6 +42,7 @@ est vu, il doit être ajouté ici (cf. règle dans `CLAUDE.md`).
 13. [Correction groupée des chevauchements de sections : règle « auto » et ordre séquentiel](#13-correction-groupée-des-chevauchements-de-sections--règle--auto--et-ordre-séquentiel)
 14. [Historique & restauration : upsert au lieu de `DO NOTHING`](#14-historique--restauration--upsert-au-lieu-de-do-nothing)
     - [14 bis. Historique par lot : une transaction par item, pas une transaction globale](#14-bis-historique-par-lot--une-transaction-par-item-pas-une-transaction-globale)
+15. [Mappage des champs shapefile & import asynchrone avec progression](#15-mappage-des-champs-shapefile--import-asynchrone-avec-progression)
 
 ---
 
@@ -1866,6 +1867,82 @@ transaction globale semble plus « sûre » mais viole en réalité le contrat
 déjà en place. La règle générale : la granularité de la transaction doit
 suivre la granularité du contrat métier déjà documenté pour l'endpoint, pas
 une préférence de simplicité d'implémentation.
+
+---
+
+## 15. Mappage des champs shapefile & import asynchrone avec progression
+
+**Problème métier** : les imports shapefile en masse (parcelles/sections,
+`/cadastre/import` et l'onglet Sections) devinaient silencieusement les
+colonnes .dbf source — des chaînes d'alias figées en dur (`props.nicad ??
+props.NICAD ?? ...`) — sans que l'utilisateur ne puisse vérifier ni corriger
+cette correspondance avant que l'import ne s'exécute. Un fichier .dbf dont
+les colonnes portent des noms non couverts par ces alias (export QGIS/ArcGIS
+avec une variante de nommage imprévue) fait échouer le mappage sans le
+signaler : le champ correspondant reste simplement vide. De plus, tout le
+traitement s'exécutait en une seule requête HTTP bloquante, sans retour de
+progression : sur un gros fichier, l'usager n'avait aucune indication
+d'avancement avant la réponse finale (succès ou échec).
+
+**Cause technique** : `src/lib/cadastre/import-data.ts` codait les alias de
+colonnes en dur, un par propriété cible (`nicad`, `codeSection`,
+`numParcelle`, …), avec un ordre de priorité figé et aucun point d'entrée
+pour un choix utilisateur. Le server action `uploadShapefile()`
+(`src/app/cadastre/_actions/import-export.ts`) lisait et traitait le fichier
+entier de façon synchrone **dans le cycle de vie de la requête** : la seule
+manière d'exposer une progression aurait été de streamer la réponse, ce que
+les server actions Next.js ne permettent pas nativement — d'où l'absence
+totale de retour intermédiaire, contrairement au pipeline DXF (§ 5) qui
+tourne déjà en job asynchrone suivi par polling.
+
+**Solution** (`src/lib/import/field-mapping.ts` ·
+`proposeFieldMapping`/`targetFieldsFor`, `src/app/api/cadastre/import/inventory/route.ts`,
+`src/components/FieldMappingModal.tsx`,
+`src/lib/import/run-shapefile-job.ts` · `runShapefileImportJob`) :
+- `field-mapping.ts` définit, par cible d'import (`cad-parcelles`,
+  `cad-sections`, `sections-limite`), la liste des champs attendus
+  (`TargetFieldDef[]`, avec les mêmes alias qu'`import-data.ts` — aucune
+  perte de couverture) et propose un mappage automatique par correspondance
+  de nom normalisé (`proposeFieldMapping`).
+- `POST /api/cadastre/import/inventory` lit le `.dbf` envoyé, en extrait la
+  liste des colonnes disponibles avec un échantillon de valeurs, et persiste
+  `.shp`+`.dbf` **ensemble** dans une archive ZIP (un seul `fileKey`) —
+  réutilisée telle quelle par le job au démarrage, sans second aller-retour
+  fichier.
+- `FieldMappingModal` affiche la proposition automatique, éditable : chaque
+  champ cible (fixe) est associé par menu déroulant à une colonne source
+  (variable), avec blocage tant qu'un champ marqué `required` n'est pas
+  mappé. L'utilisateur confirme avant que le traitement ne démarre.
+- `runShapefileImportJob` exécute l'import **de façon asynchrone**, en
+  réutilisant intégralement l'infrastructure de job déjà en place pour le DXF
+  (`ImportJob`, `setJobPhase`, `setJobProgress`, `assertNotCancelled`/
+  `JobCancelledError`, cf. § 5 et § 11 quater) plutôt que de bâtir un second
+  système de suivi de progression : le mappage validé (`FieldMapping`) est
+  stocké sur `job.layerMapping` et relu au lancement du job, puis transmis à
+  `importParcellesFromFeatures`/`importSectionsFromFeatures`
+  (`import-data.ts`) qui l'utilise en priorité, avant de retomber sur les
+  mêmes alias historiques si un champ n'a pas été mappé (compatibilité
+  ascendante).
+
+**Pourquoi (pièges inclus)** : le sens du mappage est **l'inverse** de celui
+du DXF. Pour un DXF, on associe un calque source (variable, propre à chaque
+fichier) à une classe DGID cible (fixe) — § 1/§ 2 — parce qu'un DXF porte
+plusieurs couches géométriques distinctes qu'il faut classer. Pour un
+shapefile, la géométrie est unique (une seule couche) mais porte de
+nombreuses colonnes d'attributs : c'est donc le champ **cible** qui est fixe
+(défini par le schéma `CadParcelle`/`CadSection`) et la colonne **source**
+qui varie d'un fichier à l'autre — d'où `FieldMappingModal` qui associe
+« champ cible → colonne .dbf », en miroir de `LayerMappingModal` qui associe
+« calque source → classe cible ». Confondre les deux sens lors d'une
+évolution future casserait silencieusement la proposition automatique (elle
+chercherait des noms de calques là où il faut chercher des noms de colonnes,
+ou l'inverse). Second piège déjà noté en § 11 quater : l'import shapefile de
+sections y était décrit comme traité en synchrone « le temps que le volume
+grossisse » — c'est précisément ce palier qui est franchi ici ; les imports
+Communes 2013/2026 et CSV NICAD, eux, restent volontairement sur l'ancien
+chemin synchrone (schémas plus simples, volumes bien plus faibles), ce n'est
+pas un oubli mais un choix de périmètre (cf.
+`docs/superpowers/specs/2026-08-11-shapefile-mapping-progression-design.md`).
 
 ---
 
