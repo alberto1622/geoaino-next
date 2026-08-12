@@ -2073,5 +2073,89 @@ l'avertissement.
 
 ---
 
+## 18. Mappage NICAD/numéro de parcelle sur le shapefile page d'accueil
+
+**Problème métier** : la jointure spatiale du § 17 ne construit un NICAD que
+si `assignSectionNicad` parvient à lire un numéro de parcelle exploitable
+dans les propriétés `.dbf` de la feature — or cette lecture se faisait par
+devinage sur une liste d'alias figée en dur (`numparcell`, `num_parce`,
+`numparce`, `numparcelle`), exactement comme le NICAD lui-même (`extractNicad`,
+§ 16). Un `.dbf` dont la colonne de numéro de parcelle porte un nom hors de
+cette liste (ex. `PARC_NUM`, variante d'export ArcGIS) faisait silencieusement
+échouer toute la construction du NICAD pour la section concernée : le job se
+terminait « completed », `nbSansNumeroParcelle` comptait les parcelles
+concernées, mais rien ne permettait à l'utilisateur de corriger la
+correspondance de colonne avant que le traitement ne s'exécute.
+
+**Cause technique** : contrairement aux shapefiles de `/cadastre/import`
+(cibles `cad-parcelles`/`cad-sections`/`sections-limite`), qui bénéficient
+déjà de `FieldMappingModal` et d'une étape d'inventaire/confirmation depuis le
+§ 15, le chemin shapefile de la page d'accueil (`HomeClient.tsx`) n'avait
+jamais eu ce point de confirmation : avant ce correctif, sa branche `.shp`
+dans `handleFiles` appelait directement `runCaoImport` (voie multipart
+historique, sans inventaire), et le `.shp`/`.dbf` déposé partait tel quel vers
+le job asynchrone, sans qu'aucune colonne ne soit présentée à l'utilisateur.
+Le § 17 a ajouté la construction du NICAD par jointure de section, mais a
+hérité de ce même devinage par alias pour le numéro de parcelle plutôt que
+d'introduire une confirmation.
+
+**Solution** (`PARCELLES_HOME_TARGET_FIELDS`, `src/lib/import/field-mapping.ts` ·
+`assignSectionNicad`, `src/lib/cadastre/assign-section-nicad.ts` ·
+`src/components/HomeClient.tsx`) :
+- `PARCELLES_HOME_TARGET_FIELDS` (`field-mapping.ts`) définit une cible de
+  mappage dédiée, `parcelles-home`, restreinte à **2 champs** : `nicad` et
+  `numParcelle` — les 2 seuls dont dépend `assignSectionNicad` (§ 17), avec
+  les mêmes alias que leurs homologues de `PARCELLE_TARGET_FIELDS` (aucune
+  perte de couverture par rapport au devinage antérieur).
+  `POST /api/cadastre/import/inventory` accepte désormais `target:
+  "parcelles-home"` en plus de ses 3 cibles existantes, et persiste le `.prj`
+  dans l'archive ZIP aux côtés du `.shp`/`.dbf` quand il est fourni — un
+  correctif au passage : ce fichier est nécessaire à la détection UTM28N par
+  `runShapefileImportJob` (`prjBuf`, cf. § 16), et son absence de l'archive
+  aurait fait retomber silencieusement sur le repli par magnitude de
+  coordonnées même quand un `.prj` exploitable avait été déposé.
+- `assignSectionNicad` accepte désormais un second paramètre optionnel,
+  `fieldMapping?: FieldMapping` : `extractNumParcelle` (nouveau, dans
+  `assign-section-nicad.ts`) lit en priorité la colonne mappée explicitement
+  par l'utilisateur, avant de retomber sur la liste d'alias historique si
+  aucun mappage n'a été fourni (repli de compatibilité, ex. import direct
+  sans passer par la modale). De même, un NICAD déjà présent sous la colonne
+  mappée (`fieldMapping.nicad`) est prioritaire sur `extractNicad` générique.
+  `run-shapefile-job.ts` relit ce mappage depuis `job.layerMapping` (même
+  mécanique de stockage que pour `cad-parcelles`/`cad-sections`, § 15) et le
+  transmet à `assignSectionNicad`.
+- `HomeClient.tsx` gagne une nouvelle paire de fonctions symétrique de celles
+  du DXF (`requestLayerInventory`/`startMappedImport`) mais pour les attributs
+  shapefile : `requestShapefileFieldInventory` (appelle l'inventaire avec
+  `target: "parcelles-home"`, ouvre `FieldMappingModal` sur succès, retombe
+  sur `runCaoImport` — import direct sans mappage — en cas d'échec réseau ou
+  fichier illisible) et `startFieldMappedShapefileImport` (démarre le job
+  `POST /api/import-jobs` en JSON avec `kind: "parcelles"`, `sourceType:
+  "SHP"` et le `layerMapping` validé). La branche `.shp` de `handleFiles`
+  route désormais vers `requestShapefileFieldInventory` au lieu d'appeler
+  `runCaoImport` directement.
+
+**Pourquoi (pièges inclus)** : ce correctif réutilise intégralement
+l'infrastructure `FieldMappingModal`/`buildShapefileFieldInventory` déjà
+posée par le § 15 pour `/cadastre/import`, plutôt que d'inventer un second
+mécanisme de mappage — même modale, même contrat `{targetFields,
+availableFields, proposedMapping} → mapping validé`, seule la cible change
+(`parcelles-home` au lieu de `cad-parcelles`/`cad-sections`). Le périmètre est
+délibérément réduit à 2 champs, pas les 15 de `PARCELLE_TARGET_FIELDS` : ce
+chemin ne persiste jamais dans `CadParcelle` (colonnes typées) mais dans
+`Analysis.geoJsonData`, qui conserve TOUTES les propriétés `.dbf` telles
+quelles (§ 16) — mapper la commune, la superficie, etc. ici n'aurait aucun
+effet, puisque rien ne les lit jamais par nom de champ mappé sur ce chemin.
+Piège à ne pas répéter si une évolution future élargit ce mappage : toute
+nouvelle clé ajoutée à `PARCELLES_HOME_TARGET_FIELDS` doit avoir un
+consommateur réel (une fonction qui lit `fieldMapping.<clé>`), sous peine de
+présenter à l'utilisateur un champ à mapper qui ne sert jamais à rien.
+`runCaoImport` reste le repli commun aux DEUX chemins (`requestLayerInventory`
+pour le DXF, `requestShapefileFieldInventory` pour le shapefile) — un import
+qui échoue à s'inventorier n'est jamais bloquant, il retombe toujours sur la
+voie multipart historique sans mappage.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*
