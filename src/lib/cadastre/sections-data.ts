@@ -559,3 +559,92 @@ export async function countSections(sourceFichier: string): Promise<number> {
   `;
   return Number(rows[0]?.n ?? 0);
 }
+
+// Taille de lot pour la résolution spatiale section — même volumétrie que
+// `SYSCOL_RESOLVE_CHUNK` (data.ts), configurable indépendamment au besoin.
+const SECTION_RESOLVE_CHUNK = Number(process.env.SECTION_RESOLVE_CHUNK || 20000);
+
+/**
+ * Résout, pour chaque point (lng/lat, EPSG:4326), la section `limite_section`
+ * le CONTENANT (`ST_Contains`) ; à défaut, la section la plus proche dans une
+ * tolérance de 50 m (`approx = true`), même logique que
+ * `getSyscols2026ForPoints` (`data.ts`) pour les communes 2026. Renvoie
+ * syscol ET numéro de section en une seule jointure (contrairement à la
+ * jointure commune, `limite_section` porte les deux). Au-delà de la
+ * tolérance, aucune section n'est attribuée (tous les champs `null`).
+ */
+export async function getSectionsForPoints(
+  points: Array<{ lng: number; lat: number }>,
+  db: Db = prisma,
+): Promise<Array<{ syscolCommune: string | null; numSection: string | null; commune: string | null; approx: boolean }>> {
+  if (points.length === 0) return [];
+
+  const result: Array<{ syscolCommune: string | null; numSection: string | null; commune: string | null; approx: boolean }> =
+    points.map(() => ({ syscolCommune: null, numSection: null, commune: null, approx: false }));
+
+  // ── Passe 1 : contenance stricte, par lots (TOUS les points). ──────────────
+  const unresolved: number[] = [];
+  for (let start = 0; start < points.length; start += SECTION_RESOLVE_CHUNK) {
+    const slice = points.slice(start, start + SECTION_RESOLVE_CHUNK);
+    const payload = JSON.stringify(slice.map((p, k) => ({ i: start + k, lng: p.lng, lat: p.lat })));
+
+    const rows = await db.$queryRaw<
+      Array<{ i: number; syscol: string | null; numSection: string | null; commune: string | null }>
+    >`
+      WITH pts AS (
+        SELECT (e->>'i')::int AS i,
+               ST_SetSRID(ST_MakePoint((e->>'lng')::float8, (e->>'lat')::float8), 4326) AS geom
+        FROM json_array_elements(${payload}::json) AS e
+      )
+      SELECT pts.i AS i, hit."syscolCommune" AS syscol, hit."numSection" AS "numSection", hit."commune" AS commune
+      FROM pts
+      LEFT JOIN LATERAL (
+        SELECT s."syscolCommune", s."numSection", s."commune"
+        FROM "limite_section" s
+        WHERE s.geom IS NOT NULL AND s.geom && pts.geom AND ST_Contains(s.geom, pts.geom)
+        LIMIT 1
+      ) hit ON true
+    `;
+
+    for (const r of rows) {
+      const i = Number(r.i);
+      if (r.syscol) result[i] = { syscolCommune: r.syscol, numSection: r.numSection, commune: r.commune, approx: false };
+      else unresolved.push(i);
+    }
+  }
+
+  // ── Passe 2 : repli de proximité (50 m), uniquement pour les non résolus. ──
+  for (let start = 0; start < unresolved.length; start += SECTION_RESOLVE_CHUNK) {
+    const idxSlice = unresolved.slice(start, start + SECTION_RESOLVE_CHUNK);
+    const payload = JSON.stringify(
+      idxSlice.map((i) => ({ i, lng: points[i].lng, lat: points[i].lat })),
+    );
+
+    const rows = await db.$queryRaw<
+      Array<{ i: number; syscol: string | null; numSection: string | null; commune: string | null }>
+    >`
+      WITH pts AS (
+        SELECT (e->>'i')::int AS i,
+               ST_SetSRID(ST_MakePoint((e->>'lng')::float8, (e->>'lat')::float8), 4326) AS geom
+        FROM json_array_elements(${payload}::json) AS e
+      )
+      SELECT pts.i AS i, near."syscolCommune" AS syscol, near."numSection" AS "numSection", near."commune" AS commune
+      FROM pts
+      LEFT JOIN LATERAL (
+        SELECT s."syscolCommune", s."numSection", s."commune"
+        FROM "limite_section" s
+        WHERE s.geom IS NOT NULL
+          AND ST_DWithin(s.geom::geography, pts.geom::geography, 50)
+        ORDER BY s.geom <-> pts.geom
+        LIMIT 1
+      ) near ON true
+    `;
+
+    for (const r of rows) {
+      const i = Number(r.i);
+      if (r.syscol) result[i] = { syscolCommune: r.syscol, numSection: r.numSection, commune: r.commune, approx: true };
+    }
+  }
+
+  return result;
+}
