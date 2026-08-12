@@ -15,6 +15,7 @@ import * as turf from "@turf/turf";
 import { getSectionsForPoints } from "./sections-data";
 import { extractNicad } from "@/lib/geo-engine";
 import { validateNicadFormat } from "./nicad-logic";
+import type { FieldMapping } from "@/lib/import/field-mapping";
 import { buildNicad, normalizeNumeroParcelle } from "@/lib/nicad";
 
 const NUM_PARCELLE_ALIASES = ["numparcell", "num_parce", "numparce", "numparcelle"];
@@ -35,8 +36,26 @@ const NUM_PARCELLE_ALIASES = ["numparcell", "num_parce", "numparce", "numparcell
  * `extractNicad` qui traite un problème différent (une seule propriété
  * canonique connue sous quelques variantes fixes).
  */
-function extractNumParcelle(props: Record<string, unknown> | undefined | null): string | null {
+/**
+ * Colonne mappée explicitement par l'utilisateur (FieldMappingModal),
+ * prioritaire sur le devinage par alias : une correspondance validée par
+ * l'utilisateur ne doit jamais être contournée par une correspondance
+ * fortuite avec un alias générique.
+ */
+function extractNumParcelle(
+  props: Record<string, unknown> | undefined | null,
+  mappedColumn?: string,
+): string | null {
   if (!props) return null;
+
+  if (mappedColumn) {
+    const raw = props[mappedColumn];
+    if (raw != null && String(raw).trim()) {
+      return normalizeNumeroParcelle(String(raw)).value;
+    }
+    return null;
+  }
+
   for (const alias of NUM_PARCELLE_ALIASES) {
     const hit = Object.entries(props).find(([k]) => k.toLowerCase() === alias);
     if (hit && hit[1] != null && String(hit[1]).trim()) {
@@ -63,6 +82,7 @@ function representativePoint(geometry: GeoJSON.Feature["geometry"]): [number, nu
  */
 export async function assignSectionNicad(
   features: GeoJSON.Feature[],
+  fieldMapping?: FieldMapping,
 ): Promise<{ nbConstruits: number; nbSansSection: number; nbSansNumeroParcelle: number; warnings: string[] }> {
   let nbConstruits = 0;
   let nbSansSection = 0;
@@ -73,7 +93,10 @@ export async function assignSectionNicad(
   const candidates: { index: number; point: [number, number] }[] = [];
   for (let i = 0; i < features.length; i++) {
     const props = (features[i].properties ?? {}) as Record<string, unknown>;
-    const existing = extractNicad(props);
+    const mappedNicadRaw = fieldMapping?.nicad ? props[fieldMapping.nicad] : undefined;
+    const existing = mappedNicadRaw != null && String(mappedNicadRaw).trim()
+      ? String(mappedNicadRaw).trim()
+      : extractNicad(props);
     if (existing && validateNicadFormat(existing).valid) continue;
 
     const point = representativePoint(features[i].geometry);
@@ -97,7 +120,7 @@ export async function assignSectionNicad(
     if (m.approx) nbApprox++;
 
     const props = (features[c.index].properties ?? {}) as Record<string, unknown>;
-    const numParcelle = extractNumParcelle(props);
+    const numParcelle = extractNumParcelle(props, fieldMapping?.numParcelle);
     if (!numParcelle) {
       nbSansNumeroParcelle++;
       return;
