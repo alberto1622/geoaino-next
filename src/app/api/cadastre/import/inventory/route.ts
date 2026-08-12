@@ -9,7 +9,7 @@ import type { ShapefileTarget } from "@/lib/import/field-mapping";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-const VALID_TARGETS: ShapefileTarget[] = ["cad-parcelles", "cad-sections", "sections-limite"];
+const VALID_TARGETS: ShapefileTarget[] = ["cad-parcelles", "cad-sections", "sections-limite", "parcelles-home"];
 
 /**
  * POST /api/cadastre/import/inventory — inventaire des colonnes .dbf d'un
@@ -37,6 +37,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const files = formData.getAll("files") as File[];
     const shpFile = files.find((f) => f.name.toLowerCase().endsWith(".shp"));
     const dbfFile = files.find((f) => f.name.toLowerCase().endsWith(".dbf"));
+    const prjFile = files.find((f) => f.name.toLowerCase().endsWith(".prj"));
     if (!shpFile || !dbfFile) {
       return NextResponse.json(
         { error: "Fichier .shp ET .dbf requis (le .dbf porte les attributs à mapper)." },
@@ -50,6 +51,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const zip = new JSZip();
     zip.file(shpFile.name, shpBuf);
     zip.file(dbfFile.name, dbfBuf);
+    if (prjFile) zip.file(prjFile.name, Buffer.from(await prjFile.arrayBuffer()));
     const zipBuf = Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
     const fileKey = await saveImportUpload(`${shpFile.name.replace(/\.shp$/i, "")}.zip`, zipBuf);
 
