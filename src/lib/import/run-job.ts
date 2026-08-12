@@ -112,95 +112,13 @@ async function runDxfImportJob(jobId: number): Promise<void> {
     const fc = parcellesToFeatureCollection(withNicad.parcelles);
     const totalBuilt = fc.features.length;
 
-    await assertNotCancelled(jobId);
-    await setJobPhase(jobId, "analyze", 72);
-    const { kept: filteredGeoJson, removedCount: outOfSenegalCount } = filterOutOfSenegal(
-      fc as unknown as { type: string; features: { type: string; geometry: { type: string; coordinates: unknown } | null; properties?: Record<string, unknown> | null }[] },
+    await finishParcellesJob(
+      jobId,
+      { fileName: job.fileName, userId: job.userId, sourceType: job.sourceType as SourceType },
+      fc.features,
+      { statsExtra: { microstationReport: withNicad.report }, reportExtra: withNicad.report as unknown as Record<string, unknown> },
     );
-
-    // Persistance du GeoJSON complet sur disque (clé référencée par l'Analysis).
-    const geojsonKey = await saveGeoJsonLocally(
-      job.fileName,
-      JSON.stringify(filteredGeoJson),
-      job.userId,
-    );
-
-    const analysis = await prisma.analysis.create({
-      data: {
-        userId: job.userId ?? undefined,
-        fileName: job.fileName,
-        fileFormat: job.sourceType,
-        status: "PROCESSING",
-        geoJsonData: JSON.stringify({ type: "FeatureCollection", features: [] }),
-        geojsonKey,
-      },
-    });
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = analyzeGeoJSON(filteredGeoJson as any);
-
-    await prisma.importJob.update({ where: { id: jobId }, data: { progress: 88 } });
-
-    let aiReport: string | null = null;
-    try {
-      aiReport = await generateAIReport(result, job.fileName);
-    } catch (aiErr) {
-      console.warn(`[import/run] génération du rapport IA ignorée (job ${jobId}):`, aiErr);
-    }
-
-    if (result.errors.length > 0) {
-      const BATCH = 100;
-      for (let i = 0; i < result.errors.length; i += BATCH) {
-        const batch = result.errors.slice(i, i + BATCH).map((e) => ({
-          analysisId: analysis.id,
-          errorType: e.type.toUpperCase() as ErrType,
-          severity: e.severity.toUpperCase() as Sev,
-          nicad1: e.nicad1 ?? null,
-          nicad2: e.nicad2 ?? null,
-          description: e.description,
-          geometry: e.geometry ?? undefined,
-          area: e.area != null ? e.area.toString() : null,
-          confidence: String(e.confidence),
-        }));
-        await prisma.topologicalError.createMany({ data: batch });
-      }
-    }
-
-    const stats = {
-      ...result.stats,
-      outOfSenegalCount,
-      microstationReport: withNicad.report,
-    };
-
-    await prisma.analysis.update({
-      where: { id: analysis.id },
-      data: {
-        status: "COMPLETED",
-        totalFeatures: result.totalFeatures,
-        errorCount: result.errors.length,
-        conformityScore: result.stats.conformityScore.toString(),
-        summaryStats: stats as object,
-        aiReport,
-      },
-    });
-
-    await prisma.importJob.updateMany({
-      where: { id: jobId, status: { not: "cancelled" } },
-      data: {
-        status: "completed",
-        phase: "done",
-        progress: 100,
-        totalBuilt,
-        analysisId: analysis.id,
-        report: {
-          ...(withNicad.report as unknown as Record<string, unknown>),
-          totalFeatures: result.totalFeatures,
-          errorCount: result.errors.length,
-          conformityScore: result.stats.conformityScore,
-          outOfSenegalCount,
-        },
-      },
-    });
+    return;
   } catch (err) {
     if (err instanceof JobCancelledError) {
       console.log(`[import/run] ${err.message}`);
@@ -209,4 +127,115 @@ async function runDxfImportJob(jobId: number): Promise<void> {
     console.error(`[import/run] job ${jobId} échoué:`, err);
     await markJobFailed(jobId, err instanceof Error ? err.message : String(err));
   }
+}
+
+/**
+ * Queue commune « analyse → persistance → complétion » partagée par les
+ * pipelines DXF et shapefile une fois les features en 4326 disponibles :
+ * filtrage Sénégal → sauvegarde disque → `Analysis.create` → `analyzeGeoJSON`
+ * → rapport IA → insertion batchée des erreurs topologiques → `Analysis.update`
+ * → complétion de l'`ImportJob`.
+ *
+ * `extra.statsExtra`/`extra.reportExtra` permettent à chaque appelant
+ * d'enrichir `Analysis.summaryStats`/`ImportJob.report` avec ses propres
+ * champs (ex. `microstationReport` côté DXF) sans dupliquer cette queue.
+ */
+export async function finishParcellesJob(
+  jobId: number,
+  job: { fileName: string; userId: string | null; sourceType: SourceType },
+  features: GeoJSON.Feature[],
+  extra: { statsExtra?: Record<string, unknown>; reportExtra?: Record<string, unknown> } = {},
+): Promise<void> {
+  await assertNotCancelled(jobId);
+  await setJobPhase(jobId, "analyze", 72);
+  const { kept: filteredGeoJson, removedCount: outOfSenegalCount } = filterOutOfSenegal(
+    { type: "FeatureCollection", features } as unknown as { type: string; features: { type: string; geometry: { type: string; coordinates: unknown } | null; properties?: Record<string, unknown> | null }[] },
+  );
+
+  // Persistance du GeoJSON complet sur disque (clé référencée par l'Analysis).
+  const geojsonKey = await saveGeoJsonLocally(
+    job.fileName,
+    JSON.stringify(filteredGeoJson),
+    job.userId,
+  );
+
+  const analysis = await prisma.analysis.create({
+    data: {
+      userId: job.userId ?? undefined,
+      fileName: job.fileName,
+      fileFormat: job.sourceType,
+      status: "PROCESSING",
+      geoJsonData: JSON.stringify({ type: "FeatureCollection", features: [] }),
+      geojsonKey,
+    },
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const result = analyzeGeoJSON(filteredGeoJson as any);
+
+  await prisma.importJob.updateMany({
+    where: { id: jobId, status: { not: "cancelled" } },
+    data: { progress: 88 },
+  });
+
+  let aiReport: string | null = null;
+  try {
+    aiReport = await generateAIReport(result, job.fileName);
+  } catch (aiErr) {
+    console.warn(`[import/run] génération du rapport IA ignorée (job ${jobId}):`, aiErr);
+  }
+
+  if (result.errors.length > 0) {
+    const BATCH = 100;
+    for (let i = 0; i < result.errors.length; i += BATCH) {
+      const batch = result.errors.slice(i, i + BATCH).map((e) => ({
+        analysisId: analysis.id,
+        errorType: e.type.toUpperCase() as ErrType,
+        severity: e.severity.toUpperCase() as Sev,
+        nicad1: e.nicad1 ?? null,
+        nicad2: e.nicad2 ?? null,
+        description: e.description,
+        geometry: e.geometry ?? undefined,
+        area: e.area != null ? e.area.toString() : null,
+        confidence: String(e.confidence),
+      }));
+      await prisma.topologicalError.createMany({ data: batch });
+    }
+  }
+
+  const stats = {
+    ...result.stats,
+    outOfSenegalCount,
+    ...extra.statsExtra,
+  };
+
+  await prisma.analysis.update({
+    where: { id: analysis.id },
+    data: {
+      status: "COMPLETED",
+      totalFeatures: result.totalFeatures,
+      errorCount: result.errors.length,
+      conformityScore: result.stats.conformityScore.toString(),
+      summaryStats: stats as object,
+      aiReport,
+    },
+  });
+
+  await prisma.importJob.updateMany({
+    where: { id: jobId, status: { not: "cancelled" } },
+    data: {
+      status: "completed",
+      phase: "done",
+      progress: 100,
+      totalBuilt: features.length,
+      analysisId: analysis.id,
+      report: {
+        ...extra.reportExtra,
+        totalFeatures: result.totalFeatures,
+        errorCount: result.errors.length,
+        conformityScore: result.stats.conformityScore,
+        outOfSenegalCount,
+      },
+    },
+  });
 }
