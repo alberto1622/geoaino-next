@@ -1,12 +1,14 @@
 "use client";
 import { PageTitle } from "@/components/PageTitle";
 
-import { useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Upload, FileUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import FieldMappingModal from "@/components/FieldMappingModal";
 import { uploadShapefile } from "../_actions/import-export";
+import type { TargetFieldDef, ShapefileTarget } from "@/lib/import/field-mapping";
 
 type TypeImport = "parcelles" | "sections" | "communes2013" | "communes2026" | "nicads";
 
@@ -17,6 +19,47 @@ const TYPES: { value: TypeImport; label: string; hint: string }[] = [
   { value: "communes2026", label: "Communes 2026", hint: ".shp + .dbf / .geojson / .csv — COD_SYSCOL" },
   { value: "nicads", label: "NICAD (CSV)", hint: ".csv — colonne NICAD (16 caractères)" },
 ];
+
+/** Ces deux types seulement passent par l'inventaire + mappage + job asynchrone ; les autres restent synchrones. */
+const MAPPED_TYPES = new Set<TypeImport>(["parcelles", "sections"]);
+
+function targetForType(t: TypeImport): ShapefileTarget {
+  return t === "sections" ? "cad-sections" : "cad-parcelles";
+}
+function kindForType(t: TypeImport): "cad-parcelles" | "cad-sections" {
+  return t === "sections" ? "cad-sections" : "cad-parcelles";
+}
+
+interface ShapefileInventoryResponse {
+  fileKey: string;
+  fileName: string;
+  featureCount: number;
+  fields: { name: string; sampleValues: string[] }[];
+  targetFields: TargetFieldDef[];
+  proposedMapping: Record<string, string>;
+}
+
+interface JobState {
+  id: number;
+  status: string;
+  phase: string | null;
+  progress: number;
+  report?: { nbImportes?: number; nbIgnores?: number; nbErreurs?: number; warnings?: string[] } | null;
+  error?: string | null;
+}
+
+function phaseLabel(phase: string | null): string {
+  switch (phase) {
+    case "read":
+      return "Lecture du fichier…";
+    case "import":
+      return "Import des entités…";
+    case "done":
+      return "Terminé";
+    default:
+      return "Démarrage…";
+  }
+}
 
 const selectCls =
   "h-9 w-full rounded-lg border border-border bg-transparent px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -38,12 +81,105 @@ export default function ImportPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<Awaited<ReturnType<typeof uploadShapefile>> | null>(null);
+  const [inventory, setInventory] = useState<ShapefileInventoryResponse | null>(null);
+  const [job, setJob] = useState<JobState | null>(null);
+
+  const isMapped = MAPPED_TYPES.has(typeImport);
+  const isShapefileSelected = files.some((f) => f.name.toLowerCase().endsWith(".shp"));
+  const jobRunning = job?.status === "pending" || job?.status === "running";
+
+  // ── Polling du job (mêmes phases/format que le job DXF) ────────────────────
+  useEffect(() => {
+    if (!job || (job.status !== "pending" && job.status !== "running")) return;
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/import-jobs/${job.id}`, { cache: "no-store" });
+        const j = await res.json();
+        setJob({ id: j.id, status: j.status, phase: j.phase, progress: j.progress, report: j.report, error: j.error });
+        if (j.status === "completed") {
+          setResult({
+            success: true,
+            nbImportes: j.report?.nbImportes ?? j.totalBuilt ?? 0,
+            nbIgnores: j.report?.nbIgnores,
+            nbErreurs: j.report?.nbErreurs,
+            warnings: j.report?.warnings,
+          });
+          toast.success(`${j.report?.nbImportes ?? j.totalBuilt ?? 0} entité(s) importée(s).`);
+        } else if (j.status === "failed") {
+          toast.error(j.error || "Import échoué.");
+        } else if (j.status === "cancelled") {
+          toast.info("Import annulé.");
+        }
+      } catch {
+        /* réessaie au prochain tick */
+      }
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [job]);
+
+  const handleCancel = useCallback(async () => {
+    if (!job) return;
+    await fetch(`/api/import-jobs/${job.id}/cancel`, { method: "POST" });
+  }, [job]);
+
+  async function startMappedJob(mapping: Record<string, string>) {
+    if (!inventory) return;
+    const inv = inventory;
+    setInventory(null);
+    try {
+      const res = await fetch("/api/import-jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileKey: inv.fileKey,
+          fileName: inv.fileName,
+          sourceType: "SHP",
+          kind: kindForType(typeImport),
+          layerMapping: mapping,
+        }),
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(e.error || `Erreur serveur: ${res.status}`);
+      }
+      const { jobId } = (await res.json()) as { jobId: number };
+      setResult(null);
+      setJob({ id: jobId, status: "pending", phase: "read", progress: 0 });
+    } catch (err) {
+      toast.error(String(err));
+    }
+  }
 
   function handleImport() {
     if (files.length === 0) {
       toast.error("Sélectionnez au moins un fichier.");
       return;
     }
+
+    if (isMapped && isShapefileSelected) {
+      const shpFile = files.find((f) => f.name.toLowerCase().endsWith(".shp"));
+      const dbfFile = files.find((f) => f.name.toLowerCase().endsWith(".dbf"));
+      if (!shpFile || !dbfFile) {
+        toast.error("Sélectionnez le .shp ET son .dbf ensemble.");
+        return;
+      }
+      startTransition(async () => {
+        try {
+          const fd = new FormData();
+          fd.append("target", targetForType(typeImport));
+          fd.append("files", shpFile);
+          fd.append("files", dbfFile);
+          const res = await fetch("/api/cadastre/import/inventory", { method: "POST", body: fd });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Inventaire échoué.");
+          setInventory(data);
+        } catch (err) {
+          toast.error(String(err));
+        }
+      });
+      return;
+    }
+
     startTransition(async () => {
       try {
         const fichiers = await Promise.all(
@@ -117,12 +253,31 @@ export default function ImportPage() {
             </ul>
           )}
 
-          <Button onClick={handleImport} disabled={pending} className="gap-2">
+          <Button onClick={handleImport} disabled={pending || jobRunning} className="gap-2">
             <Upload className="h-4 w-4" />
-            {pending ? "Import en cours…" : "Importer"}
+            {pending ? "Préparation…" : jobRunning ? "Import en cours…" : "Importer"}
           </Button>
         </CardContent>
       </Card>
+
+      {job && (
+        <Card>
+          <CardContent className="space-y-2 p-5 text-sm">
+            <div className="flex items-center justify-between">
+              <span>{phaseLabel(job.phase)}</span>
+              <span>{job.progress}%</span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+              <div className="h-full bg-primary transition-all" style={{ width: `${job.progress}%` }} />
+            </div>
+            {jobRunning && (
+              <Button variant="ghost" size="sm" onClick={handleCancel}>
+                Annuler
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {result && (
         <Card className={result.success ? "" : "border-rose-500/40"}>
@@ -146,6 +301,17 @@ export default function ImportPage() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {inventory && (
+        <FieldMappingModal
+          fileName={inventory.fileName}
+          targetFields={inventory.targetFields}
+          availableFields={inventory.fields}
+          proposedMapping={inventory.proposedMapping}
+          onCancel={() => setInventory(null)}
+          onConfirm={(mapping) => void startMappedJob(mapping)}
+        />
       )}
     </div>
   );
