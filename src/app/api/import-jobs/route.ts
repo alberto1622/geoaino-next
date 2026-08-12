@@ -110,6 +110,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       }
 
       if (body.sourceType === "SHP") {
+        if (!userId) {
+          return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
+        }
         if (!body.kind || !["cad-parcelles", "cad-sections", "sections"].includes(body.kind)) {
           return NextResponse.json(
             { error: "kind requis pour un job shapefile (cad-parcelles|cad-sections|sections)." },

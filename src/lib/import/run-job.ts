@@ -77,8 +77,8 @@ async function runDxfImportJob(jobId: number): Promise<void> {
       await setJobPhase(jobId, "sections", 65);
       const built = await buildLimiteSections(ingestion, job.fileName);
 
-      await prisma.importJob.update({
-        where: { id: jobId },
+      await prisma.importJob.updateMany({
+        where: { id: jobId, status: { not: "cancelled" } },
         data: {
           status: "completed",
           phase: "done",
@@ -184,8 +184,8 @@ async function runDxfImportJob(jobId: number): Promise<void> {
       },
     });
 
-    await prisma.importJob.update({
-      where: { id: jobId },
+    await prisma.importJob.updateMany({
+      where: { id: jobId, status: { not: "cancelled" } },
       data: {
         status: "completed",
         phase: "done",

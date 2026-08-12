@@ -39,6 +39,8 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
     return;
   }
 
+  let opId: number | null = null;
+
   try {
     await setJobPhase(jobId, "read", 5, "running");
     const { shpBuf, dbfBuf } = await loadShapefilePair(job.fileKey);
@@ -62,8 +64,8 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
       await setJobPhase(jobId, "sections", 65);
       const built = await buildLimiteSections({ sections: candidates }, job.fileName);
 
-      await prisma.importJob.update({
-        where: { id: jobId },
+      await prisma.importJob.updateMany({
+        where: { id: jobId, status: { not: "cancelled" } },
         data: {
           status: "completed",
           phase: "done",
@@ -79,7 +81,7 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
       const source = await shapefile.read(shpBuf, dbfBuf);
       const features = (source.features ?? []) as GeoJSON.Feature[];
 
-      const opId = job.userId
+      opId = job.userId
         ? await insertOperation({
             typeOperation: "import",
             statut: "en_cours",
@@ -110,8 +112,8 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
         });
       }
 
-      await prisma.importJob.update({
-        where: { id: jobId },
+      await prisma.importJob.updateMany({
+        where: { id: jobId, status: { not: "cancelled" } },
         data: {
           status: "completed",
           phase: "done",
@@ -127,9 +129,11 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
   } catch (err) {
     if (err instanceof JobCancelledError) {
       console.log(`[import/run-shapefile] ${err.message}`);
+      if (opId) await updateOperation(opId, { statut: "echec" });
       return;
     }
     console.error(`[import/run-shapefile] job ${jobId} échoué:`, err);
+    if (opId) await updateOperation(opId, { statut: "echec" });
     await markJobFailed(jobId, err instanceof Error ? err.message : String(err));
   }
 }

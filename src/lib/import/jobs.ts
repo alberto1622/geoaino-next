@@ -54,15 +54,22 @@ export async function listImportJobs(limit = 20) {
   return prisma.importJob.findMany({ orderBy: { createdAt: "desc" }, take: limit });
 }
 
-/** Met à jour la phase + l'avancement (et éventuellement le statut). */
+/**
+ * Met à jour la phase + l'avancement (et éventuellement le statut). Écriture
+ * conditionnelle (`updateMany` + garde `status !== "cancelled"`) : un job déjà
+ * annulé entre-temps (ex. pendant que `status: "pending"` transitionne vers
+ * `"running"`, ou pendant une longue étape entre deux points de contrôle) ne
+ * doit jamais voir son statut réécrit par le runner — c'est l'invariant que
+ * `cancelImportJob` garantit côté utilisateur.
+ */
 export async function setJobPhase(
   id: number,
   phase: JobPhase,
   progress: number,
   status?: JobStatus,
 ) {
-  await prisma.importJob.update({
-    where: { id },
+  await prisma.importJob.updateMany({
+    where: { id, status: { not: "cancelled" } },
     data: { phase, progress, ...(status ? { status } : {}) },
   });
 }
@@ -71,9 +78,10 @@ export async function setJobProgress(id: number, progress: number) {
   await prisma.importJob.update({ where: { id }, data: { progress } });
 }
 
+/** Idem : n'écrase jamais un job déjà `cancelled` (même raisonnement que `setJobPhase`). */
 export async function markJobFailed(id: number, error: string) {
-  await prisma.importJob.update({
-    where: { id },
+  await prisma.importJob.updateMany({
+    where: { id, status: { not: "cancelled" } },
     data: { status: "failed", error },
   });
 }

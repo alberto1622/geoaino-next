@@ -21,7 +21,7 @@ export interface TargetFieldDef {
 export type FieldMapping = Record<string, string>;
 
 export const PARCELLE_TARGET_FIELDS: TargetFieldDef[] = [
-  { key: "nicad", label: "NICAD (16 caractères)", aliases: ["nicad"], required: true },
+  { key: "nicad", label: "NICAD (16 caractères)", aliases: ["nicad"] },
   { key: "codeSection", label: "Code section (11 chiffres, syscol+section)", aliases: ["codesectio", "cod_sect"] },
   { key: "numParcelle", label: "N° de parcelle", aliases: ["numparcell", "num_parce", "numparce", "numparcelle"] },
   { key: "commune", label: "Commune", aliases: ["commune", "nomcommune", "nom_commun", "nom"] },
@@ -39,7 +39,7 @@ export const PARCELLE_TARGET_FIELDS: TargetFieldDef[] = [
 ];
 
 export const CAD_SECTION_TARGET_FIELDS: TargetFieldDef[] = [
-  { key: "numSectionCode", label: "Code section (11 chiffres, syscol+section)", aliases: ["num_sect_n"], required: true },
+  { key: "numSectionCode", label: "Code section (11 chiffres, syscol+section)", aliases: ["num_sect_n"] },
   { key: "nomSection", label: "Nom de la section", aliases: ["nom_sect", "nomsect", "nom_section", "nomsection", "name"] },
   { key: "nomCommune", label: "Commune", aliases: ["com_arrond", "nomcommune", "nom_commun", "nom"] },
   { key: "region", label: "Région", aliases: ["region"] },
