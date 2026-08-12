@@ -31,19 +31,30 @@ import { filterOutOfSenegal } from "@/lib/senegal-bounds";
 import type { LayerMapping } from "@/lib/cadastral-filter";
 import { loadImportUpload } from "./storage";
 import { toDxfBuffer } from "./source";
-import { getImportJob, setJobPhase, markJobFailed, type SourceType } from "./jobs";
+import { getImportJob, setJobPhase, markJobFailed, assertNotCancelled, JobCancelledError, type SourceType } from "./jobs";
+import { runShapefileImportJob } from "./run-shapefile-job";
 
 type ErrType =
   | "OVERLAP" | "GAP" | "SLIVER" | "DUPLICATE"
   | "INVALID_GEOM" | "BOUNDARY_CROSS" | "MISSING_NICAD" | "SHORT_NICAD" | "SELF_INTERSECT";
 type Sev = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 
+/** Dispatcher : délègue au runner shapefile si `sourceType === "SHP"`, sinon exécute le pipeline DXF ci-dessous. */
 export async function runImportJob(jobId: number): Promise<void> {
   const job = await getImportJob(jobId);
   if (!job) {
     console.warn(`[import/run] job ${jobId} introuvable`);
     return;
   }
+  if (job.sourceType === "SHP") {
+    return runShapefileImportJob(jobId);
+  }
+  return runDxfImportJob(jobId);
+}
+
+async function runDxfImportJob(jobId: number): Promise<void> {
+  const job = await getImportJob(jobId);
+  if (!job) return;
 
   try {
     await setJobPhase(jobId, "read", 5, "running");
@@ -55,12 +66,14 @@ export async function runImportJob(jobId: number): Promise<void> {
     // ── Cible « sections » : construit la table limite_section + contrôle des
     // chevauchements, sans composer les parcelles ni produire d'Analysis. ──
     if (job.kind === "sections") {
+      await assertNotCancelled(jobId);
       await setJobPhase(jobId, "build", 20);
       const ingestion = await ingestDxfToParcelles(dxfBuf, job.fileName, {
         layerMapping,
         sectionsOnly: true,
       });
 
+      await assertNotCancelled(jobId);
       await setJobPhase(jobId, "sections", 65);
       const built = await buildLimiteSections(ingestion, job.fileName);
 
@@ -86,9 +99,11 @@ export async function runImportJob(jobId: number): Promise<void> {
       return;
     }
 
+    await assertNotCancelled(jobId);
     await setJobPhase(jobId, "build", 10);
     const ingestion = await ingestDxfToParcelles(dxfBuf, job.fileName, { layerMapping });
 
+    await assertNotCancelled(jobId);
     await setJobPhase(jobId, "nicad", 60);
     const withNicad = await assignNicad2026FromCommunes(ingestion);
 
@@ -97,6 +112,7 @@ export async function runImportJob(jobId: number): Promise<void> {
     const fc = parcellesToFeatureCollection(withNicad.parcelles);
     const totalBuilt = fc.features.length;
 
+    await assertNotCancelled(jobId);
     await setJobPhase(jobId, "analyze", 72);
     const { kept: filteredGeoJson, removedCount: outOfSenegalCount } = filterOutOfSenegal(
       fc as unknown as { type: string; features: { type: string; geometry: { type: string; coordinates: unknown } | null; properties?: Record<string, unknown> | null }[] },
@@ -186,6 +202,10 @@ export async function runImportJob(jobId: number): Promise<void> {
       },
     });
   } catch (err) {
+    if (err instanceof JobCancelledError) {
+      console.log(`[import/run] ${err.message}`);
+      return;
+    }
     console.error(`[import/run] job ${jobId} échoué:`, err);
     await markJobFailed(jobId, err instanceof Error ? err.message : String(err));
   }
