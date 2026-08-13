@@ -68,8 +68,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const touchedSources = new Set<string>();
   for (const overlapId of overlapIds) {
     try {
-      const src = await applyOverlapCorrectionWithHistory(overlapId, action, createdBy, "correct-batch");
-      if (action !== "ignore") touchedSources.add(src);
+      const lots = await applyOverlapCorrectionWithHistory(overlapId, action, createdBy, "correct-batch");
+      if (action !== "ignore") for (const src of lots) touchedSources.add(src);
       results.push({ overlapId, ok: true });
     } catch (err) {
       console.error("[cadastre/sections/correct-batch] item failed", overlapId, err);

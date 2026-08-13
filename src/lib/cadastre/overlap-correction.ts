@@ -62,16 +62,19 @@ function dedupeOverlaps(rows: LimiteSectionOverlapRow[]): LimiteSectionOverlapRo
  *  - `merge` : fusionne A et B (`turf.union`), B supprimée ;
  *  - `delete_a` / `delete_b` : supprime la section choisie ;
  *  - `ignore` : marque le chevauchement intentionnel (IGNORED).
- * Renvoie le `sourceFichier` traité ET un snapshot des lignes touchées
- * (AVANT mutation), pour permettre à l'appelant d'enregistrer une entrée
- * d'historique restaurable. Lève une `Error` si l'overlap ou une section est
- * introuvable, ou si la fusion échoue.
+ * Renvoie les LOTS touchés (A et B peuvent appartenir à deux lots différents
+ * depuis que `refreshOverlaps` détecte aussi les chevauchements croisés entre
+ * lots — cf. sections-data.ts) ET un snapshot des lignes touchées (AVANT
+ * mutation), pour permettre à l'appelant d'enregistrer une entrée
+ * d'historique restaurable et de rafraîchir les DEUX lots (même principe que
+ * `merge/route.ts`, qui gère déjà des sections de lots différents). Lève une
+ * `Error` si l'overlap ou une section est introuvable, ou si la fusion échoue.
  */
 export async function applyOverlapCorrection(
   overlapId: number,
   action: OverlapAction,
   db: Db = prisma,
-): Promise<{ sourceFichier: string; snapshot: SectionsDeleteSnapshot }> {
+): Promise<{ lots: string[]; snapshot: SectionsDeleteSnapshot }> {
   const ov = await getOverlap(overlapId, db);
   if (!ov) throw new Error("Chevauchement introuvable");
 
@@ -79,11 +82,12 @@ export async function applyOverlapCorrection(
     const overlapFull = await getOverlapFull(overlapId, db);
     if (!overlapFull) throw new Error("Chevauchement introuvable");
     await setOverlapStatus(overlapId, "IGNORED", db);
-    return { sourceFichier: ov.sourceFichier, snapshot: { sections: [], overlaps: [overlapFull] } };
+    return { lots: [ov.sourceFichier], snapshot: { sections: [], overlaps: [overlapFull] } };
   }
 
   const [a, b] = await Promise.all([getSectionFull(ov.sectionAId, db), getSectionFull(ov.sectionBId, db)]);
   if (!a || !b) throw new Error("Section introuvable");
+  const lots = Array.from(new Set([a.sourceFichier, b.sourceFichier]));
   const [overlapFull, overlapsA, overlapsB] = await Promise.all([
     getOverlapFull(overlapId, db),
     getOverlapsForSection(ov.sectionAId, db),
@@ -126,7 +130,7 @@ export async function applyOverlapCorrection(
     await deleteSection(ov.sectionBId, db);
   }
 
-  return { sourceFichier: ov.sourceFichier, snapshot };
+  return { lots, snapshot };
 }
 
 /**
@@ -145,10 +149,10 @@ export async function applyOverlapCorrectionWithHistory(
   action: OverlapAction,
   createdBy: string | null,
   historyAction: "correct" | "correct-batch" = "correct",
-): Promise<string> {
+): Promise<string[]> {
   return prisma.$transaction(
     async (tx) => {
-      const { sourceFichier, snapshot } = await applyOverlapCorrection(overlapId, action, tx);
+      const { lots, snapshot } = await applyOverlapCorrection(overlapId, action, tx);
       const first = snapshot.sections[0];
       await recordHistory(tx, {
         scope: "sections",
@@ -162,7 +166,7 @@ export async function applyOverlapCorrectionWithHistory(
         after: {},
         createdBy,
       });
-      return sourceFichier;
+      return lots;
     },
     { maxWait: 10_000, timeout: 120_000 },
   );

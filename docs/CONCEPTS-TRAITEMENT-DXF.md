@@ -2233,5 +2233,67 @@ raisonnable.
 
 ---
 
+## 20. Chevauchements croisés ENTRE lots (pas seulement à l'intérieur d'un même lot)
+
+**Problème métier.** Le contrôle de chevauchements de `limite_section` (§11)
+ne comparait les sections QU'À L'INTÉRIEUR d'un même lot d'import
+(`sourceFichier`) : deux lots chargés séparément — redécoupage administratif
+non répercuté, fichiers de communes voisines, doublon d'un même fichier
+réimporté sous un autre nom — pouvaient se chevaucher géographiquement sans
+JAMAIS être détectés, puisque le contrôle ne portait que sur le lot qu'on
+venait de charger, comparé à lui-même.
+
+**Cause technique.** `refreshOverlaps(sourceFichier)` (`sections-data.ts`)
+ancrait les DEUX côtés du self-join sur le même lot
+(`a."sourceFichier" = b."sourceFichier"`), et `limite_section_overlap`
+n'avait qu'une seule colonne `sourceFichier` — aucune ligne ne pouvait
+représenter une paire à cheval sur deux lots.
+
+**Solution.** Migration `20260813150000_add_limite_section_overlap_source_b`
+ajoute `sourceFichierB` (lot de `sectionBId` ; = `sourceFichier` — lot de
+`sectionAId` — pour une paire du même lot). `refreshOverlaps` n'ancre plus
+QUE le côté `a` sur le lot rafraîchi ; `b` parcourt désormais TOUTE la table
+`limite_section`, filtré par l'index spatial GiST sur `geom`
+(`a.geom && b.geom`, même stratégie que §19). Une paire du même lot est
+retrouvée deux fois (a/b interchangeables) : `LEAST`/`GREATEST` sur les ids
+normalise l'identité de la paire et `DISTINCT ON` élimine le doublon ; une
+paire croisée avec un AUTRE lot n'est trouvée qu'une fois (un seul côté peut
+matcher `a."sourceFichier" = sourceFichier`), donc jamais dupliquée même
+après plusieurs rafraîchissements successifs (lot A puis lot B). Appelée
+automatiquement après CHAQUE import (`build-sections.ts`), donc dès le
+chargement d'un nouveau lot.
+
+`listOverlaps` (page `/cadastre/sections`) filtre désormais par
+`sourceFichier = cible OU sourceFichierB = cible` : une paire croisée
+apparaît dans la vue des DEUX lots concernés, corrigeable depuis l'un ou
+l'autre. `overlap-correction.ts · applyOverlapCorrection` renvoie les LOTS
+réellement touchés (ceux des deux sections, potentiellement différents) —
+`correct/route.ts`/`correct-batch/route.ts` rafraîchissent les DEUX, même
+principe déjà en place dans `merge/route.ts` pour une fusion inter-lots.
+`SectionsClient.tsx · performCorrection` recharge systématiquement la vue
+courante après une correction (au lieu de faire confiance à une réponse
+scopée à un seul lot, devenue insuffisante) ; l'UI affiche un repère
+« Chevauchement entre lots » quand `aSourceFichier ≠ bSourceFichier`.
+
+Nettoyage à la suppression d'un lot (`deleteSectionsBySource`) et snapshot
+avant suppression (`getOverlapsFullBySource`) : désormais par APPARTENANCE
+réelle des sections (sous-requête sur `limite_section`), pas par
+`sourceFichier`/`sourceFichierB` seul — sinon une paire croisée où le lot
+supprimé est côté B laisserait une ligne orpheline (référençant un id de
+section qui n'existe plus) et échapperait à l'historique restaurable.
+
+**Pourquoi.** Ancrer UN SEUL côté du join sur le lot rafraîchi (plutôt que
+les deux) est ce qui permet d'utiliser l'index `sourceFichier` pour
+restreindre `a` sans perdre la possibilité de trouver `b` n'importe où dans
+la table — la contrepartie (une paire du même lot trouvée deux fois) est
+résolue par normalisation + `DISTINCT ON`, moins coûteuse qu'un balayage
+complet en OR sur les deux colonnes (que l'optimiseur PostgreSQL pousse mal
+à travers un self-join spatial). Recalculer par PAIRE (pas par lot seul) au
+DELETE et à la préservation des IGNORED est nécessaire pour l'idempotence :
+sans cela, rafraîchir le lot B après le lot A dupliquerait la ligne
+croisée (A, B) déjà insérée par le rafraîchissement de A.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

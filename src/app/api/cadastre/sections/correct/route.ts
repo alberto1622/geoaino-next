@@ -5,7 +5,7 @@ import {
   statusForOverlapError,
   type OverlapAction,
 } from "@/lib/cadastre/overlap-correction";
-import { refreshOverlaps, listSections, listOverlaps } from "@/lib/cadastre/sections-data";
+import { refreshOverlaps } from "@/lib/cadastre/sections-data";
 
 export const runtime = "nodejs";
 
@@ -26,8 +26,12 @@ const SINGLE_CORRECT_ACTIONS = new Set<OverlapAction>([
  * POST /api/cadastre/sections/correct — résout un chevauchement entre deux
  * sections (une seule paire). Voir `applyOverlapCorrection` pour le détail
  * des actions. Capture + mutation + historique atomiques (cf.
- * `applyOverlapCorrectionWithHistory`). Renvoie les sections + chevauchements
- * à jour du lot concerné.
+ * `applyOverlapCorrectionWithHistory`). Ne renvoie plus de vue scopée à un
+ * lot : depuis les chevauchements croisés entre lots, une correction peut
+ * toucher DEUX lots différents (ex. `clip_b` modifie une section qui
+ * n'appartient pas forcément au même lot que la section A) — c'est
+ * désormais à l'appelant de recharger sa vue courante (cf.
+ * `SectionsClient.tsx · performCorrection`).
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const session = await auth();
@@ -52,12 +56,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    const src = await applyOverlapCorrectionWithHistory(overlapId, action, createdBy, "correct");
+    const lots = await applyOverlapCorrectionWithHistory(overlapId, action, createdBy, "correct");
     if (action !== "ignore") {
-      await refreshOverlaps(src);
+      for (const src of lots) await refreshOverlaps(src);
     }
-    const [sections, overlaps] = await Promise.all([listSections(src), listOverlaps(src)]);
-    return NextResponse.json({ success: true, sections, overlaps });
+    return NextResponse.json({ success: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[cadastre/sections/correct] POST", err);

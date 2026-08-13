@@ -60,8 +60,10 @@ interface OverlapItem {
   intersectionGeoJson: GeoJSON.Geometry;
   aNumSection: string | null;
   aCommune: string | null;
+  aSourceFichier: string;
   bNumSection: string | null;
   bCommune: string | null;
+  bSourceFichier: string;
 }
 
 type JobState = {
@@ -1210,16 +1212,11 @@ export default function SectionsClient() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Correction échouée");
-        // En vue « tous les lots » ou multi-lots, la réponse (limitée au lot
-        // corrigé) ne doit pas remplacer l'affichage complet : on recharge la
-        // vue courante. Seule une vue à exactement UN lot correspond au
-        // périmètre de la réponse et peut être remplacée directement.
-        if (selectedSources.length !== 1) {
-          await fetchData(selectedSources);
-        } else {
-          setSections(data.sections ?? []);
-          setOverlaps(data.overlaps ?? []);
-        }
+        // Depuis les chevauchements croisés entre lots, une correction peut
+        // toucher un lot différent de celui de la section A (ex. `clip_b`) —
+        // la réponse ne porte donc plus de vue scopée à un seul lot,
+        // recharger la vue courante est la seule option robuste.
+        await fetchData(selectedSources);
         setSelectedOverlapId(null);
         toast.success("Correction appliquée");
       } catch (err) {
@@ -2024,6 +2021,12 @@ export default function SectionsClient() {
                                   </span>
                                 )}
                               </div>
+                              {o.aSourceFichier !== o.bSourceFichier && (
+                                <div className="mb-1.5 -mt-1 text-[10px] text-amber-500">
+                                  Chevauchement entre lots : {o.aSourceFichier}{" "}
+                                  ↔ {o.bSourceFichier}
+                                </div>
+                              )}
                               <div className="grid grid-cols-2 gap-1">
                                 <ActBtn
                                   busy={busy || batchCorrecting}

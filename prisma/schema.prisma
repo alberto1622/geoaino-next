@@ -457,11 +457,14 @@ model LimiteSection {
   @@map("limite_section")
 }
 
-// Chevauchements détectés entre deux limite_section (contrôle topologique).
+// Chevauchements détectés entre deux limite_section (contrôle topologique) —
+// y compris entre sections de LOTS DIFFÉRENTS (refreshOverlaps compare le lot
+// chargé à tous les lots déjà stockés, pas seulement à lui-même).
 // Calqué sur OverlapGeometry ; `status` suit la résolution par l'utilisateur.
 model LimiteSectionOverlap {
   id                Int      @id @default(autoincrement())
-  sourceFichier     String
+  sourceFichier     String // lot de sectionAId
+  sourceFichierB    String // lot de sectionBId (= sourceFichier si même lot)
   sectionAId        Int
   sectionBId        Int
   intersectionGeoJson Json
@@ -470,6 +473,7 @@ model LimiteSectionOverlap {
   createdAt         DateTime @default(now())
 
   @@index([sourceFichier, status])
+  @@index([sourceFichierB])
   @@map("limite_section_overlap")
 }
 

@@ -30,6 +30,32 @@ function sourceFichierFilter(
     : Prisma.sql`WHERE ${Prisma.raw(column)} = ANY(${list})`;
 }
 
+/** Filtre `sourceFichier` pour `listOverlaps` — une paire de chevauchement
+ *  peut relier DEUX lots différents (`sourceFichier`/`sourceFichierB`, cf.
+ *  `refreshOverlaps`) : elle doit apparaître dans la vue de L'UN OU L'AUTRE,
+ *  pas seulement celle du lot de `sectionAId`. */
+function overlapSourceFilter(sourceFichier: string | string[] | null): Prisma.Sql {
+  if (sourceFichier == null) return Prisma.empty;
+  const list = Array.isArray(sourceFichier) ? sourceFichier : [sourceFichier];
+  if (list.length === 0) return Prisma.empty;
+  return list.length === 1
+    ? Prisma.sql`WHERE (o."sourceFichier" = ${list[0]} OR o."sourceFichierB" = ${list[0]})`
+    : Prisma.sql`WHERE (o."sourceFichier" = ANY(${list}) OR o."sourceFichierB" = ANY(${list}))`;
+}
+
+/** Filtre par APPARTENANCE réelle des sections à un lot (via `limite_section`),
+ *  utilisé pour les opérations dépendant des sections effectivement stockées
+ *  dans ce lot (snapshot avant suppression, nettoyage) plutôt que du champ
+ *  `sourceFichier`/`sourceFichierB` de l'overlap — les deux coïncident pour
+ *  une paire du même lot, mais pas pour une paire croisée où seule LA MOITIÉ
+ *  de la paire appartient au lot en question. */
+function overlapMembershipFilter(sourceFichier: string): Prisma.Sql {
+  return Prisma.sql`
+    WHERE "sectionAId" IN (SELECT id FROM "limite_section" WHERE "sourceFichier" = ${sourceFichier})
+       OR "sectionBId" IN (SELECT id FROM "limite_section" WHERE "sourceFichier" = ${sourceFichier})
+  `;
+}
+
 export interface SectionInsert {
   region: string | null;
   departement: string | null;
@@ -60,8 +86,10 @@ export interface OverlapListItem {
   intersectionGeoJson: GeoJSON.Geometry;
   aNumSection: string | null;
   aCommune: string | null;
+  aSourceFichier: string;
   bNumSection: string | null;
   bCommune: string | null;
+  bSourceFichier: string;
 }
 
 /** Client Prisma OU client de transaction interactive — toutes les fonctions
@@ -86,7 +114,8 @@ export interface LimiteSectionRow {
 
 export interface LimiteSectionOverlapRow {
   id: number;
-  sourceFichier: string;
+  sourceFichier: string; // lot de sectionAId
+  sourceFichierB: string; // lot de sectionBId (= sourceFichier si même lot)
   sectionAId: number;
   sectionBId: number;
   intersectionGeoJson: GeoJSON.Geometry;
@@ -147,19 +176,23 @@ export async function getSectionsFullBySource(sourceFichier: string, db: Db = pr
 /** Chevauchements complets référençant une section — snapshot avant suppression d'une section. */
 export async function getOverlapsForSection(id: number, db: Db = prisma): Promise<LimiteSectionOverlapRow[]> {
   const rows = await db.$queryRaw<RawOverlapRow[]>`
-    SELECT id, "sourceFichier", "sectionAId", "sectionBId", "intersectionGeoJson",
+    SELECT id, "sourceFichier", "sourceFichierB", "sectionAId", "sectionBId", "intersectionGeoJson",
            "overlapAreaM2", "status", "createdAt"
     FROM "limite_section_overlap" WHERE "sectionAId" = ${id} OR "sectionBId" = ${id}
   `;
   return rows.map(normalizeOverlapRow);
 }
 
-/** Chevauchements complets d'un lot — snapshot avant suppression du lot. */
+/** Chevauchements complets d'un lot — snapshot avant suppression du lot.
+ *  Par APPARTENANCE réelle des sections (pas par `sourceFichier` seul) : une
+ *  paire croisée avec un autre lot doit être capturée même quand ce lot est
+ *  côté `sourceFichierB`, sinon elle disparaît silencieusement (non
+ *  restaurable) à la suppression. */
 export async function getOverlapsFullBySource(sourceFichier: string, db: Db = prisma): Promise<LimiteSectionOverlapRow[]> {
   const rows = await db.$queryRaw<RawOverlapRow[]>`
-    SELECT id, "sourceFichier", "sectionAId", "sectionBId", "intersectionGeoJson",
+    SELECT id, "sourceFichier", "sourceFichierB", "sectionAId", "sectionBId", "intersectionGeoJson",
            "overlapAreaM2", "status", "createdAt"
-    FROM "limite_section_overlap" WHERE "sourceFichier" = ${sourceFichier}
+    FROM "limite_section_overlap" ${overlapMembershipFilter(sourceFichier)}
   `;
   return rows.map(normalizeOverlapRow);
 }
@@ -169,7 +202,7 @@ export async function getOverlapsFullBySource(sourceFichier: string, db: Db = pr
  * champs utiles à la résolution. */
 export async function getOverlapFull(id: number, db: Db = prisma): Promise<LimiteSectionOverlapRow | null> {
   const rows = await db.$queryRaw<RawOverlapRow[]>`
-    SELECT id, "sourceFichier", "sectionAId", "sectionBId", "intersectionGeoJson",
+    SELECT id, "sourceFichier", "sourceFichierB", "sectionAId", "sectionBId", "intersectionGeoJson",
            "overlapAreaM2", "status", "createdAt"
     FROM "limite_section_overlap" WHERE id = ${id}
   `;
@@ -220,17 +253,18 @@ export async function reinsertLimiteSectionOverlaps(rows: LimiteSectionOverlapRo
     await db.$executeRawUnsafe(
       `
       INSERT INTO "limite_section_overlap"
-        (id, "sourceFichier","sectionAId","sectionBId","intersectionGeoJson","overlapAreaM2","status","createdAt")
-      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8)
+        (id, "sourceFichier","sourceFichierB","sectionAId","sectionBId","intersectionGeoJson","overlapAreaM2","status","createdAt")
+      VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9)
       ON CONFLICT (id) DO UPDATE SET
         "sourceFichier" = EXCLUDED."sourceFichier",
+        "sourceFichierB" = EXCLUDED."sourceFichierB",
         "sectionAId" = EXCLUDED."sectionAId",
         "sectionBId" = EXCLUDED."sectionBId",
         "intersectionGeoJson" = EXCLUDED."intersectionGeoJson",
         "overlapAreaM2" = EXCLUDED."overlapAreaM2",
         "status" = EXCLUDED."status"
       `,
-      r.id, r.sourceFichier, r.sectionAId, r.sectionBId, JSON.stringify(r.intersectionGeoJson), r.overlapAreaM2, r.status, new Date(r.createdAt),
+      r.id, r.sourceFichier, r.sourceFichierB, r.sectionAId, r.sectionBId, JSON.stringify(r.intersectionGeoJson), r.overlapAreaM2, r.status, new Date(r.createdAt),
     );
   }
 }
@@ -240,9 +274,15 @@ const GEOM_FROM_GEOJSON = (expr: string) =>
   `ST_Multi(ST_CollectionExtract(ST_MakeValid(ST_SetSRID(ST_GeomFromGeoJSON(${expr}), 4326)), 3))`;
 
 /** Supprime le lot d'un fichier (sections + chevauchements) avant réimport,
- * ou par l'action de suppression manuelle (cf. delete/route.ts). */
+ * ou par l'action de suppression manuelle (cf. delete/route.ts). Le nettoyage
+ * des chevauchements se fait par APPARTENANCE réelle des sections (pas par
+ * `sourceFichier` seul) : un chevauchement croisé avec un autre lot a ses
+ * sections des deux côtés de la relation, et doit disparaître dès que L'UNE
+ * des deux est supprimée — sinon la ligne reste orpheline, référençant un id
+ * de section qui n'existe plus. DOIT s'exécuter AVANT la suppression des
+ * sections elles-mêmes (la sous-requête d'appartenance en dépend). */
 export async function deleteSectionsBySource(sourceFichier: string, db: Db = prisma): Promise<void> {
-  await db.$executeRaw`DELETE FROM "limite_section_overlap" WHERE "sourceFichier" = ${sourceFichier}`;
+  await db.$executeRaw`DELETE FROM "limite_section_overlap" ${overlapMembershipFilter(sourceFichier)}`;
   await db.$executeRaw`DELETE FROM "limite_section" WHERE "sourceFichier" = ${sourceFichier}`;
 }
 
@@ -362,7 +402,7 @@ export async function getSectionsFullByIds(ids: number[], db: Db = prisma): Prom
 export async function getOverlapsForSections(ids: number[], db: Db = prisma): Promise<LimiteSectionOverlapRow[]> {
   if (ids.length === 0) return [];
   const rows = await db.$queryRaw<RawOverlapRow[]>`
-    SELECT id, "sourceFichier", "sectionAId", "sectionBId", "intersectionGeoJson",
+    SELECT id, "sourceFichier", "sourceFichierB", "sectionAId", "sectionBId", "intersectionGeoJson",
            "overlapAreaM2", "status", "createdAt"
     FROM "limite_section_overlap"
     WHERE "sectionAId" IN (${Prisma.join(ids)}) OR "sectionBId" IN (${Prisma.join(ids)})
@@ -434,32 +474,60 @@ export async function updateSectionNumero(id: number, numSection: string | null,
 }
 
 /**
- * (Re)calcule les chevauchements surfaciques d'un lot. Préserve les paires
- * marquées IGNORED (non ré-insérées), remplace le reste. Appelé après l'import
- * et après chaque correction géométrique.
+ * (Re)calcule les chevauchements surfaciques impliquant ce lot — CONTRE
+ * TOUTES les sections déjà stockées, pas seulement celles du même lot : deux
+ * lots chargés séparément (re-découpage administratif, fichiers voisins,
+ * doublon d'import) peuvent se chevaucher géographiquement sans jamais
+ * partager `sourceFichier`, une incohérence auparavant invisible. Préserve
+ * les paires marquées IGNORED (non ré-insérées), remplace le reste. Appelé
+ * après l'import (donc dès le CHARGEMENT d'un nouveau lot) et après chaque
+ * correction géométrique.
+ *
+ * Le JOIN n'ancre QUE le côté `a` sur `sourceFichier` (index dédié) ; `b`
+ * parcourt tout `limite_section`, filtré par l'index spatial GiST sur `geom`
+ * (`a.geom && b.geom`) — même stratégie déjà validée pour la détection
+ * `section_mismatch` (§19, CONCEPTS-TRAITEMENT-DXF.md). Une paire du MÊME lot
+ * est trouvée deux fois (a/b interchangeables) ; `LEAST`/`GREATEST` normalise
+ * l'identité de la paire et `DISTINCT ON` élimine le doublon — une paire
+ * croisée avec un AUTRE lot n'est trouvée qu'une fois (seul un côté peut
+ * matcher `a."sourceFichier" = sourceFichier`), donc jamais dupliquée.
+ *
+ * Le nettoyage préalable (DELETE) et la préservation des IGNORED portent sur
+ * la PAIRE de sections (pas sur `sourceFichier` seul) : un rafraîchissement
+ * déclenché par L'AUTRE lot d'une paire croisée doit retrouver/écraser la
+ * même ligne, jamais en créer une seconde.
  */
 export async function refreshOverlaps(sourceFichier: string): Promise<number> {
   await prisma.$executeRaw`
-    DELETE FROM "limite_section_overlap" WHERE "sourceFichier" = ${sourceFichier} AND "status" <> 'IGNORED'
+    DELETE FROM "limite_section_overlap"
+    WHERE ("sourceFichier" = ${sourceFichier} OR "sourceFichierB" = ${sourceFichier})
+      AND "status" <> 'IGNORED'
   `;
   const inserted = await prisma.$executeRaw`
     INSERT INTO "limite_section_overlap"
-      ("sourceFichier","sectionAId","sectionBId","intersectionGeoJson","overlapAreaM2","status","createdAt")
-    SELECT a."sourceFichier", a.id, b.id,
-           ST_AsGeoJSON(ST_Intersection(a.geom, b.geom))::jsonb,
-           ST_Area(ST_Transform(ST_Intersection(a.geom, b.geom), 32628)),
-           'PENDING', now()
-    FROM "limite_section" a
-    JOIN "limite_section" b
-      ON a."sourceFichier" = b."sourceFichier" AND a.id < b.id
-     AND a.geom && b.geom AND ST_Intersects(a.geom, b.geom)
-    WHERE a."sourceFichier" = ${sourceFichier}
-      AND ST_Area(ST_Transform(ST_Intersection(a.geom, b.geom), 32628)) > ${MIN_OVERLAP_AREA_M2}
-      AND NOT EXISTS (
-        SELECT 1 FROM "limite_section_overlap" o
-        WHERE o."status" = 'IGNORED' AND o."sourceFichier" = a."sourceFichier"
-          AND o."sectionAId" = a.id AND o."sectionBId" = b.id
-      )
+      ("sourceFichier","sourceFichierB","sectionAId","sectionBId","intersectionGeoJson","overlapAreaM2","status","createdAt")
+    SELECT DISTINCT ON (least_id, greatest_id)
+      lot_least, lot_greatest, least_id, greatest_id, geojson, area, 'PENDING', now()
+    FROM (
+      SELECT
+        CASE WHEN a.id < b.id THEN a."sourceFichier" ELSE b."sourceFichier" END AS lot_least,
+        CASE WHEN a.id < b.id THEN b."sourceFichier" ELSE a."sourceFichier" END AS lot_greatest,
+        LEAST(a.id, b.id) AS least_id,
+        GREATEST(a.id, b.id) AS greatest_id,
+        ST_AsGeoJSON(ST_Intersection(a.geom, b.geom))::jsonb AS geojson,
+        ST_Area(ST_Transform(ST_Intersection(a.geom, b.geom), 32628)) AS area
+      FROM "limite_section" a
+      JOIN "limite_section" b
+        ON a.id <> b.id AND a.geom && b.geom AND ST_Intersects(a.geom, b.geom)
+      WHERE a."sourceFichier" = ${sourceFichier}
+        AND ST_Area(ST_Transform(ST_Intersection(a.geom, b.geom), 32628)) > ${MIN_OVERLAP_AREA_M2}
+    ) pairs
+    WHERE NOT EXISTS (
+      SELECT 1 FROM "limite_section_overlap" o
+      WHERE o."status" = 'IGNORED'
+        AND o."sectionAId" = pairs.least_id AND o."sectionBId" = pairs.greatest_id
+    )
+    ORDER BY least_id, greatest_id
   `;
   return Number(inserted);
 }
@@ -468,14 +536,14 @@ export async function refreshOverlaps(sourceFichier: string): Promise<number> {
 export async function listOverlaps(
   sourceFichier: string | string[] | null,
 ): Promise<OverlapListItem[]> {
-  const where = sourceFichierFilter('o."sourceFichier"', sourceFichier);
+  const where = overlapSourceFilter(sourceFichier);
   const rows = await prisma.$queryRaw<
     Array<OverlapListItem & { overlapAreaM2: string | number | null }>
   >`
     SELECT o.id, o."sectionAId", o."sectionBId", o."status",
            o."overlapAreaM2", o."intersectionGeoJson",
-           a."numSection" AS "aNumSection", a."commune" AS "aCommune",
-           b."numSection" AS "bNumSection", b."commune" AS "bCommune"
+           a."numSection" AS "aNumSection", a."commune" AS "aCommune", a."sourceFichier" AS "aSourceFichier",
+           b."numSection" AS "bNumSection", b."commune" AS "bCommune", b."sourceFichier" AS "bSourceFichier"
     FROM "limite_section_overlap" o
     JOIN "limite_section" a ON a.id = o."sectionAId"
     JOIN "limite_section" b ON b.id = o."sectionBId"
