@@ -56,6 +56,35 @@ export function normalizeSection(raw: string | null | undefined): string | null 
   return digits.slice(-NICAD_SECTION_LENGTH).padStart(NICAD_SECTION_LENGTH, "0");
 }
 
+/** Extrait uniquement les chiffres d'une chaîne (normalisation avant comparaison). */
+export function digitsOnly(raw: string | null | undefined): string {
+  return String(raw ?? "").replace(/\D/g, "");
+}
+
+/**
+ * Compare un codeSection déclaré (`.dbf`, longueur variable — parfois
+ * seulement le numéro de section à 3 chiffres, parfois le code complet à
+ * 11 chiffres syscol+section) à un codeSection géolocalisé (toujours 11
+ * chiffres, `syscolCommune` + `numSection` concaténés par jointure
+ * spatiale). Si le déclaré ne compte que 3 chiffres, la comparaison porte
+ * uniquement sur les 3 derniers chiffres du géolocalisé (le numéro de
+ * section) — évite un faux mismatch systématique sur les fichiers qui ne
+ * saisissent pas le préfixe syscol. Renvoie `null` si l'un des deux côtés
+ * est vide/non exploitable (rien à comparer, pas d'erreur à lever).
+ */
+export function codeSectionsMatch(
+  declaredRaw: string | null | undefined,
+  geolocatedRaw: string | null | undefined,
+): boolean | null {
+  const declared = digitsOnly(declaredRaw);
+  const geolocated = digitsOnly(geolocatedRaw);
+  if (!declared || !geolocated) return null;
+  if (declared.length === NICAD_SECTION_LENGTH) {
+    return declared === geolocated.slice(-NICAD_SECTION_LENGTH);
+  }
+  return declared === geolocated;
+}
+
 export interface NicadPrefixResult {
   prefix: string;
   warning?: string;
