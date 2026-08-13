@@ -2168,5 +2168,57 @@ voie multipart historique sans mappage.
 
 ---
 
+## 19. Vérification de cohérence de section (shapefile page d'accueil) : section déclarée vs section géolocalisée
+
+**Problème métier.** Le `.dbf` d'un shapefile déclare parfois une section
+(`CodeSectio`/`codeSection`) qui ne correspond pas à la section réelle de la
+parcelle telle que déterminée par sa position géographique — erreur de
+saisie, redécoupage administratif non répercuté dans le fichier source, etc.
+Sans contrôle, cette incohérence passait inaperçue : le NICAD était construit
+(ou la parcelle laissée telle quelle si déjà NICADée) sans jamais comparer
+la section déclarée à la réalité spatiale.
+
+**Cause technique.** `assignSectionNicad` (avant ce correctif) ne résolvait
+la section par jointure spatiale QUE pour les parcelles sans NICAD valide,
+et n'avait aucune connaissance de la section « déclarée » dans le fichier
+source (le champ `codeSection` n'était pas mappé sur ce chemin).
+
+**Solution.** `field-mapping.ts · PARCELLES_HOME_TARGET_FIELDS` passe de 2 à
+9 champs mappables (region, departement, commune, quartier, numLot,
+superficie, codeSection, en plus de nicad/numParcelle). `assign-section-nicad.ts
+· assignSectionNicad` enrichit désormais CHAQUE feature — indépendamment de
+son statut NICAD — avec ces 7 champs sous forme de propriétés canoniques, et
+élargit la résolution spatiale (`getSectionsForPoints`) à TOUTES les
+features avec un point représentatif (pas seulement celles sans NICAD),
+afin d'écrire une clé canonique `sectionGeolocalisee` (11 chiffres,
+syscol+section) même sur les parcelles déjà NICADées. `nicad.ts ·
+codeSectionsMatch` compare `codeSection` (déclaré) à `sectionGeolocalisee`
+(trouvé), en tolérant un déclaré à 3 chiffres seul (numéro de section sans
+préfixe syscol). `geo-engine.ts · analyzeGeoJSON` lit ces deux clés
+canoniques dans sa boucle par-feature existante (même motif que la
+détection `missing_nicad`) et pousse une erreur `section_mismatch`
+(sévérité `high`), persistée comme toute autre erreur topologique (nouvelle
+valeur `SECTION_MISMATCH` de l'énumération Prisma `ErrorType`) — la
+description nomme les deux valeurs et propose la section géolocalisée
+comme correction. Une parcelle sans NICAD valide dont la section est
+incohérente n'a PAS son NICAD construit (ni avec la section déclarée, ni
+avec la géolocalisée) tant que l'incohérence n'est pas résolue
+manuellement.
+
+**Pourquoi.** La comparaison ne fait AUCUNE section autorité automatiquement
+— une divergence peut aussi bien signaler une erreur du fichier source
+qu'une lacune du référentiel `limite_section` (zone pas encore couverte,
+limite mal tracée) ; forcer l'une ou l'autre risquerait de propager une
+mauvaise attribution. Élargir la résolution spatiale aux parcelles déjà
+NICADées (plutôt que de se limiter aux candidates NICAD, moins coûteux)
+est un choix produit délibéré : détecter aussi les incohérences sur des
+parcelles déjà attribuées, considéré plus complet que le gain de
+performance du périmètre réduit — l'index spatial GiST sur
+`limite_section.geom` (migration `20260812130000_add_limite_section_geom_index`,
+absent jusque-là depuis la création de la table) maintient ce coût
+raisonnable.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*
