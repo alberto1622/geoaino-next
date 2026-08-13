@@ -40,6 +40,7 @@ export function errorTypeColor(type: string): string {
     case "missing_nicad": return "#6366f1";
     case "short_nicad": return "#14b8a6";
     case "self_intersect": return "#f97316";
+    case "section_mismatch": return "#84cc16";
     default: return "#6b7280";
   }
 }

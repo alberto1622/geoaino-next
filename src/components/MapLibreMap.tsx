@@ -106,6 +106,7 @@ const ERROR_TYPE_LABELS: Record<string, string> = {
   invalid_geom: "Géométrie invalide",
   boundary_cross: "Sort des limites administratives",
   self_intersect: "Auto-intersection",
+  section_mismatch: "Incohérence de section",
 };
 /** Zoom minimal d'affichage des étiquettes de numéros de section (marqueurs DOM). */
 const SECTION_LABEL_MIN_ZOOM = 10;

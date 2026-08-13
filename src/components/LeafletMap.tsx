@@ -13,6 +13,7 @@ const ERROR_COLORS: Record<string, string> = {
   MISSING_NICAD: "#6366f1",
   SHORT_NICAD: "#14b8a6",
   SELF_INTERSECT: "#f97316",
+  SECTION_MISMATCH: "#84cc16",
 };
 
 const ADMIN_LAYERS = [
