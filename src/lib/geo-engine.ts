@@ -1,6 +1,7 @@
 import * as turf from "@turf/turf";
 import type { Feature, FeatureCollection, Polygon, MultiPolygon } from "geojson";
 import { BBoxGridIndex, bboxIntersects, type BBox } from "./parcelle-ingestion";
+import { codeSectionsMatch, digitsOnly } from "./nicad";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -244,6 +245,23 @@ export function analyzeGeoJSON(
           geometry: f.geometry,
         });
       }
+    }
+
+    const declaredCodeSection = props.codeSection as string | undefined;
+    const geolocatedCodeSection = props.sectionGeolocalisee as string | undefined;
+    if (codeSectionsMatch(declaredCodeSection, geolocatedCodeSection) === false) {
+      nonConformeIdx.add(idx);
+      errors.push({
+        type: "section_mismatch",
+        severity: "high",
+        nicad1: nicad || `feature_${idx}`,
+        description:
+          `Section déclarée (${digitsOnly(declaredCodeSection)}) différente de la section trouvée ` +
+          `par géolocalisation (${digitsOnly(geolocatedCodeSection)}) — correction proposée : ` +
+          `attribuer la section géolocalisée.`,
+        confidence: 0.9,
+        geometry: f.geometry,
+      });
     }
   });
 
