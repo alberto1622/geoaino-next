@@ -110,6 +110,7 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
         nbConstruits: 0,
         nbSansSection: 0,
         nbSansNumeroParcelle: 0,
+        nbIncoherenceSection: 0,
         warnings: [],
       };
       try {
@@ -132,6 +133,7 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
         {
           reportExtra: {
             nicadConstruits: sectionNicad.nbConstruits,
+            nbIncoherenceSection: sectionNicad.nbIncoherenceSection,
             ...(sectionNicad.warnings.length > 0 ? { warnings: sectionNicad.warnings } : {}),
           },
         },

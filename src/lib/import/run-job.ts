@@ -36,7 +36,8 @@ import { runShapefileImportJob } from "./run-shapefile-job";
 
 type ErrType =
   | "OVERLAP" | "GAP" | "SLIVER" | "DUPLICATE"
-  | "INVALID_GEOM" | "BOUNDARY_CROSS" | "MISSING_NICAD" | "SHORT_NICAD" | "SELF_INTERSECT";
+  | "INVALID_GEOM" | "BOUNDARY_CROSS" | "MISSING_NICAD" | "SHORT_NICAD" | "SELF_INTERSECT"
+  | "SECTION_MISMATCH";
 type Sev = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
 
 /** Dispatcher : délègue au runner shapefile si `sourceType === "SHP"`, sinon exécute le pipeline DXF ci-dessous. */
