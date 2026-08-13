@@ -202,7 +202,7 @@ export async function assignSectionNicad(
       features[c.index].properties = currentProps;
     }
 
-    const sectionsMatch = codeSectionsMatch(currentProps.codeSection as string | undefined, sectionGeolocalisee);
+    const sectionsMatch = codeSectionsMatch(currentProps.codeSection, sectionGeolocalisee);
     if (sectionsMatch === false) {
       nbIncoherenceSection++;
     }

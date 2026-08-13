@@ -247,8 +247,8 @@ export function analyzeGeoJSON(
       }
     }
 
-    const declaredCodeSection = props.codeSection as string | undefined;
-    const geolocatedCodeSection = props.sectionGeolocalisee as string | undefined;
+    const declaredCodeSection = props.codeSection;
+    const geolocatedCodeSection = props.sectionGeolocalisee;
     if (codeSectionsMatch(declaredCodeSection, geolocatedCodeSection) === false) {
       nonConformeIdx.add(idx);
       errors.push({
@@ -257,8 +257,8 @@ export function analyzeGeoJSON(
         nicad1: nicad || `feature_${idx}`,
         description:
           `Section déclarée (${digitsOnly(declaredCodeSection)}) différente de la section trouvée ` +
-          `par géolocalisation (${digitsOnly(geolocatedCodeSection)}) — correction proposée : ` +
-          `attribuer la section géolocalisée.`,
+          `par géolocalisation (${digitsOnly(geolocatedCodeSection)}) — à corriger manuellement ` +
+          `dans le fichier source (section géolocalisée proposée comme référence).`,
         confidence: 0.9,
         geometry: f.geometry,
       });

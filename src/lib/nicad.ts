@@ -57,7 +57,7 @@ export function normalizeSection(raw: string | null | undefined): string | null 
 }
 
 /** Extrait uniquement les chiffres d'une chaîne (normalisation avant comparaison). */
-export function digitsOnly(raw: string | null | undefined): string {
+export function digitsOnly(raw: unknown): string {
   return String(raw ?? "").replace(/\D/g, "");
 }
 
@@ -69,20 +69,25 @@ export function digitsOnly(raw: string | null | undefined): string {
  * spatiale). Si le déclaré ne compte que 3 chiffres, la comparaison porte
  * uniquement sur les 3 derniers chiffres du géolocalisé (le numéro de
  * section) — évite un faux mismatch systématique sur les fichiers qui ne
- * saisissent pas le préfixe syscol. Renvoie `null` si l'un des deux côtés
- * est vide/non exploitable (rien à comparer, pas d'erreur à lever).
+ * saisissent pas le préfixe syscol. Dans les deux cas, le déclaré est
+ * complété à gauche par des zéros (`padStart`) avant comparaison : les
+ * colonnes `.dbf` numériques ('N') reviennent de `shapefile.read` comme des
+ * `number` JS, qui perdent leurs zéros non significatifs (ex. section "012"
+ * → `12`) — sans ce padding, un déclaré numérique ne matcherait jamais.
+ * Renvoie `null` si l'un des deux côtés est vide/non exploitable (rien à
+ * comparer, pas d'erreur à lever).
  */
 export function codeSectionsMatch(
-  declaredRaw: string | null | undefined,
-  geolocatedRaw: string | null | undefined,
+  declaredRaw: unknown,
+  geolocatedRaw: unknown,
 ): boolean | null {
   const declared = digitsOnly(declaredRaw);
   const geolocated = digitsOnly(geolocatedRaw);
   if (!declared || !geolocated) return null;
-  if (declared.length === NICAD_SECTION_LENGTH) {
-    return declared === geolocated.slice(-NICAD_SECTION_LENGTH);
+  if (declared.length <= NICAD_SECTION_LENGTH) {
+    return declared.padStart(NICAD_SECTION_LENGTH, "0") === geolocated.slice(-NICAD_SECTION_LENGTH);
   }
-  return declared === geolocated;
+  return declared.padStart(geolocated.length, "0") === geolocated;
 }
 
 export interface NicadPrefixResult {
