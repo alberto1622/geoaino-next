@@ -43,14 +43,19 @@ export const PARCELLE_TARGET_FIELDS: TargetFieldDef[] = [
  * (job.kind === "parcelles" → Analysis.geoJsonData). Contrairement à
  * PARCELLE_TARGET_FIELDS (15 champs, colonnes DB typées de cad_parcelles),
  * ce chemin conserve TOUTES les propriétés .dbf telles quelles dans le
- * GeoJSON — seuls nicad et numParcelle sont mappés ici, car ce sont les 2
- * seuls champs dont dépend la construction automatique du NICAD
- * (assignSectionNicad, section-join). `numParcelle` reprend exactement les
- * alias de NUM_PARCELLE_ALIASES (assign-section-nicad.ts) — aucune perte de
- * couverture par rapport au devinage actuel. `nicad` reprend les variantes
- * reconnues par `extractNicad` (geo-engine.ts) — la comparaison ci-dessous
- * (proposeFieldMapping) étant insensible à la casse, seules les variantes
- * lexicalement distinctes une fois en minuscules sont listées.
+ * GeoJSON — les 9 champs ci-dessous sont EN PLUS copiés sous leurs clés
+ * canoniques dans les propriétés (cf. `assignSectionNicad`,
+ * `enrichCanonicalFields`), sans supprimer les colonnes .dbf brutes.
+ *
+ * `nicad`/`numParcelle` gardent leur rôle historique (devinage par alias en
+ * repli, construction du NICAD). Les 7 autres (region, departement, commune,
+ * quartier, numLot, superficie, codeSection) reprennent VERBATIM les
+ * définitions de PARCELLE_TARGET_FIELDS (mêmes clés/alias) — aucune
+ * divergence de couverture entre les deux chemins d'import shapefile.
+ * `codeSection` (11 chiffres, syscol+section) alimente la vérification de
+ * cohérence de section : comparé à `sectionGeolocalisee` (trouvé par
+ * jointure spatiale) dans `analyzeGeoJSON` (geo-engine.ts) — désaccord =
+ * nouvelle erreur d'analyse `section_mismatch`.
  */
 export const PARCELLES_HOME_TARGET_FIELDS: TargetFieldDef[] = [
   {
@@ -59,6 +64,13 @@ export const PARCELLES_HOME_TARGET_FIELDS: TargetFieldDef[] = [
     aliases: ["nicad", "nic", "num_nicad", "code_nicad", "codif"],
   },
   { key: "numParcelle", label: "N° de parcelle", aliases: ["numparcell", "num_parce", "numparce", "numparcelle"] },
+  { key: "region", label: "Région", aliases: ["region"] },
+  { key: "departement", label: "Département", aliases: ["departemen", "departement"] },
+  { key: "commune", label: "Commune", aliases: ["commune", "nomcommune", "nom_commun", "nom"] },
+  { key: "quartier", label: "Quartier", aliases: ["quartier", "nom_quart"] },
+  { key: "numLot", label: "N° de lot", aliases: ["numlot", "num_lot"] },
+  { key: "superficie", label: "Superficie", aliases: ["suplegale", "supreelle", "superficie", "shape_area"] },
+  { key: "codeSection", label: "Code section (11 chiffres, syscol+section)", aliases: ["codesectio", "cod_sect"] },
 ];
 
 export const CAD_SECTION_TARGET_FIELDS: TargetFieldDef[] = [
