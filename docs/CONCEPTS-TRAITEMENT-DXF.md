@@ -2199,8 +2199,10 @@ canoniques dans sa boucle par-feature existante (même motif que la
 détection `missing_nicad`) et pousse une erreur `section_mismatch`
 (sévérité `high`), persistée comme toute autre erreur topologique (nouvelle
 valeur `SECTION_MISMATCH` de l'énumération Prisma `ErrorType`) — la
-description nomme les deux valeurs et propose la section géolocalisée
-comme correction. Une parcelle sans NICAD valide dont la section est
+description nomme les deux valeurs et invite à une correction manuelle
+dans le fichier source, la section géolocalisée étant proposée comme
+référence (aucune action de correction automatique n'est câblée pour ce
+type d'erreur). Une parcelle sans NICAD valide dont la section est
 incohérente n'a PAS son NICAD construit (ni avec la section déclarée, ni
 avec la géolocalisée) tant que l'incohérence n'est pas résolue
 manuellement.

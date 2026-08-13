@@ -20,6 +20,7 @@ const ERROR_COLORS: Record<string, string> = {
   OVERLAP: "#ef4444", GAP: "#f59e0b", SLIVER: "#a855f7",
   DUPLICATE: "#3b82f6", INVALID_GEOM: "#ec4899",
   BOUNDARY_CROSS: "#06b6d4", MISSING_NICAD: "#6366f1", SHORT_NICAD: "#14b8a6", SELF_INTERSECT: "#f97316",
+  SECTION_MISMATCH: "#84cc16",
 };
 
 interface Analysis {
