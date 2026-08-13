@@ -520,6 +520,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   // en attendant que les tuiles MVT se resynchronisent (tilesVersion) sans reload visible.
   const [deletedNicads, setDeletedNicads] = useState<string[]>([]);
   const [nicadAssignValue, setNicadAssignValue] = useState("");
+  const [sectionAssignValue, setSectionAssignValue] = useState("");
   // Historique annuler/rétablir des éditions de la table attributaire (suppression
   // de parcelle(s), renommage NICAD) — cf. type MapHistoryEntry.
   const mapHistory = useUndoHistory<MapHistoryEntry>();
@@ -1386,7 +1387,12 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   };
 
   const handleCorrectError = useCallback(
-    async (errorId: number, action: string, targetNicad?: string) => {
+    async (
+      errorId: number,
+      action: string,
+      targetNicad?: string,
+      targetSection?: string,
+    ) => {
       setCorrectingErrorId(errorId);
       try {
         const res = await fetch(
@@ -1394,7 +1400,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action, targetNicad }),
+            body: JSON.stringify({ action, targetNicad, targetSection }),
           },
         );
         const data = await res.json();
@@ -2450,6 +2456,34 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                             nicadAssignValue.trim() || undefined,
                           );
                           setNicadAssignValue("");
+                        }}
+                      >
+                        <Wrench className="w-3 h-3" /> Assigner
+                      </Button>
+                    </div>
+                  )}
+                  {selectedError.errorType === "SECTION_MISMATCH" && (
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={sectionAssignValue}
+                        onChange={(e) => setSectionAssignValue(e.target.value)}
+                        placeholder="Section (vide = section géolocalisée)"
+                        className="flex-1 h-7 rounded-md border border-border bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 px-2 text-xs gap-1.5"
+                        disabled={correctingErrorId === selectedError.id}
+                        onClick={() => {
+                          handleCorrectError(
+                            selectedError.id,
+                            "assign_section",
+                            undefined,
+                            sectionAssignValue.trim() || undefined,
+                          );
+                          setSectionAssignValue("");
                         }}
                       >
                         <Wrench className="w-3 h-3" /> Assigner

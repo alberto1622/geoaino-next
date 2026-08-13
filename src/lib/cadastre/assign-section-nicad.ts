@@ -15,7 +15,13 @@
  *      spatiale, quel que soit le statut NICAD de la feature). Ces clés
  *      canoniques sont lues telles quelles par `analyzeGeoJSON`
  *      (`geo-engine.ts`) pour détecter les incohérences de section
- *      (`section_mismatch`), sans dépendre du mappage d'origine.
+ *      (`section_mismatch`), sans dépendre du mappage d'origine. La même
+ *      passe écrit aussi `numero_section` (clé canonique déjà lue par la
+ *      classification « sans section » du module Map, `_ssec` dans
+ *      `tile-index.ts` ; cf. `SECTION_KEYS`/`setFeatureSection` dans
+ *      `feature-locator.ts`) — sans quoi une parcelle résolue par ce chemin
+ *      resterait classée à tort « sans section » sur `/map` malgré une
+ *      section géolocalisée.
  *
  *   2. Construction NICAD : symétrique de `assign-nicad-2026.ts` (jointure
  *      commune pour le DXF) mais résolvant Syscol ET section en une seule
@@ -197,8 +203,12 @@ export async function assignSectionNicad(
 
     const sectionGeolocalisee = `${m.syscolCommune}${m.numSection}`;
     let currentProps = props;
-    if (currentProps.sectionGeolocalisee !== sectionGeolocalisee) {
-      currentProps = { ...currentProps, sectionGeolocalisee };
+    if (currentProps.sectionGeolocalisee !== sectionGeolocalisee || currentProps.numero_section !== m.numSection) {
+      // `numero_section` (clé canonique lue par la classification « sans
+      // section » existante, `_ssec` dans tile-index.ts) est écrite ici aussi
+      // — sans cela, une parcelle résolue spatialement par ce chemin reste
+      // classée « sans section » sur /map malgré une section géolocalisée.
+      currentProps = { ...currentProps, sectionGeolocalisee, numero_section: m.numSection };
       features[c.index].properties = currentProps;
     }
 

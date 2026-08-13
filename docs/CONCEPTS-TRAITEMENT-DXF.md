@@ -2191,7 +2191,13 @@ son statut NICAD — avec ces 7 champs sous forme de propriétés canoniques, et
 élargit la résolution spatiale (`getSectionsForPoints`) à TOUTES les
 features avec un point représentatif (pas seulement celles sans NICAD),
 afin d'écrire une clé canonique `sectionGeolocalisee` (11 chiffres,
-syscol+section) même sur les parcelles déjà NICADées. `nicad.ts ·
+syscol+section) même sur les parcelles déjà NICADées. La même passe écrit
+aussi `numero_section` (numéro de section seul, 3 chiffres) — la clé
+canonique déjà lue par la classification « sans section » du module Map
+(`_ssec`, `tile-index.ts` ; `SECTION_KEYS`/`setFeatureSection`,
+`feature-locator.ts`) : sans cette écriture, une parcelle résolue par ce
+chemin restait classée à tort « sans section » sur `/map` malgré une
+section géolocalisée. `nicad.ts ·
 codeSectionsMatch` compare `codeSection` (déclaré) à `sectionGeolocalisee`
 (trouvé), en tolérant un déclaré à 3 chiffres seul (numéro de section sans
 préfixe syscol). `geo-engine.ts · analyzeGeoJSON` lit ces deux clés
@@ -2199,13 +2205,18 @@ canoniques dans sa boucle par-feature existante (même motif que la
 détection `missing_nicad`) et pousse une erreur `section_mismatch`
 (sévérité `high`), persistée comme toute autre erreur topologique (nouvelle
 valeur `SECTION_MISMATCH` de l'énumération Prisma `ErrorType`) — la
-description nomme les deux valeurs et invite à une correction manuelle
-dans le fichier source, la section géolocalisée étant proposée comme
-référence (aucune action de correction automatique n'est câblée pour ce
-type d'erreur). Une parcelle sans NICAD valide dont la section est
-incohérente n'a PAS son NICAD construit (ni avec la section déclarée, ni
-avec la géolocalisée) tant que l'incohérence n'est pas résolue
-manuellement.
+description nomme les deux valeurs. `correct/route.ts` expose une action de
+correction manuelle `assign_section` (mirroir de `assign_nicad` pour
+`MISSING_NICAD`/`SHORT_NICAD`) : l'utilisateur saisit la section correcte
+(ou accepte par défaut la section géolocalisée proposée comme référence),
+ce qui réécrit `numero_section`/`codeSection` et, si la parcelle a déjà un
+NICAD complet, reconstruit son segment section (3 chiffres) pour rester
+cohérent — même logique que `nicad-section-sync.ts` pour un cas symétrique
+(numéro de section corrigé depuis la gestion des sections). Une parcelle
+sans NICAD valide dont la section est incohérente n'a PAS son NICAD
+construit automatiquement (ni avec la section déclarée, ni avec la
+géolocalisée) tant que l'incohérence n'est pas résolue — manuellement via
+cette action, ou par une nouvelle passe d'import.
 
 **Pourquoi.** La comparaison ne fait AUCUNE section autorité automatiquement
 — une divergence peut aussi bien signaler une erreur du fichier source

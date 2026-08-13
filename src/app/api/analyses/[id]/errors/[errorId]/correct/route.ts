@@ -5,6 +5,16 @@ import { loadGeoJsonFromKey } from "@/lib/geo-storage";
 import { extractNicad, type GeoFeature as GeoEngineFeature } from "@/lib/geo-engine";
 import { findBestNeighborMerge } from "@/lib/sliver-correction";
 import { requireSession } from "@/lib/analyses/require-session";
+import { setFeatureSection } from "@/lib/analyses/feature-locator";
+import {
+  buildNicad,
+  normalizeSection,
+  digitsOnly,
+  NICAD_PREFIX_LENGTH,
+  NICAD_SECTION_LENGTH,
+  NICAD_PARCELLE_LENGTH,
+  NICAD_TOTAL_LENGTH,
+} from "@/lib/nicad";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -22,6 +32,7 @@ const ACTIONS_BY_TYPE: Record<string, string[]> = {
   DUPLICATE: ["delete", "ignore"],
   MISSING_NICAD: ["assign_nicad", "ignore"],
   SHORT_NICAD: ["assign_nicad", "ignore"],
+  SECTION_MISMATCH: ["assign_section", "ignore"],
 };
 
 // Surface planaire (shoelace) dans le système de coordonnées natif — sert
@@ -148,7 +159,7 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
   const analysisId = parseInt(id);
   const errorIdNum = parseInt(errorId);
 
-  let body: { action?: string; targetNicad?: string } = {};
+  let body: { action?: string; targetNicad?: string; targetSection?: string } = {};
   try { body = await req.json(); } catch { /* empty body */ }
   const action = body.action;
 
@@ -291,6 +302,44 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
         properties: { ...(features[idx].properties ?? {}), nicad: newNicad, _autoAssigned: !provided },
       };
       message = `NICAD "${newNicad}" assigné à la parcelle`;
+    } else if (error.errorType === "SECTION_MISMATCH" && action === "assign_section") {
+      const idx = findFeatureIndexByGeometry(features, error.geometry);
+      if (idx === -1) return NextResponse.json({ error: "Parcelle introuvable dans le GeoJSON" }, { status: 404 });
+
+      const geolocated = digitsOnly(features[idx].properties?.sectionGeolocalisee);
+      const provided = body.targetSection?.trim();
+      const newSection = normalizeSection(provided || geolocated.slice(-NICAD_SECTION_LENGTH));
+      if (!newSection) return NextResponse.json({ error: "Numéro de section invalide" }, { status: 400 });
+
+      // `numero_section` (clé canonique lue par la classification « sans
+      // section », cf. tile-index.ts · _ssec) sur toutes ses clés porteuses.
+      setFeatureSection(features[idx], newSection);
+
+      // Recompose `codeSection` (11 chiffres) à partir du préfixe syscol déjà
+      // résolu par la jointure spatiale (`sectionGeolocalisee`, cf.
+      // assign-section-nicad.ts) pour rester cohérent avec la nouvelle section.
+      if (geolocated.length >= NICAD_PREFIX_LENGTH) {
+        features[idx].properties = {
+          ...(features[idx].properties ?? {}),
+          codeSection: `${geolocated.slice(0, NICAD_PREFIX_LENGTH)}${newSection}`,
+        };
+      }
+
+      // Si la parcelle a déjà un NICAD complet, resynchronise son segment
+      // section pour rester cohérent — même logique que nicad-section-sync.ts.
+      const currentNicad = extractNicad(features[idx].properties);
+      if (currentNicad && currentNicad.length === NICAD_TOTAL_LENGTH) {
+        const rebuiltNicad = buildNicad(
+          currentNicad.slice(0, NICAD_PREFIX_LENGTH),
+          newSection,
+          currentNicad.slice(-NICAD_PARCELLE_LENGTH),
+        );
+        if (rebuiltNicad && rebuiltNicad !== currentNicad) {
+          features[idx].properties = { ...(features[idx].properties ?? {}), nicad: rebuiltNicad };
+        }
+      }
+
+      message = `Section corrigée à "${newSection}" pour la parcelle`;
     } else {
       return NextResponse.json({ error: `Action "${action}" non supportée pour le type d'erreur ${error.errorType}` }, { status: 400 });
     }
