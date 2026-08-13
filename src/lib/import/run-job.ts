@@ -199,7 +199,14 @@ export async function finishParcellesJob(
         area: e.area != null ? e.area.toString() : null,
         confidence: String(e.confidence),
       }));
-      await prisma.topologicalError.createMany({ data: batch });
+      try {
+        await prisma.topologicalError.createMany({ data: batch });
+      } catch (err) {
+        console.error(
+          `[import/run] échec de persistance d'un lot d'erreurs topologiques (analyse ${analysis.id}, lot ${i}-${i + batch.length}) :`,
+          err,
+        );
+      }
     }
   }
 
