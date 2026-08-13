@@ -14,6 +14,22 @@ import { prisma } from "@/lib/prisma";
 // chevauchement surfacique (une frontière mitoyenne partagée donne une aire ~0).
 const MIN_OVERLAP_AREA_M2 = Number(process.env.SECTION_OVERLAP_MIN_AREA_M2 || 1);
 
+/** Filtre `sourceFichier` partagé par `listSections`/`listOverlaps` : un nom
+ *  seul, plusieurs (sélection multiple du filtre "Lot stocké"), ou aucun
+ *  (`null`/tableau vide → tous les lots). `column` porte l'alias de table le
+ *  cas échéant (ex. `o."sourceFichier"` pour `listOverlaps`). */
+function sourceFichierFilter(
+  column: string,
+  sourceFichier: string | string[] | null,
+): Prisma.Sql {
+  if (sourceFichier == null) return Prisma.empty;
+  const list = Array.isArray(sourceFichier) ? sourceFichier : [sourceFichier];
+  if (list.length === 0) return Prisma.empty;
+  return list.length === 1
+    ? Prisma.sql`WHERE ${Prisma.raw(column)} = ${list[0]}`
+    : Prisma.sql`WHERE ${Prisma.raw(column)} = ANY(${list})`;
+}
+
 export interface SectionInsert {
   region: string | null;
   departement: string | null;
@@ -267,10 +283,12 @@ export async function insertLimiteSections(
   return rows.map((r) => Number(r.id));
 }
 
-/** Sections d'un lot — ou de TOUS les lots si `sourceFichier` est null (affichage initial). */
-export async function listSections(sourceFichier: string | null): Promise<SectionListItem[]> {
-  const where =
-    sourceFichier == null ? Prisma.empty : Prisma.sql`WHERE "sourceFichier" = ${sourceFichier}`;
+/** Sections d'un/plusieurs lot(s) — ou de TOUS les lots si `sourceFichier` est
+ *  `null`/vide (affichage initial, ou case "Tous les lots" du filtre). */
+export async function listSections(
+  sourceFichier: string | string[] | null,
+): Promise<SectionListItem[]> {
+  const where = sourceFichierFilter('"sourceFichier"', sourceFichier);
   const rows = await prisma.$queryRaw<
     Array<Omit<SectionListItem, "surfaceM2"> & { surfaceM2: string | number | null }>
   >`
@@ -446,10 +464,11 @@ export async function refreshOverlaps(sourceFichier: string): Promise<number> {
   return Number(inserted);
 }
 
-/** Chevauchements d'un lot — ou de TOUS les lots si `sourceFichier` est null. */
-export async function listOverlaps(sourceFichier: string | null): Promise<OverlapListItem[]> {
-  const where =
-    sourceFichier == null ? Prisma.empty : Prisma.sql`WHERE o."sourceFichier" = ${sourceFichier}`;
+/** Chevauchements d'un/plusieurs lot(s) — ou de TOUS les lots si `sourceFichier` est null/vide. */
+export async function listOverlaps(
+  sourceFichier: string | string[] | null,
+): Promise<OverlapListItem[]> {
+  const where = sourceFichierFilter('o."sourceFichier"', sourceFichier);
   const rows = await prisma.$queryRaw<
     Array<OverlapListItem & { overlapAreaM2: string | number | null }>
   >`

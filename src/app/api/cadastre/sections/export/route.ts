@@ -7,7 +7,8 @@ export const runtime = "nodejs";
 /**
  * GET /api/cadastre/sections/export[?sourceFichier=...] — shapefile ZIP
  * (.shp/.shx/.dbf/.prj, WGS84) des limites de sections stockées, corrections
- * de chevauchements incluses. Sans `sourceFichier`, exporte tous les lots.
+ * de chevauchements incluses. `sourceFichier` peut être répété (export de
+ * plusieurs lots sélectionnés à la fois) ; sans lui, exporte tous les lots.
  */
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const session = await auth();
@@ -15,7 +16,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
   }
 
-  const sourceFichier = req.nextUrl.searchParams.get("sourceFichier");
+  const sourceFichierList = req.nextUrl.searchParams.getAll("sourceFichier");
+  const sourceFichier = sourceFichierList.length > 0 ? sourceFichierList : null;
   try {
     const result = await buildSectionsShapefileZip(sourceFichier);
     if (!result) {

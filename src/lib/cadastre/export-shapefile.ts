@@ -344,9 +344,12 @@ function sanitizeName(s: string): string {
 /**
  * Construit le shapefile ZIP des limites de sections stockées (`limite_section`),
  * telles qu'en base — donc avec les corrections de chevauchements déjà appliquées.
- * `sourceFichier` restreint à un lot ; null = tous les lots. Retourne null si vide.
+ * `sourceFichier` restreint à un lot ou plusieurs (union, sélection multiple du
+ * filtre "Lot stocké") ; null/vide = tous les lots. Retourne null si vide.
  */
-export async function buildSectionsShapefileZip(sourceFichier: string | null): Promise<ZipResult | null> {
+export async function buildSectionsShapefileZip(
+  sourceFichier: string | string[] | null,
+): Promise<ZipResult | null> {
   const rows = await listSections(sourceFichier);
   if (!rows.length) return null;
 
@@ -365,9 +368,13 @@ export async function buildSectionsShapefileZip(sourceFichier: string | null): P
   const prjBuf = Buffer.from(PRJ_WGS84, "ascii");
 
   const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  const baseName = sourceFichier
-    ? `SECTIONS_${sanitizeName(sourceFichier)}_${dateStr}`
-    : `SECTIONS_TOUS_LOTS_${dateStr}`;
+  const sources = sourceFichier == null ? [] : Array.isArray(sourceFichier) ? sourceFichier : [sourceFichier];
+  const baseName =
+    sources.length === 0
+      ? `SECTIONS_TOUS_LOTS_${dateStr}`
+      : sources.length === 1
+        ? `SECTIONS_${sanitizeName(sources[0])}_${dateStr}`
+        : `SECTIONS_SELECTION_${sources.length}LOTS_${dateStr}`;
 
   const buffer = await archiveToBuffer((archive) => {
     archive.append(shp, { name: `${baseName}.shp` });

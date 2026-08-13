@@ -7,7 +7,8 @@ export const runtime = "nodejs";
 /**
  * GET /api/cadastre/sections/overlaps[?sourceFichier=...] — sections +
  * chevauchements détectés (géométries incluses) pour le rendu et la liste de
- * corrections de la page /cadastre/sections. Sans `sourceFichier`, renvoie les
+ * corrections de la page /cadastre/sections. `sourceFichier` peut être répété
+ * (sélection multiple du filtre "Lot stocké") ; sans lui, renvoie les
  * sections de TOUS les lots stockés (affichage complet au premier chargement).
  */
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -16,7 +17,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
   }
 
-  const sourceFichier = req.nextUrl.searchParams.get("sourceFichier");
+  const sourceFichierList = req.nextUrl.searchParams.getAll("sourceFichier");
+  const sourceFichier = sourceFichierList.length > 0 ? sourceFichierList : null;
   try {
     const [sections, overlaps] = await Promise.all([
       listSections(sourceFichier),

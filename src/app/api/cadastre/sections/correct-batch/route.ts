@@ -40,7 +40,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   const createdBy = (session.user as { id?: string }).id ?? null;
 
-  let body: { overlapIds?: unknown; action?: string; sourceFichier?: string | null } = {};
+  let body: { overlapIds?: unknown; action?: string; sourceFichier?: string | string[] | null } = {};
   try {
     body = await req.json();
   } catch {

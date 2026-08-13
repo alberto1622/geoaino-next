@@ -178,7 +178,8 @@ export default function SectionsClient() {
     targetFields: TargetFieldDef[];
     proposedMapping: Record<string, string>;
   } | null>(null);
-  const [sourceFichier, setSourceFichier] = useState<string | null>(null);
+  // Lots sélectionnés dans le filtre "Lot stocké" — tableau vide = tous les lots.
+  const [selectedSources, setSelectedSources] = useState<string[]>([]);
   const [sections, setSections] = useState<SectionItem[]>([]);
   const [overlaps, setOverlaps] = useState<OverlapItem[]>([]);
   const [selectedOverlapId, setSelectedOverlapId] = useState<number | null>(
@@ -229,7 +230,7 @@ export default function SectionsClient() {
   // chargement, changement de lot) — jamais après une correction, fusion ou
   // suppression, sinon l'utilisateur perd sa vue zoomée à chaque action.
   const fitPendingRef = useRef(false);
-  const lastScopeRef = useRef<string | null | undefined>(undefined);
+  const lastScopeRef = useRef<string | undefined>(undefined);
   // Limites administratives : bascule par niveau, données/couches en refs
   // (chargées une fois par niveau, à la première activation).
   const [adminShow, setAdminShow] = useState<Record<AdminLevel, boolean>>({
@@ -289,19 +290,25 @@ export default function SectionsClient() {
     };
   }, []);
 
-  // `src = null` → toutes les sections stockées, tous lots confondus.
-  const fetchData = useCallback(async (src: string | null) => {
+  // `srcs = []` → toutes les sections stockées, tous lots confondus.
+  const fetchData = useCallback(async (srcs: string[]) => {
     setLoadingData(true);
-    setSourceFichier(src);
+    setSelectedSources(srcs);
+    // Clé stable indépendante de l'ordre de sélection, pour détecter un vrai
+    // changement de portée (recadrage) plutôt qu'un simple ré-ordonnancement.
+    const scopeKey = [...srcs].sort().join("");
     // `undefined` = jamais chargé : le premier chargement recadre toujours.
-    if (lastScopeRef.current !== src) {
-      lastScopeRef.current = src;
+    if (lastScopeRef.current !== scopeKey) {
+      lastScopeRef.current = scopeKey;
       fitPendingRef.current = true;
     }
     try {
-      const url = src
-        ? `/api/cadastre/sections/overlaps?sourceFichier=${encodeURIComponent(src)}`
-        : "/api/cadastre/sections/overlaps";
+      let url = "/api/cadastre/sections/overlaps";
+      if (srcs.length > 0) {
+        const params = new URLSearchParams();
+        for (const s of srcs) params.append("sourceFichier", s);
+        url += `?${params.toString()}`;
+      }
       const res = await fetch(url);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Chargement échoué");
@@ -332,7 +339,7 @@ export default function SectionsClient() {
   useEffect(() => {
     void (async () => {
       const list = await loadBatches();
-      if (list.length > 0) await fetchData(null);
+      if (list.length > 0) await fetchData([]);
     })();
   }, [loadBatches, fetchData]);
 
@@ -356,7 +363,7 @@ export default function SectionsClient() {
           (res > 0 ? ` · ${res} résidu(s)/enveloppe(s) écarté(s)` : "") +
           ".",
       );
-      await fetchData(report.sourceFichier);
+      await fetchData([report.sourceFichier]);
       await loadBatches();
     },
     [fetchData, loadBatches],
@@ -406,7 +413,7 @@ export default function SectionsClient() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Import échoué");
-      setSourceFichier(data.sourceFichier);
+      setSelectedSources([data.sourceFichier]);
       setJob({
         id: data.jobId,
         status: data.status,
@@ -439,7 +446,7 @@ export default function SectionsClient() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Import échoué");
-        setSourceFichier(inv.fileName);
+        setSelectedSources([inv.fileName]);
         setJob({ id: data.jobId, status: data.status, phase: "read", progress: 0 });
       } catch (err) {
         toast.error(String(err));
@@ -469,7 +476,7 @@ export default function SectionsClient() {
           error: j.error,
         });
         if (j.status === "completed") {
-          const src = (j.report?.sourceFichier as string) ?? sourceFichier;
+          const src = (j.report?.sourceFichier as string) ?? selectedSources[0];
           if (src) {
             await reportBuildResult({
               sourceFichier: src,
@@ -494,7 +501,7 @@ export default function SectionsClient() {
       }
     }, 1500);
     return () => clearInterval(timer);
-  }, [job, sourceFichier, reportBuildResult]);
+  }, [job, selectedSources, reportBuildResult]);
 
   // ── Suppression d'une section individuelle (table OU popup carte) ──────────
   // Une zone récupérée à tort comme section (enveloppe, quartier, artefact) se
@@ -1203,10 +1210,12 @@ export default function SectionsClient() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Correction échouée");
-        // En vue « tous les lots », la réponse (limitée au lot corrigé) ne doit
-        // pas remplacer l'affichage complet : on recharge la vue courante.
-        if (sourceFichier == null) {
-          await fetchData(null);
+        // En vue « tous les lots » ou multi-lots, la réponse (limitée au lot
+        // corrigé) ne doit pas remplacer l'affichage complet : on recharge la
+        // vue courante. Seule une vue à exactement UN lot correspond au
+        // périmètre de la réponse et peut être remplacée directement.
+        if (selectedSources.length !== 1) {
+          await fetchData(selectedSources);
         } else {
           setSections(data.sections ?? []);
           setOverlaps(data.overlaps ?? []);
@@ -1219,7 +1228,7 @@ export default function SectionsClient() {
         setCorrecting(null);
       }
     },
-    [sourceFichier, fetchData],
+    [selectedSources, fetchData],
   );
 
   /**
@@ -1278,13 +1287,17 @@ export default function SectionsClient() {
   );
 
   // ── Export shapefile des sections affichées (corrections incluses) ─────────
-  // Porte sur la vue courante : le lot sélectionné, ou TOUS les lots si aucun.
+  // Porte sur la vue courante : les lots sélectionnés (union), ou TOUS les
+  // lots si aucun n'est sélectionné.
   const handleExport = useCallback(async () => {
     setExporting(true);
     try {
-      const url = sourceFichier
-        ? `/api/cadastre/sections/export?sourceFichier=${encodeURIComponent(sourceFichier)}`
-        : "/api/cadastre/sections/export";
+      let url = "/api/cadastre/sections/export";
+      if (selectedSources.length > 0) {
+        const params = new URLSearchParams();
+        for (const s of selectedSources) params.append("sourceFichier", s);
+        url += `?${params.toString()}`;
+      }
       const res = await fetch(url);
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -1304,7 +1317,7 @@ export default function SectionsClient() {
     } finally {
       setExporting(false);
     }
-  }, [sourceFichier]);
+  }, [selectedSources]);
 
   // ── Fusion manuelle des sections sélectionnées ──────────────────────────────
   const performMerge = useCallback(async () => {
@@ -1321,14 +1334,14 @@ export default function SectionsClient() {
       if (!res.ok) throw new Error(data.error || "Fusion échouée");
       toast.success(`${ids.length} sections fusionnées.`);
       setMergeSelection([]);
-      await fetchData(sourceFichier);
+      await fetchData(selectedSources);
       void loadBatches();
     } catch (err) {
       toast.error(String(err));
     } finally {
       setMerging(false);
     }
-  }, [activeMergeSelection, sourceFichier, fetchData, loadBatches]);
+  }, [activeMergeSelection, selectedSources, fetchData, loadBatches]);
 
   const handleMerge = useCallback(() => {
     const ids = activeMergeSelection;
@@ -1345,22 +1358,25 @@ export default function SectionsClient() {
   }, [activeMergeSelection, sections, performMerge]);
 
   // ── Suppression du lot chargé (toutes les sections du fichier sélectionné) ─
+  // Restreint à EXACTEMENT un lot sélectionné : une suppression multi-lots
+  // élargirait sans confirmation explicite la portée d'une action destructive.
   const performDeleteBatch = useCallback(async () => {
-    if (!sourceFichier) return;
+    if (selectedSources.length !== 1) return;
+    const target = selectedSources[0];
     setDeletingBatch(true);
     try {
       const res = await fetch("/api/cadastre/sections/delete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sourceFichier }),
+        body: JSON.stringify({ sourceFichier: target }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Suppression échouée");
-      toast.success(`Lot « ${sourceFichier} » supprimé.`);
+      toast.success(`Lot « ${target} » supprimé.`);
       const list = await loadBatches();
-      if (list.length > 0) await fetchData(null);
+      if (list.length > 0) await fetchData([]);
       else {
-        setSourceFichier(null);
+        setSelectedSources([]);
         setSections([]);
         setOverlaps([]);
         setSelectedOverlapId(null);
@@ -1370,20 +1386,21 @@ export default function SectionsClient() {
     } finally {
       setDeletingBatch(false);
     }
-  }, [sourceFichier, loadBatches, fetchData]);
+  }, [selectedSources, loadBatches, fetchData]);
 
   const handleDeleteBatch = useCallback(() => {
-    if (!sourceFichier) return;
-    const batch = batches.find((b) => b.sourceFichier === sourceFichier);
+    if (selectedSources.length !== 1) return;
+    const target = selectedSources[0];
+    const batch = batches.find((b) => b.sourceFichier === target);
     setConfirmState({
       title: "Supprimer le lot",
       description:
-        `Supprimer les ${batch ? `${batch.nbSections} ` : ""}section(s) du fichier « ${sourceFichier} » ?\n` +
+        `Supprimer les ${batch ? `${batch.nbSections} ` : ""}section(s) du fichier « ${target} » ?\n` +
         "Les chevauchements associés seront aussi supprimés.\nRestaurable ensuite depuis le panneau Historique.",
       confirmLabel: "Supprimer le lot",
       run: () => void performDeleteBatch(),
     });
-  }, [sourceFichier, batches, performDeleteBatch]);
+  }, [selectedSources, batches, performDeleteBatch]);
 
   const pending = overlaps.filter((o) => o.status === "PENDING");
   // Sélection restreinte aux chevauchements encore PENDING affichés : les ids
@@ -1401,7 +1418,7 @@ export default function SectionsClient() {
         const res = await fetch("/api/cadastre/sections/correct-batch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ overlapIds: ids, action, sourceFichier }),
+          body: JSON.stringify({ overlapIds: ids, action, sourceFichier: selectedSources }),
         });
         const data = await res.json();
         if (!res.ok)
@@ -1435,7 +1452,7 @@ export default function SectionsClient() {
         setBatchCorrecting(false);
       }
     },
-    [sourceFichier],
+    [selectedSources],
   );
 
   const confirmBatchCorrection = useCallback(
@@ -1461,6 +1478,17 @@ export default function SectionsClient() {
     },
     [activeOverlapSelection, performBatchCorrection],
   );
+
+  // Libellé du sélecteur "Lot stocké" — reflète 0 (tous), 1, ou N lots cochés.
+  const selectedBatches = batches.filter((b) =>
+    selectedSources.includes(b.sourceFichier),
+  );
+  const lotSelectorLabel =
+    selectedSources.length === 0
+      ? `Tous les lots — ${batches.reduce((n, b) => n + b.nbSections, 0)} sect.`
+      : selectedSources.length === 1
+        ? `${selectedSources[0]} — ${selectedBatches[0]?.nbSections ?? 0} sect.`
+        : `${selectedSources.length} lots sélectionnés — ${selectedBatches.reduce((n, b) => n + b.nbSections, 0)} sect.`;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -1520,31 +1548,60 @@ export default function SectionsClient() {
                 </Button>
               </div>
 
-              {/* Lot stocké */}
+              {/* Lot stocké — sélection multiple (cases à cocher), comme le
+                  filtre "Limites admin" ci-dessous. */}
               {batches.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-dashed border-border/60 px-2 py-1">
                   <span className="text-xs text-muted-foreground">
                     Lot stocké :
                   </span>
-                  <select
-                    value={sourceFichier ?? ""}
-                    onChange={(e) => void fetchData(e.target.value || null)}
-                    className="h-8 max-w-55 rounded-lg border border-border bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-                    aria-label="Choisir un lot de sections"
-                  >
-                    <option value="">
-                      Tous les lots —{" "}
-                      {batches.reduce((n, b) => n + b.nbSections, 0)} sect.
-                    </option>
-                    {batches.map((b) => (
-                      <option key={b.sourceFichier} value={b.sourceFichier}>
-                        {b.sourceFichier} — {b.nbSections} sect.
-                        {b.nbOverlapsPending > 0
-                          ? ` · ${b.nbOverlapsPending} chev.`
-                          : ""}
-                      </option>
-                    ))}
-                  </select>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        size="sm"
+                        variant={
+                          selectedSources.length > 0 ? "default" : "outline"
+                        }
+                        className="h-8 max-w-72 gap-1.5 px-2 text-xs"
+                      >
+                        <span className="truncate">{lotSelectorLabel}</span>
+                        <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="max-h-80 overflow-y-auto">
+                      <DropdownMenuCheckboxItem
+                        checked={selectedSources.length === 0}
+                        onSelect={(e) => e.preventDefault()}
+                        onCheckedChange={(checked) => {
+                          if (checked) void fetchData([]);
+                        }}
+                      >
+                        Tous les lots —{" "}
+                        {batches.reduce((n, b) => n + b.nbSections, 0)} sect.
+                      </DropdownMenuCheckboxItem>
+                      <div className="my-1 h-px bg-border" />
+                      {batches.map((b) => (
+                        <DropdownMenuCheckboxItem
+                          key={b.sourceFichier}
+                          checked={selectedSources.includes(b.sourceFichier)}
+                          onSelect={(e) => e.preventDefault()}
+                          onCheckedChange={(checked) => {
+                            const next = checked
+                              ? [...selectedSources, b.sourceFichier]
+                              : selectedSources.filter(
+                                  (s) => s !== b.sourceFichier,
+                                );
+                            void fetchData(next);
+                          }}
+                        >
+                          {b.sourceFichier} — {b.nbSections} sect.
+                          {b.nbOverlapsPending > 0
+                            ? ` · ${b.nbOverlapsPending} chev.`
+                            : ""}
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   <Button
                     size="sm"
                     variant="outline"
@@ -1552,8 +1609,8 @@ export default function SectionsClient() {
                     onClick={handleExport}
                     disabled={exporting || sections.length === 0}
                     title={
-                      sourceFichier
-                        ? `Exporter les sections du lot « ${sourceFichier} » en shapefile (corrections incluses)`
+                      selectedSources.length > 0
+                        ? `Exporter les sections des lots sélectionnés (${selectedSources.length}) en shapefile (corrections incluses)`
                         : "Exporter les sections de tous les lots en shapefile (corrections incluses)"
                     }
                   >
@@ -1564,14 +1621,14 @@ export default function SectionsClient() {
                     )}
                     Exporter SHP
                   </Button>
-                  {sourceFichier && (
+                  {selectedSources.length === 1 && (
                     <Button
                       size="sm"
                       variant="ghost"
                       className="h-8 gap-1 px-2 text-xs text-red-400 hover:bg-red-500/10 hover:text-red-400"
                       onClick={handleDeleteBatch}
                       disabled={deletingBatch}
-                      title={`Supprimer toutes les sections du fichier « ${sourceFichier} »`}
+                      title={`Supprimer toutes les sections du fichier « ${selectedSources[0]} »`}
                     >
                       {deletingBatch ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -2264,7 +2321,7 @@ export default function SectionsClient() {
         onOpenChange={setHistoryOpen}
         scope="sections"
         scopeKey={null}
-        onRestored={() => void fetchData(sourceFichier)}
+        onRestored={() => void fetchData(selectedSources)}
       />
 
       {pendingShapefileInventory && (
