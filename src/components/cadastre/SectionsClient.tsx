@@ -261,6 +261,15 @@ export default function SectionsClient() {
       const L = (await import("leaflet")).default;
       if (cancelled || !mapEl.current || mapRef.current) return;
       LRef.current = L;
+      // Les icônes par défaut de Leaflet référencent des chemins relatifs
+      // résolus via webpack (absents du bundle Next.js) → 404 sur
+      // marker-icon(-2x).png/marker-shadow.png. On les repointe vers un CDN.
+      delete (L.Icon.Default.prototype as { _getIconUrl?: unknown })._getIconUrl;
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
+        iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
+        shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+      });
       // Vue initiale : emprise du Sénégal entier (recadrée ensuite sur les
       // données via fitBounds quand un lot est chargé).
       const map = L.map(mapEl.current).fitBounds([
