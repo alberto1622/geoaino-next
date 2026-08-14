@@ -37,6 +37,7 @@ export type OverlapAction =
   | "merge"
   | "delete_a"
   | "delete_b"
+  | "delete_lot"
   | "ignore";
 
 function areaM2(g: PolyGeom): number {
@@ -61,6 +62,10 @@ function dedupeOverlaps(rows: LimiteSectionOverlapRow[]): LimiteSectionOverlapRo
  *    aire égale, découpe B (choix arbitraire mais déterministe) ;
  *  - `merge` : fusionne A et B (`turf.union`), B supprimée ;
  *  - `delete_a` / `delete_b` : supprime la section choisie ;
+ *  - `delete_lot` : supprime la section du lot `targetLot` (résolue parmi A/B
+ *    par son `sourceFichier`, indépendamment de l'ordre A/B qui dépend
+ *    uniquement des `id` — cf. `correct-batch/route.ts`, suppression groupée
+ *    des chevauchements croisés entre deux lots) ;
  *  - `ignore` : marque le chevauchement intentionnel (IGNORED).
  * Renvoie les LOTS touchés (A et B peuvent appartenir à deux lots différents
  * depuis que `refreshOverlaps` détecte aussi les chevauchements croisés entre
@@ -74,6 +79,7 @@ export async function applyOverlapCorrection(
   overlapId: number,
   action: OverlapAction,
   db: Db = prisma,
+  targetLot?: string,
 ): Promise<{ lots: string[]; snapshot: SectionsDeleteSnapshot }> {
   const ov = await getOverlap(overlapId, db);
   if (!ov) throw new Error("Chevauchement introuvable");
@@ -128,6 +134,21 @@ export async function applyOverlapCorrection(
     await deleteSection(ov.sectionAId, db);
   } else if (action === "delete_b") {
     await deleteSection(ov.sectionBId, db);
+  } else if (action === "delete_lot") {
+    if (!targetLot) throw new Error("Lot cible requis pour delete_lot");
+    const aMatches = a.sourceFichier === targetLot;
+    const bMatches = b.sourceFichier === targetLot;
+    if (aMatches === bMatches) {
+      // Ni A ni B dans le lot cible, ou chevauchement interne au lot cible
+      // (les deux côtés y appartiennent) : ambigu, on refuse plutôt que de
+      // deviner — corriger ce cas individuellement.
+      throw new Error(
+        aMatches
+          ? "Chevauchement interne au lot cible — corriger individuellement"
+          : "Aucune des deux sections n'appartient au lot cible",
+      );
+    }
+    await deleteSection(aMatches ? ov.sectionAId : ov.sectionBId, db);
   }
 
   return { lots, snapshot };
@@ -149,10 +170,11 @@ export async function applyOverlapCorrectionWithHistory(
   action: OverlapAction,
   createdBy: string | null,
   historyAction: "correct" | "correct-batch" = "correct",
+  targetLot?: string,
 ): Promise<string[]> {
   return prisma.$transaction(
     async (tx) => {
-      const { lots, snapshot } = await applyOverlapCorrection(overlapId, action, tx);
+      const { lots, snapshot } = await applyOverlapCorrection(overlapId, action, tx, targetLot);
       const first = snapshot.sections[0];
       await recordHistory(tx, {
         scope: "sections",

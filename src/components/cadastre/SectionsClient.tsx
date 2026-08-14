@@ -150,6 +150,24 @@ function escHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+const POLYGONAL_TYPES = new Set(["Polygon", "MultiPolygon"]);
+
+/**
+ * Ne garde que les membres Polygon/MultiPolygon d'une géométrie — filtre les
+ * Point/MultiPoint/LineString incidents qu'une GeometryCollection issue de
+ * ST_Intersection peut contenir en plus de la surface de chevauchement
+ * réelle (sinon rendus par Leaflet comme des markers par défaut).
+ */
+function keepPolygonalOnly(geom: GeoJSON.Geometry): GeoJSON.Geometry | null {
+  if (POLYGONAL_TYPES.has(geom.type)) return geom;
+  if (geom.type === "GeometryCollection") {
+    const polys = geom.geometries.filter((g) => POLYGONAL_TYPES.has(g.type));
+    if (polys.length === 0) return null;
+    return polys.length === 1 ? polys[0] : { type: "GeometryCollection", geometries: polys };
+  }
+  return null;
+}
+
 const BATCH_ACTION_LABELS = {
   clip_a: "Découper la section A",
   clip_b: "Découper la section B",
@@ -968,8 +986,15 @@ export default function SectionsClient() {
     overlapLayersRef.current.clear();
     for (const o of overlaps) {
       if (o.status !== "PENDING" || !o.intersectionGeoJson) continue;
+      // ST_Intersection de deux polygones peut renvoyer une GeometryCollection
+      // mêlant la surface de chevauchement réelle à un Point/LineString
+      // incident (contact ponctuel du contour ailleurs). Sans filtrage,
+      // L.geoJSON rend ce Point avec l'icône marker par défaut de Leaflet —
+      // un pin sans rapport avec le chevauchement affiché.
+      const polygonalGeom = keepPolygonalOnly(o.intersectionGeoJson as GeoJSON.Geometry);
+      if (!polygonalGeom) continue;
       try {
-        const gj = L.geoJSON(o.intersectionGeoJson as any, {
+        const gj = L.geoJSON(polygonalGeom as any, {
           style: {
             color: OVERLAP_COLOR,
             weight: 1.5,
@@ -1418,13 +1443,17 @@ export default function SectionsClient() {
 
   // ── Application groupée d'une règle sur plusieurs chevauchements ───────────
   const performBatchCorrection = useCallback(
-    async (ids: number[], action: "clip_a" | "clip_b" | "auto" | "ignore") => {
+    async (
+      ids: number[],
+      action: "clip_a" | "clip_b" | "auto" | "ignore" | "delete_lot",
+      targetLot?: string,
+    ) => {
       setBatchCorrecting(true);
       try {
         const res = await fetch("/api/cadastre/sections/correct-batch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ overlapIds: ids, action, sourceFichier: selectedSources }),
+          body: JSON.stringify({ overlapIds: ids, action, targetLot, sourceFichier: selectedSources }),
         });
         const data = await res.json();
         if (!res.ok)
@@ -1483,6 +1512,39 @@ export default function SectionsClient() {
       });
     },
     [activeOverlapSelection, performBatchCorrection],
+  );
+
+  // Chevauchements CROISÉS entre exactement les 2 lots sélectionnés (pas les
+  // chevauchements internes à l'un des deux, ni ceux avec un 3ème lot non
+  // sélectionné qui passerait le filtre OR de `overlapSourceFilter`) — portée
+  // de la suppression groupée « entre les deux fichiers ».
+  const crossLotPending = useMemo(
+    () =>
+      selectedSources.length === 2
+        ? pending.filter(
+            (o) =>
+              (o.aSourceFichier === selectedSources[0] && o.bSourceFichier === selectedSources[1]) ||
+              (o.aSourceFichier === selectedSources[1] && o.bSourceFichier === selectedSources[0]),
+          )
+        : [],
+    [pending, selectedSources],
+  );
+
+  const confirmDeleteLotOverlaps = useCallback(
+    (targetLot: string) => {
+      const ids = crossLotPending.map((o) => o.id);
+      if (ids.length === 0) return;
+      const otherLot = selectedSources.find((s) => s !== targetLot) ?? "";
+      setConfirmState({
+        title: "Suppression groupée entre les deux lots",
+        description:
+          `Supprimer les ${ids.length} section(s) du lot "${targetLot}" en chevauchement avec "${otherLot}" ?\n` +
+          `Le lot "${otherLot}" est conservé tel quel.\nCette action est irréversible (restaurable ensuite depuis le panneau Historique).`,
+        confirmLabel: "Supprimer",
+        run: () => void performBatchCorrection(ids, "delete_lot", targetLot),
+      });
+    },
+    [crossLotPending, selectedSources, performBatchCorrection],
   );
 
   // Libellé du sélecteur "Lot stocké" — reflète 0 (tous), 1, ou N lots cochés.
@@ -1918,6 +1980,32 @@ export default function SectionsClient() {
                     </p>
                   ) : (
                     <div className="space-y-2">
+                      {selectedSources.length === 2 && crossLotPending.length > 0 && (
+                        <div className="space-y-1.5 rounded-lg border border-amber-400/40 bg-amber-500/10 p-2">
+                          <p className="text-[11px] font-medium">
+                            {crossLotPending.length} chevauchement
+                            {crossLotPending.length > 1 ? "s" : ""} entre les 2 lots
+                          </p>
+                          <p className="text-[10px] text-muted-foreground">
+                            Suppression groupée — choisir le lot dont les
+                            sections en chevauchement seront supprimées
+                            (l&apos;autre est conservé).
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {selectedSources.map((src) => (
+                              <ActBtn
+                                key={src}
+                                busy={batchCorrecting}
+                                danger
+                                onClick={() => confirmDeleteLotOverlaps(src)}
+                                icon={<Trash2 className="h-3 w-3" />}
+                              >
+                                Supprimer {src}
+                              </ActBtn>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                         <input
                           type="checkbox"

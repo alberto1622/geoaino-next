@@ -2295,5 +2295,54 @@ croisée (A, B) déjà insérée par le rafraîchissement de A.
 
 ---
 
+## 21. Suppression groupée des sections en chevauchement entre deux lots
+
+**Problème métier.** Après détection des chevauchements croisés (§20), corriger
+un doublon massif entre deux lots (ex. réimport accidentel d'un même fichier,
+ou deux communes voisines redécoupées) chevauchement par chevauchement est
+trop lent : il faut pouvoir dire une fois pour toutes « entre ces deux lots,
+c'est celui-ci qui perd ses sections en doublon » et l'appliquer à toutes les
+paires croisées d'un coup.
+
+**Cause technique.** Le traitement en masse existant (`correct-batch/route.ts`)
+excluait `delete_a`/`delete_b` du batch : ces actions ciblent la section A ou B
+d'UNE paire, mais A/B n'est qu'un ordre arbitraire par `id`
+(`LEAST`/`GREATEST` — cf. §20) qui ne correspond à AUCUN lot fixe d'une paire à
+l'autre. Appliquer `delete_a` en masse aurait supprimé tantôt une section du
+lot X, tantôt une du lot Y, selon l'ordre des ids — l'inverse d'une
+suppression « toujours ce lot-ci ».
+
+**Solution.** Nouvelle action `delete_lot` (`overlap-correction.ts ·
+applyOverlapCorrection`), paramétrée par un `targetLot` explicite (nom de
+lot, pas A/B) : pour chaque paire, résout LAQUELLE des deux sections
+appartient à `targetLot` (via son propre `sourceFichier`, pas l'ordre A/B) et
+supprime celle-là — refuse (erreur) si les deux appartiennent à `targetLot`
+(chevauchement interne, ambigu) ou si aucune n'y appartient. Autorisée en
+batch (`correct-batch/route.ts · BATCH_ACTIONS`) car son ciblage est sans
+ambiguïté, contrairement à `delete_a`/`delete_b`. Historique inchangé :
+chaque suppression reste une entrée `correct-batch` individuellement
+restaurable (§20/history.ts), le mécanisme ne distingue pas `delete_lot` des
+autres actions.
+
+Côté UI (`SectionsClient.tsx`), un encart dédié apparaît dans le panneau
+Chevauchements uniquement quand exactement 2 lots sont cochés dans « Lot
+stocké » ET qu'il existe des chevauchements PENDING dont les DEUX côtés sont
+précisément ces deux lots (`crossLotPending` — exclut les chevauchements
+internes à l'un des deux lots et ceux avec un 3ème lot non sélectionné, que le
+filtre `OR sourceFichier = ANY(...)` de `listOverlaps` laisserait autrement
+passer). Deux boutons — un par lot — déclenchent la suppression groupée avec
+confirmation ; l'autre lot est conservé intact.
+
+**Pourquoi.** Nommer le lot cible explicitement (plutôt que réutiliser
+A/B) rend l'opération prévisible et sûre à grande échelle : l'utilisateur
+choisit UNE FOIS quel lot est « le doublon à effacer », et cette décision
+s'applique identiquement à chaque paire, quel que soit l'ordre interne des
+ids. Restreindre la portée UI aux paires STRICTEMENT entre les 2 lots cochés
+(et non tout chevauchement touchant l'un des deux) évite qu'un clic sur
+« Supprimer lot X » n'efface aussi, par effet de bord, des sections de X en
+chevauchement avec un lot Z non voulu dans cette opération.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

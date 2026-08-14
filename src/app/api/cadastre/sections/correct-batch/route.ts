@@ -7,10 +7,12 @@ import { refreshOverlaps, listSections, listOverlaps } from "@/lib/cadastre/sect
 export const runtime = "nodejs";
 export const maxDuration = 600;
 
-// Fusion/suppression exclues du batch : trop sensibles pour un traitement en
-// masse (cf. design doc, portée). Seules les règles de découpe + l'ignorance
-// en masse sont couvertes.
-const BATCH_ACTIONS = new Set<OverlapAction>(["clip_a", "clip_b", "auto", "ignore"]);
+// Fusion + suppression A/B (ambiguës selon l'ordre id) exclues du batch : trop
+// sensibles pour un traitement en masse (cf. design doc, portée). `delete_lot`
+// fait exception : elle cible un lot explicitement nommé par l'appelant (pas
+// un A/B arbitraire), pour la suppression groupée des sections en
+// chevauchement entre deux lots choisis.
+const BATCH_ACTIONS = new Set<OverlapAction>(["clip_a", "clip_b", "auto", "ignore", "delete_lot"]);
 
 interface BatchResult {
   overlapId: number;
@@ -40,7 +42,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   const createdBy = (session.user as { id?: string }).id ?? null;
 
-  let body: { overlapIds?: unknown; action?: string; sourceFichier?: string | string[] | null } = {};
+  let body: {
+    overlapIds?: unknown;
+    action?: string;
+    sourceFichier?: string | string[] | null;
+    targetLot?: string;
+  } = {};
   try {
     body = await req.json();
   } catch {
@@ -57,6 +64,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       { status: 400 },
     );
   }
+  const targetLot = typeof body.targetLot === "string" ? body.targetLot.trim() : "";
+  if (action === "delete_lot" && !targetLot) {
+    return NextResponse.json({ error: "targetLot requis pour l'action delete_lot" }, { status: 400 });
+  }
   if (overlapIds.length > 500) {
     return NextResponse.json(
       { error: "Lot trop volumineux (max 500 chevauchements par appel)." },
@@ -68,7 +79,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const touchedSources = new Set<string>();
   for (const overlapId of overlapIds) {
     try {
-      const lots = await applyOverlapCorrectionWithHistory(overlapId, action, createdBy, "correct-batch");
+      const lots = await applyOverlapCorrectionWithHistory(
+        overlapId,
+        action,
+        createdBy,
+        "correct-batch",
+        action === "delete_lot" ? targetLot : undefined,
+      );
       if (action !== "ignore") for (const src of lots) touchedSources.add(src);
       results.push({ overlapId, ok: true });
     } catch (err) {
