@@ -9,6 +9,7 @@ import { setFeatureSection } from "@/lib/analyses/feature-locator";
 import {
   buildNicad,
   normalizeSection,
+  normalizeNumeroParcelle,
   digitsOnly,
   NICAD_PREFIX_LENGTH,
   NICAD_SECTION_LENGTH,
@@ -33,6 +34,7 @@ const ACTIONS_BY_TYPE: Record<string, string[]> = {
   MISSING_NICAD: ["assign_nicad", "ignore"],
   SHORT_NICAD: ["assign_nicad", "ignore"],
   SECTION_MISMATCH: ["assign_section", "ignore"],
+  MULTI_NUMERO: ["choose_numero", "ignore"],
 };
 
 // Poids de pénalité par sévérité — même barème que `geo-engine.ts ·
@@ -165,7 +167,7 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
   const analysisId = parseInt(id);
   const errorIdNum = parseInt(errorId);
 
-  let body: { action?: string; targetNicad?: string; targetSection?: string } = {};
+  let body: { action?: string; targetNicad?: string; targetSection?: string; targetNumero?: string } = {};
   try { body = await req.json(); } catch { /* empty body */ }
   const action = body.action;
 
@@ -346,6 +348,47 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
       }
 
       message = `Section corrigée à "${newSection}" pour la parcelle`;
+    } else if (error.errorType === "MULTI_NUMERO" && action === "choose_numero") {
+      const idx = findFeatureIndexByGeometry(features, error.geometry);
+      if (idx === -1) return NextResponse.json({ error: "Parcelle introuvable dans le GeoJSON" }, { status: 404 });
+
+      // Candidats posés par `analyzeGeoJSON` dans `nicad2` (pas de champ dédié
+      // sur `TopologicalError` pour cette liste — cf. commentaire geo-engine.ts).
+      const candidats = (error.nicad2 ?? "").split("|").map((c) => c.trim()).filter(Boolean);
+      const chosen = body.targetNumero?.trim();
+      if (!chosen || (candidats.length > 0 && !candidats.includes(chosen))) {
+        return NextResponse.json(
+          { error: `Numéro invalide — attendu l'un de : ${candidats.join(", ")}` },
+          { status: 400 },
+        );
+      }
+
+      const numero5 = normalizeNumeroParcelle(chosen);
+      features[idx].properties = {
+        ...(features[idx].properties ?? {}),
+        numero: chosen,
+        numero_parcelle: numero5.value,
+        // Ambiguïté résolue : un seul candidat désormais, sans quoi une
+        // régénération du rapport re-détecterait la même erreur.
+        numero_candidats: [chosen],
+      };
+
+      // Si la parcelle a déjà un NICAD complet, resynchronise son segment
+      // parcelle pour rester cohérent — même principe que SECTION_MISMATCH
+      // ci-dessus pour le segment section.
+      const currentNicad = extractNicad(features[idx].properties);
+      if (currentNicad && currentNicad.length === NICAD_TOTAL_LENGTH && numero5.value) {
+        const rebuiltNicad = buildNicad(
+          currentNicad.slice(0, NICAD_PREFIX_LENGTH),
+          currentNicad.slice(NICAD_PREFIX_LENGTH, NICAD_PREFIX_LENGTH + NICAD_SECTION_LENGTH),
+          numero5.value,
+        );
+        if (rebuiltNicad && rebuiltNicad !== currentNicad) {
+          features[idx].properties = { ...(features[idx].properties ?? {}), nicad: rebuiltNicad };
+        }
+      }
+
+      message = `Numéro "${chosen}" conservé pour la parcelle`;
     } else {
       return NextResponse.json({ error: `Action "${action}" non supportée pour le type d'erreur ${error.errorType}` }, { status: 400 });
     }

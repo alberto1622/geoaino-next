@@ -141,6 +141,7 @@ enum ErrorType {
   SHORT_NICAD
   SELF_INTERSECT
   SECTION_MISMATCH
+  MULTI_NUMERO
 }
 
 enum Severity {

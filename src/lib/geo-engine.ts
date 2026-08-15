@@ -263,6 +263,30 @@ export function analyzeGeoJSON(
         geometry: f.geometry,
       });
     }
+
+    // Limite de parcelle portant plusieurs numéros distincts (`numero_candidats`,
+    // posé par `parcelle-ingestion.ts` — fusion probable de parcelles voisines,
+    // limite mitoyenne absente du réseau). `nicad2` porte les candidats joints
+    // par « | » (pas de champ dédié sur `TopologicalError` pour cette liste) —
+    // même reconversion créative de `nicad1`/`nicad2` que DUPLICATE (qui y range
+    // l'OBJECTID, pas un NICAD), lue côté client pour construire les boutons de
+    // choix (`correct/route.ts · choose_numero`).
+    const numeroCandidats = props.numero_candidats;
+    if (Array.isArray(numeroCandidats) && numeroCandidats.length > 1) {
+      nonConformeIdx.add(idx);
+      errors.push({
+        type: "multi_numero",
+        severity: "medium",
+        nicad1: nicad || `feature_${idx}`,
+        nicad2: numeroCandidats.join("|"),
+        description:
+          `Limite de parcelle portant ${numeroCandidats.length} numéros distincts : ` +
+          `${numeroCandidats.join(", ")} — choisir lequel conserver (numéro actuellement retenu : ` +
+          `${props.numero ?? numeroCandidats[0]}).`,
+        confidence: 0.8,
+        geometry: f.geometry,
+      });
+    }
   });
 
   // 2. Duplicate NiCAD — one error per occurrence, nicad2 = OBJECTID of this feature

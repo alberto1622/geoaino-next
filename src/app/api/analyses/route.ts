@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
       for (let i = 0; i < result.errors.length; i += BATCH) {
         const batch = result.errors.slice(i, i + BATCH).map((e) => ({
           analysisId: analysis.id,
-          errorType: e.type.toUpperCase() as "OVERLAP" | "GAP" | "SLIVER" | "DUPLICATE" | "INVALID_GEOM" | "BOUNDARY_CROSS" | "MISSING_NICAD" | "SHORT_NICAD" | "SELF_INTERSECT",
+          errorType: e.type.toUpperCase() as "OVERLAP" | "GAP" | "SLIVER" | "DUPLICATE" | "INVALID_GEOM" | "BOUNDARY_CROSS" | "MISSING_NICAD" | "SHORT_NICAD" | "SELF_INTERSECT" | "MULTI_NUMERO",
           severity: e.severity.toUpperCase() as "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
           nicad1: e.nicad1 ?? null,
           nicad2: e.nicad2 ?? null,

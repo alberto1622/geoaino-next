@@ -107,6 +107,7 @@ const ERROR_TYPE_LABELS: Record<string, string> = {
   boundary_cross: "Sort des limites administratives",
   self_intersect: "Auto-intersection",
   section_mismatch: "Incohérence de section",
+  multi_numero: "Plusieurs numéros",
 };
 /** Zoom minimal d'affichage des étiquettes de numéros de section (marqueurs DOM). */
 const SECTION_LABEL_MIN_ZOOM = 10;

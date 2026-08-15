@@ -2597,5 +2597,70 @@ pas résoudre, si la détection n'est pas appliquée AVANT le décodage complet.
 
 ---
 
+## 25. Limite de parcelle avec plusieurs numéros distincts : nouvelle erreur `MULTI_NUMERO`, choix utilisateur
+
+**Problème métier** : quand une limite mitoyenne manque dans le dessin (ou
+qu'un trou dépasse la tolérance de raccord), la polygonisation fusionne DEUX
+(ou plus) parcelles voisines en UN seul polygone qui porte alors PLUSIEURS
+numéros de parcelle distincts (un par annotation d'origine tombée à
+l'intérieur). `parcelle-ingestion.ts` le détectait déjà (`numerosVus.size > 1`,
+comptée dans `nbParcellesMultiNumeros`) mais ne faisait qu'AGRÉGER un
+avertissement global dans le rapport d'import — aucune trace par parcelle,
+aucune action pour choisir lequel des numéros garder : le premier trouvé
+(ordre arbitraire de `labelsByPolygon`) était silencieusement retenu.
+
+**Cause technique** : contrairement à `SECTION_MISMATCH` (§ 19) qui compare
+DEUX propriétés déjà posées sur la feature (`codeSection`/`sectionGeolocalisee`)
+au moment de `analyzeGeoJSON`, l'ambiguïté multi-numéro n'existait QU'au
+moment de la composition en mémoire (`buildParcellesFromFc32628`) — la liste
+des candidats n'était jamais transportée jusqu'à la `Feature` GeoJSON finale,
+donc invisible à `analyzeGeoJSON` (qui tourne plus tard, potentiellement dans
+un run séparé) et impossible à exposer comme erreur corrigeable.
+
+**Solution** :
+- `ParcelleCandidate.numeroCandidats: string[] | null` (`parcelle-ingestion.ts`) —
+  tous les numéros DISTINCTS vus sur la limite (`null` si un seul/aucun) ;
+  reporté tel quel (array JSON, même traitement que `autresTextes`) dans la
+  propriété `numero_candidats` de la Feature (`parcellesToFeatureCollection`).
+- `analyzeGeoJSON` (`geo-engine.ts`) détecte `numero_candidats.length > 1` et
+  pousse une erreur `multi_numero` (sévérité `medium`) — `nicad2` porte les
+  candidats joints par `|` (pas de champ dédié sur `TopologicalError` pour une
+  liste ; même détournement créatif que `DUPLICATE`, qui y range l'OBJECTID
+  de l'autre occurrence plutôt qu'un vrai NICAD).
+- Nouvelle valeur d'enum `MULTI_NUMERO` (`ErrorType`, migration
+  `20260815160000_add_multi_numero_error_type` — **à appliquer** via
+  `npx prisma migrate dev` avant tout import produisant cette erreur, sans
+  quoi l'insertion échoue silencieusement en base, cf. avertissement de fin
+  de section) et action de correction `choose_numero`
+  (`correct/route.ts`) : reçoit `targetNumero`, valide qu'il fait partie des
+  candidats annoncés dans `nicad2`, recompose `numero`/`numero_parcelle`
+  (`normalizeNumeroParcelle`) et resynchronise le segment parcelle du NICAD
+  existant (même principe que `assign_section` pour le segment section) —
+  `numero_candidats` est réduit à `[targetNumero]` pour ne pas re-déclencher
+  l'erreur à une éventuelle régénération du rapport.
+- Client (`MapAnalysisClient.tsx`) : un bouton par candidat (extraits de
+  `selectedError.nicad2`), au lieu d'un champ texte libre — contrairement à
+  `assign_section`/`assign_nicad` (valeur ouverte), les candidats sont un
+  ensemble FINI et déjà connu, un choix par clic est plus sûr qu'une re-saisie
+  manuelle sujette à faute de frappe.
+
+**Pourquoi (pièges inclus)** : `numeroCandidats` est calculé AVANT le
+dédoublonnage par recouvrement et la résolution des chevauchements
+(`dedupParcellesByOverlap`/`resolveParcelleOverlaps`), sur le polygone TEL
+QU'ISSU DE LA POLYGONISATION — si ces étapes ultérieures modifient/retaillent
+la géométrie, l'ambiguïté de numéro reste correcte (elle porte sur les
+ÉTIQUETTES à l'intérieur, indépendamment de la forme exacte retaillée).
+**Avertissement opérationnel** : contrairement aux fixes purement applicatifs
+de ce document, celui-ci ajoute une valeur d'ENUM POSTGRES — la migration
+DOIT être appliquée (`npx prisma migrate dev`, ou `db push`/`migrate deploy`
+selon l'environnement) ET le client Prisma régénéré AVANT tout import
+susceptible de produire une erreur `MULTI_NUMERO`, sans quoi
+`prisma.topologicalError.createMany` échoue pour CE lot d'erreurs précis
+(valeur d'enum inconnue en base) — échec silencieusement absorbé par le
+`try/catch` déjà en place autour de cette insertion (`run-job.ts`), qui logue
+mais ne fait pas échouer tout le job.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*
