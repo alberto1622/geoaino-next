@@ -114,7 +114,7 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 ## 2. Parcelle / Titre foncier — Plan cadastral / Plan foncier
 
 - → Signaler l'erreur suivant: limites parcelles avec 2 numéros de parcelles et permettre à l'utilisateur de choisir un numéro
-- → avec la récupération le numéro parcelle des fichiers dxf récupérer même s'il y a débordement d'un numéro de la parcelle
+- → Il y a des numeros parcelles qui déborde un peu des parcelles, récupérer les même s'il y a débordement d'un numéro de la parcelle
 - → Désactiver les limites sections
 - → ✅Récupérer les sections depuis la base de données des sections
 
@@ -128,10 +128,6 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
   - syscol 2026
   - Niveau section
 
-**Attribution de NICAD**
-
-- → Ajouter...
-
 ---
 
 ## 4. Points du 11/08/2026
@@ -140,10 +136,10 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 - → Loading lors des modifications
 - → Identifier et exporter les sections ayant des anomalies
 - → Sélection suivant les fichiers
-- → Corriger l'affichage (Mark)
+- → ✅Corriger l'affichage (Mark)
 - → Chevauchement / Intersection
 - → Différencier les gaps et les chevauchements
-- → Effectuer le mappage des champs avant le traitement
+- → ✅Effectuer le mappage des champs avant le traitement
 
 # Problèmes
 

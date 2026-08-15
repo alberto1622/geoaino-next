@@ -58,6 +58,16 @@ proj4.defs("EPSG:32628", "+proj=utm +zone=28 +datum=WGS84 +units=m +no_defs");
 
 export interface ParcelleCandidate {
   numero: string | null;
+  /**
+   * Numéros de parcelle DISTINCTS trouvés à l'intérieur de cette même limite
+   * (> 1 élément ⇒ fusion probable de parcelles voisines — limite mitoyenne
+   * absente du réseau, ou trou > tolérance de raccord). `numero` retient le
+   * premier trouvé (ordre arbitraire) ; `numeroCandidats` porte tous les
+   * candidats pour permettre à l'utilisateur de choisir lequel garder après
+   * coup (§ 25, `analyzeGeoJSON · MULTI_NUMERO`). `null` si un seul numéro
+   * (ou aucun) — pas d'ambiguïté à signaler.
+   */
+  numeroCandidats: string[] | null;
   /** Numéro de parcelle normalisé à 5 chiffres (sert à construire le NICAD). */
   numeroParcelle5: string | null;
   numeroLot: string | null;
@@ -1679,7 +1689,8 @@ export function buildParcellesFromFc32628(
       else if (cls === "denomination" && denomination === null) denomination = label.text;
       else autresTextes.push(label.text);
     }
-    if (numerosVus.size > 1) nbParcellesMultiNumeros++;
+    const numeroCandidats = numerosVus.size > 1 ? Array.from(numerosVus) : null;
+    if (numeroCandidats) nbParcellesMultiNumeros++;
 
     // Section : NON résolue depuis la couche DXF `limites_sections` de CE
     // fichier (peu fiable/absente — anneaux invalides rejetés, débordements
@@ -1711,6 +1722,7 @@ export function buildParcellesFromFc32628(
 
     parcelles.push({
       numero,
+      numeroCandidats,
       numeroParcelle5: numero5.value,
       numeroLot,
       numeroSection,
@@ -1932,6 +1944,7 @@ export function parcellesToFeatureCollection(
         syscol: p.syscolCommune2026 ?? "",
         commune_2026: p.nomCommune2026,
         numero: p.numero,
+        numero_candidats: p.numeroCandidats,
         numero_parcelle: p.numeroParcelle5,
         numero_lot: p.numeroLot,
         numero_section: p.numeroSection,

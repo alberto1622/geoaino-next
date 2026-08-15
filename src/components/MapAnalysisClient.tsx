@@ -1458,6 +1458,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       action: string,
       targetNicad?: string,
       targetSection?: string,
+      targetNumero?: string,
     ) => {
       setCorrectingErrorId(errorId);
       try {
@@ -1466,7 +1467,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action, targetNicad, targetSection }),
+            body: JSON.stringify({ action, targetNicad, targetSection, targetNumero }),
           },
         );
         const data = await res.json();
@@ -2583,6 +2584,39 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                       >
                         <Wrench className="w-3 h-3" /> Assigner
                       </Button>
+                    </div>
+                  )}
+                  {selectedError.errorType === "MULTI_NUMERO" && (
+                    <div className="space-y-1">
+                      <p className="text-[10px] text-muted-foreground">
+                        Choisir le numéro à conserver :
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(selectedError.nicad2 ?? "")
+                          .split("|")
+                          .map((c) => c.trim())
+                          .filter(Boolean)
+                          .map((candidat) => (
+                            <Button
+                              key={candidat}
+                              size="sm"
+                              variant="outline"
+                              className="h-7 px-2 text-xs gap-1.5"
+                              disabled={correctingErrorId === selectedError.id}
+                              onClick={() =>
+                                handleCorrectError(
+                                  selectedError.id,
+                                  "choose_numero",
+                                  undefined,
+                                  undefined,
+                                  candidat,
+                                )
+                              }
+                            >
+                              <Wrench className="w-3 h-3" /> {candidat}
+                            </Button>
+                          ))}
+                      </div>
                     </div>
                   )}
                   <Button
