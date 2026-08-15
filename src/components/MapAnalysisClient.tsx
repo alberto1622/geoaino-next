@@ -558,20 +558,40 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     [sortedErrors, activeFilters],
   );
 
+  // Erreurs affichées sur la CARTE (marqueurs/surbrillance) : contrairement à
+  // la liste latérale (`filteredErrors`, qui garde volontairement les erreurs
+  // corrigées — grisées — pour laisser l'historique visible), une erreur
+  // corrigée ne doit plus apparaître comme active sur la carte. `e.corrected`
+  // couvre les corrections d'une session précédente (rechargées depuis le
+  // serveur, `map/[analysisId]/page.tsx` ne filtre pas `corrected: false` —
+  // la liste latérale en a besoin) ; `correctedErrorIds` couvre celles faites
+  // DANS cette session (pas encore reflétées dans `analysis.errors`, prop figée
+  // au chargement).
+  const mapErrors = useMemo(
+    () => filteredErrors.filter((e) => !e.corrected && !correctedErrorIds.has(e.id)),
+    [filteredErrors, correctedErrorIds],
+  );
+
   const errorTypeGroups = useMemo(
     () => Array.from(new Set(analysis.errors.map((e) => e.errorType))),
     [analysis.errors],
   );
 
-  // NICAD distincts impliqués dans au moins une erreur (= parcelles non conformes).
+  // NICAD distincts impliqués dans au moins une erreur NON corrigée (= parcelles
+  // non conformes) — une erreur corrigée (chargée `corrected: true`, ou corrigée
+  // DANS cette session via `correctedErrorIds`) ne doit plus retenir sa parcelle
+  // hors de la classification « conforme » (cf. `conformeFilter`, MapLibreMap.tsx) :
+  // sans ce filtre, une parcelle reste rouge sur la carte indéfiniment après
+  // correction de sa dernière erreur.
   const nonConformeNicads = useMemo(() => {
     const s = new Set<string>();
     for (const e of analysis.errors) {
+      if (e.corrected || correctedErrorIds.has(e.id)) continue;
       if (e.nicad1) s.add(e.nicad1);
       if (e.nicad2) s.add(e.nicad2);
     }
     return Array.from(s);
-  }, [analysis.errors]);
+  }, [analysis.errors, correctedErrorIds]);
 
   // Parcelles conformes : valeur autoritative calculée à l'analyse (comptage des
   // parcelles distinctes en erreur, fiable même sans NICAD). Pour les analyses
@@ -600,8 +620,16 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   // barré de la liste d'erreurs) pour « corrigé depuis le chargement » — décale
   // les deux compteurs du même delta plutôt que de les recalculer de zéro.
   const correctedSinceLoad = correctedErrorIds.size;
+  // Repli (`analysis.conformeCount == null`) : `conformeCount` est déjà
+  // recalculé dynamiquement depuis `nonConformeNicads`, qui exclut désormais
+  // les erreurs corrigées — ne PAS lui rajouter `correctedSinceLoad`, sinon
+  // double comptage. Seule la valeur AUTORITATIVE figée au chargement en a besoin.
   const displayConformeCount =
-    conformeCount != null ? conformeCount + correctedSinceLoad : null;
+    conformeCount == null
+      ? null
+      : analysis.conformeCount != null
+        ? conformeCount + correctedSinceLoad
+        : conformeCount;
   const displayErrorCount = Math.max(0, (analysis.errorCount ?? 0) - correctedSinceLoad);
 
   // Emprise globale pour le fit initial de la carte (rendu par tuiles) : servie
@@ -2524,7 +2552,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
               analysisId={analysis.id}
               tilesVersion={tileVersion}
               initialBounds={initialBounds}
-              errors={filteredErrors}
+              errors={mapErrors}
               selectedErrorId={selectedError?.id}
               blinkIntense={
                 (selectedError?.errorType ?? "").toUpperCase() === "DUPLICATE"
