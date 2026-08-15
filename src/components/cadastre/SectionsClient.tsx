@@ -22,6 +22,7 @@ import {
   ChevronsRight,
   Layers,
   History,
+  Undo2,
   ChevronDown,
   Pencil,
   Check,
@@ -209,6 +210,14 @@ export default function SectionsClient() {
   const [exporting, setExporting] = useState(false);
   // Panneau "Historique" des modifications sections/parcelles (delete pour l'instant).
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Bouton "Annuler" rapide (barre d'outils) : cible toujours l'entrée la plus
+  // récente de l'historique (scope "sections"), sans ouvrir le panneau —
+  // rafraîchie depuis `fetchData` pour rester à jour après chaque action.
+  const [latestHistoryEntry, setLatestHistoryEntry] = useState<{
+    id: number;
+    summary: string;
+  } | null>(null);
+  const [undoing, setUndoing] = useState(false);
   // Fusion manuelle : ids sélectionnés DANS L'ORDRE (le premier conserve ses
   // attributs). Ref miroir pour lecture dans les popups Leaflet (impératifs).
   const [mergeSelection, setMergeSelection] = useState<number[]>([]);
@@ -301,6 +310,16 @@ export default function SectionsClient() {
     };
   }, []);
 
+  const loadLatestHistoryEntry = useCallback(async () => {
+    try {
+      const res = await fetch("/api/cadastre/history?scope=sections&limit=1");
+      const data = await res.json();
+      setLatestHistoryEntry(res.ok ? (data.entries?.[0] ?? null) : null);
+    } catch {
+      setLatestHistoryEntry(null);
+    }
+  }, []);
+
   // `srcs = []` → toutes les sections stockées, tous lots confondus.
   const fetchData = useCallback(async (srcs: string[]) => {
     setLoadingData(true);
@@ -325,12 +344,13 @@ export default function SectionsClient() {
       if (!res.ok) throw new Error(data.error || "Chargement échoué");
       setSections(data.sections ?? []);
       setOverlaps(data.overlaps ?? []);
+      void loadLatestHistoryEntry();
     } catch (err) {
       toast.error(String(err));
     } finally {
       setLoadingData(false);
     }
-  }, []);
+  }, [loadLatestHistoryEntry]);
 
   const loadBatches = useCallback(async (): Promise<Batch[]> => {
     try {
@@ -343,6 +363,31 @@ export default function SectionsClient() {
       return [];
     }
   }, []);
+
+  // ── Annuler rapide (barre d'outils) ─────────────────────────────────────────
+  // Restaure directement l'entrée d'historique la plus récente — même appel
+  // que le bouton "Restaurer" du panneau Historique sur sa première ligne,
+  // sans avoir à l'ouvrir. Ne gère pas de "rétablir" : restaurer une entrée
+  // `action: "restore"` (annuler un Annuler) n'est pas pris en charge côté
+  // serveur (`getRevertHandler`), le message d'erreur renvoyé l'explique.
+  const performUndo = useCallback(async () => {
+    if (!latestHistoryEntry) return;
+    setUndoing(true);
+    try {
+      const res = await fetch(`/api/cadastre/history/${latestHistoryEntry.id}/restore`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Annulation échouée");
+      toast.success("Dernière action annulée.");
+      await fetchData(selectedSources);
+      void loadBatches();
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setUndoing(false);
+    }
+  }, [latestHistoryEntry, selectedSources, fetchData, loadBatches]);
 
   // ── Chargement des données stockées au montage (affichage sans réimport) ───
   // TOUTES les sections (tous lots confondus) sont chargées au premier
@@ -1266,9 +1311,14 @@ export default function SectionsClient() {
           description: `Retirer la zone de chevauchement${zone} de la section ${b}.\nSi elle est entièrement couverte par la section ${a}, elle sera supprimée.`,
           confirmLabel: "Découper",
         },
-        merge: {
-          title: `Fusionner les sections ${a} et ${b}`,
+        merge_a: {
+          title: `Fusionner en conservant ${a}`,
           description: `La section ${a} absorbe la section ${b}, qui sera supprimée.\nCette action est irréversible.`,
+          confirmLabel: "Fusionner",
+        },
+        merge_b: {
+          title: `Fusionner en conservant ${b}`,
+          description: `La section ${b} absorbe la section ${a}, qui sera supprimée.\nCette action est irréversible.`,
           confirmLabel: "Fusionner",
         },
         delete_a: {
@@ -1541,8 +1591,28 @@ export default function SectionsClient() {
                 </Button>
               </div>
 
-              {/* Historique des modifications (sections QA) — liste + restauration. */}
+              {/* Historique des modifications (sections QA) — liste + restauration,
+                  et raccourci "Annuler" pour la dernière action sans ouvrir le panneau. */}
               <div className="flex items-center gap-1.5 rounded-xl border border-dashed border-border/60 px-2 py-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5"
+                  disabled={!latestHistoryEntry || undoing}
+                  title={
+                    latestHistoryEntry
+                      ? `Annuler : ${latestHistoryEntry.summary}`
+                      : "Aucune action à annuler"
+                  }
+                  onClick={() => void performUndo()}
+                >
+                  {undoing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Undo2 className="h-4 w-4" />
+                  )}
+                  Annuler
+                </Button>
                 <Button
                   size="sm"
                   variant="outline"
@@ -2053,10 +2123,17 @@ export default function SectionsClient() {
                                 </ActBtn>
                                 <ActBtn
                                   busy={busy || batchCorrecting}
-                                  onClick={() => applyCorrection(o, "merge")}
+                                  onClick={() => applyCorrection(o, "merge_a")}
                                   icon={<Combine className="h-3 w-3" />}
                                 >
-                                  Fusionner
+                                  Fusionner → {o.aNumSection ?? "A"}
+                                </ActBtn>
+                                <ActBtn
+                                  busy={busy || batchCorrecting}
+                                  onClick={() => applyCorrection(o, "merge_b")}
+                                  icon={<Combine className="h-3 w-3" />}
+                                >
+                                  Fusionner → {o.bNumSection ?? "B"}
                                 </ActBtn>
                                 <ActBtn
                                   busy={busy || batchCorrecting}

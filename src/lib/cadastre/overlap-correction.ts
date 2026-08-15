@@ -34,7 +34,8 @@ export type OverlapAction =
   | "clip_a"
   | "clip_b"
   | "auto"
-  | "merge"
+  | "merge_a"
+  | "merge_b"
   | "delete_a"
   | "delete_b"
   | "ignore";
@@ -59,7 +60,9 @@ function dedupeOverlaps(rows: LimiteSectionOverlapRow[]): LimiteSectionOverlapRo
  *  - `auto` : compare l'aire de A et de B (`turf.area`), découpe la plus
  *    GRANDE des deux (équivalent à `clip_a` ou `clip_b` selon le cas) — à
  *    aire égale, découpe B (choix arbitraire mais déterministe) ;
- *  - `merge` : fusionne A et B (`turf.union`), B supprimée ;
+ *  - `merge_a` / `merge_b` : fusionne A et B (`turf.union`) en conservant la
+ *    géométrie fusionnée sur la section choisie (A ou B), l'autre est
+ *    supprimée — le côté conservé garde son numéro, sa commune et son lot ;
  *  - `delete_a` / `delete_b` : supprime la section choisie ;
  *  - `ignore` : marque le chevauchement intentionnel (IGNORED).
  * Renvoie les LOTS touchés (A et B peuvent appartenir à deux lots différents
@@ -118,12 +121,14 @@ export async function applyOverlapCorrection(
       const g = diff.geometry as PolyGeom;
       await updateSectionGeometry(targetId, g, areaM2(g), db);
     }
-  } else if (action === "merge") {
+  } else if (action === "merge_a" || action === "merge_b") {
     const u = turf.union(turf.featureCollection([fa, fb]));
     if (!u || !u.geometry) throw new Error("Fusion impossible");
     const g = u.geometry as PolyGeom;
-    await updateSectionGeometry(ov.sectionAId, g, areaM2(g), db);
-    await deleteSection(ov.sectionBId, db);
+    const keepId = action === "merge_a" ? ov.sectionAId : ov.sectionBId;
+    const dropId = action === "merge_a" ? ov.sectionBId : ov.sectionAId;
+    await updateSectionGeometry(keepId, g, areaM2(g), db);
+    await deleteSection(dropId, db);
   } else if (action === "delete_a") {
     await deleteSection(ov.sectionAId, db);
   } else if (action === "delete_b") {
