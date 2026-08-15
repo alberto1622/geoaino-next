@@ -28,9 +28,11 @@ const MAX_ANALYSIS_FEATURES = Number(process.env.MAX_ANALYSIS_FEATURES || 8000);
  * rapport (`microstationReport`) expliquant pourquoi aucune parcelle/NICAD n'a
  * pu être construit — aucun DXF ne contourne le pipeline NICAD.
  *
- * Le Syscol (préfixe 8 chiffres du NICAD) est résolu par jointure spatiale sur
- * `cad_communes_2026` (`assignNicad2026FromCommunes`) : il n'est pas dans le
- * dessin, seule la commune 2026 contenant la parcelle le fournit.
+ * Le Syscol (préfixe 8 chiffres du NICAD) et la section sont résolus par
+ * jointure spatiale (`assignNicad2026FromCommunes`) : prioritairement sur
+ * `limite_section` (table QA de /cadastre/sections, Syscol + section
+ * ensemble), avec repli sur `cad_communes_2026` (Syscol seul, commune 2026
+ * contenant la parcelle) là où aucune section n'a encore été construite.
  */
 async function parseDxfAsParcelles(buf: Buffer): Promise<ParseResult> {
   const ingestion = await assignNicad2026FromCommunes(

@@ -96,6 +96,11 @@ export interface DxfIngestionReport {
   nbSansCommune2026: number;
   /** Parcelles rattachées à une commune 2026 par proximité (hors contenance stricte). */
   nbCommune2026Approx: number;
+  /** Parcelles dont Syscol + section viennent de `limite_section` (/cadastre/sections)
+   *  plutôt que de la couche DXF `limites_sections` — cf. assign-nicad-2026.ts. */
+  nbSectionDepuisTableSections: number;
+  /** Parmi celles-ci, rattachées par proximité (hors contenance stricte). */
+  nbSectionApprox: number;
   nbNumeroNonConforme: number;
   nbPiscines: number;
   nbParcellesPolygonisees: number;
@@ -1312,7 +1317,8 @@ export interface IngestOptions {
 function blankIngestionReport(warnings: string[] = []): DxfIngestionReport {
   return {
     nbParcelles: 0, nbSansNumero: 0, nbSansDenomination: 0, nbSansProprietaire: 0,
-    nbSansSection: 0, nbSansCommune2026: 0, nbCommune2026Approx: 0, nbNumeroNonConforme: 0,
+    nbSansSection: 0, nbSansCommune2026: 0, nbCommune2026Approx: 0,
+    nbSectionDepuisTableSections: 0, nbSectionApprox: 0, nbNumeroNonConforme: 0,
     nbPiscines: 0, nbParcellesPolygonisees: 0, nbPolygonesEnveloppeIgnores: 0, nbHorsEmprise: 0,
     nbPolylignesOuvertesIgnorees: 0, nbTextesHorsParcelle: 0, nbParcellesMultiNumeros: 0,
     nbPolygonesInvalidesRejetes: 0,
@@ -1742,9 +1748,11 @@ export function buildParcellesFromFc32628(
       nbSansDenomination,
       nbSansProprietaire,
       nbSansSection,
-      // Résolus lors de l'assemblage du NICAD (jointure cad_communes_2026).
+      // Résolus lors de l'assemblage du NICAD (jointure cad_communes_2026 / limite_section).
       nbSansCommune2026: 0,
       nbCommune2026Approx: 0,
+      nbSectionDepuisTableSections: 0,
+      nbSectionApprox: 0,
       nbNumeroNonConforme,
       nbPiscines,
       nbParcellesPolygonisees,
