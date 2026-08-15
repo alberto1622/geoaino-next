@@ -167,7 +167,12 @@ export default function HomeClient({ user, stats }: Props) {
           conformityScore: job.report?.conformityScore ?? 0,
         });
         if (warnings.length) {
-          toast.warning("Vérifications", { description: warnings.slice(0, 3).join(" · ") });
+          // Console EN PLUS du toast (persiste dans les DevTools, contrairement
+          // au toast qui disparaît) — pratique pour copier le rapport complet.
+          console.log(`[import job ${jobId}] avertissements :`, warnings);
+          // Tous les avertissements (pas seulement les 3 premiers) — même
+          // correctif que le chemin synchrone `upload-geo`, cf. plus haut.
+          toast.warning("Vérifications", { description: warnings.join(" · "), duration: 20000 });
         }
         toast.success("Traitement terminé", {
           description: `${job.totalBuilt} parcelles · ${errorCount} erreur(s)`,
@@ -414,6 +419,9 @@ export default function HomeClient({ user, stats }: Props) {
       };
 
       if (parsed.microstationReport?.warnings?.length) {
+        // Console EN PLUS du toast (persiste dans les DevTools, contrairement
+        // au toast qui disparaît) — pratique pour copier le rapport complet.
+        console.log("[upload-geo] avertissements :", parsed.microstationReport.warnings);
         // Tous les avertissements (pas seulement les 3 premiers, séparateur
         // " · " — sonner ne préserve pas les retours à la ligne bruts sans
         // config CSS dédiée) : un rapport DXF en porte facilement 10+, et le
