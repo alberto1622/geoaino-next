@@ -127,12 +127,24 @@ export default function HomeClient({ user, stats }: Props) {
   const pollImportJob = useCallback(async (jobId: number) => {
     setCurrentJobId(jobId);
     const startedAt = Date.now();
-    const TIMEOUT_MS = 20 * 60 * 1000; // garde-fou : 20 min
+    // Garde-fou côté NAVIGATEUR uniquement : le job continue de tourner
+    // côté serveur (`after()`, cf. import-jobs/route.ts) même après ce délai —
+    // ce timeout arrête juste le SONDAGE, il n'annule rien. 60 min (pas 20) :
+    // un DXF cadastral volumineux (100k+ parcelles) avec deux jointures
+    // spatiales pour le NICAD (Syscol + section, cf. assign-nicad-2026.ts § 21)
+    // peut légitimement dépasser 20 min — l'analyse apparaît alors dans
+    // /history une fois le job terminé, même si cet onglet a abandonné le suivi.
+    const TIMEOUT_MS = 60 * 60 * 1000;
     let netErrors = 0;
 
     for (;;) {
       await new Promise((r) => setTimeout(r, 1500));
-      if (Date.now() - startedAt > TIMEOUT_MS) throw new Error("Délai d'import dépassé.");
+      if (Date.now() - startedAt > TIMEOUT_MS) {
+        throw new Error(
+          "Suivi de l'import abandonné après 1h d'attente — le traitement continue probablement " +
+            "côté serveur : vérifiez /history dans quelques minutes avant de relancer l'import.",
+        );
+      }
 
       let job: {
         status: string; phase: string | null; progress: number;
