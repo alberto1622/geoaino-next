@@ -2434,5 +2434,68 @@ intermédiaire vers le NICAD, jamais un NICAD lui-même déjà construit.
 
 ---
 
+## 22. Une parcelle corrigée reste rouge sur la carte : `nonConformeNicads`/`errors` de la carte ignoraient `corrected`
+
+**Problème métier** : après avoir corrigé une erreur topologique sur une parcelle
+(module `/map`, `handleCorrectError`), la parcelle restait affichée comme
+« non conforme » sur la carte — pas de bascule au vert, et son marqueur
+d'erreur restait visible — alors que la liste latérale des erreurs, elle,
+grisait bien l'entrée corrigée. La correction était réellement appliquée
+(géométrie/`TopologicalError.corrected` en base), seul l'AFFICHAGE ne suivait
+pas : la parcelle n'était jamais reclassée « correct ».
+
+**Cause technique** : deux jeux de données alimentant la carte (`MapAnalysisClient.tsx`)
+ignoraient le statut `corrected`, alors que d'autres endroits du même fichier
+(`handleFeatureClick`, la liste latérale) l'appliquaient déjà correctement :
+- `nonConformeNicads` (NICAD à exclure de la classification « conforme »,
+  `conformeFilter` dans `MapLibreMap.tsx`) était construit depuis TOUS les
+  `analysis.errors`, sans filtrer `e.corrected` ni `correctedErrorIds` (le Set
+  local des corrections faites DANS cette session, `analysis.errors` étant une
+  prop figée au chargement de la page) — une parcelle dont l'unique erreur
+  venait d'être corrigée restait donc dans `nonConformeNicads` indéfiniment.
+- `errors={filteredErrors}`, la prop passée à `MapLibreMap` pour dessiner les
+  marqueurs/surbrillances d'erreur, n'excluait pas non plus les erreurs
+  corrigées — leur marqueur restait affiché sur la carte après correction.
+- Aggravant : `map/[analysisId]/page.tsx` charge TOUTES les erreurs
+  (`topologicalError.findMany` sans `where: { corrected: false }`), y compris
+  celles corrigées lors d'une session PRÉCÉDENTE — nécessaire pour que la
+  liste latérale puisse les afficher grisées, mais ce même jeu de données,
+  non filtré, alimentait aussi `nonConformeNicads`/la carte. Une parcelle
+  corrigée un autre jour restait donc rouge indéfiniment, pas seulement le
+  temps d'une session.
+
+**Solution** (`src/components/MapAnalysisClient.tsx`) :
+- `nonConformeNicads` exclut désormais toute erreur avec
+  `e.corrected || correctedErrorIds.has(e.id)` avant d'y ajouter ses NICAD —
+  une parcelle sort de la classification « non conforme » dès que sa DERNIÈRE
+  erreur active est corrigée (elle peut porter plusieurs lignes d'erreur ; il
+  faut qu'AUCUNE ne reste active).
+- Nouvelle liste dérivée `mapErrors = filteredErrors.filter(e => !e.corrected && !correctedErrorIds.has(e.id))`,
+  passée à `MapLibreMap` (`errors={mapErrors}`) à la place de `filteredErrors` —
+  la liste latérale continue d'utiliser `filteredErrors` (non filtrée) pour
+  garder les entrées corrigées visibles, grisées.
+- Effet de bord corrigé au passage : le repli `conformeCount` (analyses sans
+  `analysis.conformeCount` persisté) est recalculé depuis `nonConformeNicads`,
+  donc reflète maintenant déjà les corrections de session — `displayConformeCount`
+  ne doit alors PLUS lui rajouter `correctedSinceLoad` (sinon double comptage),
+  contrairement à la valeur AUTORITATIVE (`analysis.conformeCount` figé au
+  chargement), qui en a toujours besoin.
+
+**Pourquoi (pièges inclus)** : `handleFeatureClick` appliquait déjà exactement
+ce filtre (`!e.corrected && !correctedErrorIds.has(e.id)`) pour décider si un
+clic sur une parcelle doit ouvrir le panneau de correction — la carte
+elle-même (marqueurs + classification conforme) avait simplement été oubliée
+lors de l'introduction de `correctedErrorIds` (§ 11 quinquies-octies), qui n'a
+patché que les COMPTEURS (`displayConformeCount`/`displayErrorCount`), pas le
+RENDU carte. Piège à ne pas réintroduire : `analysis.errors` reste
+volontairement NON filtré par `corrected` à la source (`page.tsx`) — la liste
+latérale a besoin des erreurs déjà corrigées pour les afficher grisées comme
+historique — donc tout nouveau consommateur de `analysis.errors` orienté
+« état actif » (marqueurs, classification, filtres) doit appliquer le même
+filtre `corrected`/`correctedErrorIds` explicitement, jamais supposer que la
+liste ne contient que des erreurs actives.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*
