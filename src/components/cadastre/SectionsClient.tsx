@@ -49,6 +49,7 @@ interface SectionItem {
   numSection: string | null;
   surfaceM2: number | null;
   geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon;
+  sourceFichier: string;
 }
 
 interface OverlapItem {
@@ -96,7 +97,27 @@ function sectionColor(hasError: boolean, unnumbered = false): string {
   return SECTION_OK_COLOR;
 }
 
+// Comparaison de 2 lots (exactement) : la couleur de base d'une section
+// indique alors DE QUEL LOT elle provient (au lieu de son statut OK/erreur/
+// sans numéro — les zones de chevauchement dessinées par-dessus, cf.
+// OVERLAP_COLOR/OVERLAP_CROSS_LOT_COLOR, restent le repère visuel pour les
+// erreurs dans ce mode). Sans rapport avec les couleurs de statut
+// existantes pour rester identifiable simultanément si jamais réutilisées
+// côté légende.
+const LOT_COMPARE_COLORS = ["#22c55e", "#ec4899"] as const;
+
+/** `null` hors comparaison à 2 lots (ni dans `selectedSources`, ni mode actif). */
+function lotCompareColor(sourceFichier: string, selectedSources: string[]): string | null {
+  if (selectedSources.length !== 2) return null;
+  const idx = selectedSources.indexOf(sourceFichier);
+  return idx === -1 ? null : LOT_COMPARE_COLORS[idx];
+}
+
 const OVERLAP_COLOR = "#ef4444";
+// Chevauchement CROISÉ entre deux lots différents (vs. interne à un même
+// lot) — cyan, à l'opposé du rouge sur le cercle chromatique pour rester
+// identifiable même à faible zoom, cf. §20/§21 CONCEPTS-TRAITEMENT-DXF.md.
+const OVERLAP_CROSS_LOT_COLOR = "#06b6d4";
 // Sections sélectionnées pour une fusion manuelle (violet).
 const MERGE_COLOR = "#8b5cf6";
 
@@ -824,7 +845,7 @@ export default function SectionsClient() {
       if (!s.geomGeoJson) continue;
       const hasError = pendingSectionIds.has(s.id);
       const unnumbered = !s.numSection;
-      const color = sectionColor(hasError, unnumbered);
+      const color = lotCompareColor(s.sourceFichier, selectedSources) ?? sectionColor(hasError, unnumbered);
       try {
         const gj = L.geoJSON(s.geomGeoJson as any, {
           style:
@@ -993,12 +1014,14 @@ export default function SectionsClient() {
       // un pin sans rapport avec le chevauchement affiché.
       const polygonalGeom = keepPolygonalOnly(o.intersectionGeoJson as GeoJSON.Geometry);
       if (!polygonalGeom) continue;
+      const crossLot = o.aSourceFichier !== o.bSourceFichier;
+      const overlapColor = crossLot ? OVERLAP_CROSS_LOT_COLOR : OVERLAP_COLOR;
       try {
         const gj = L.geoJSON(polygonalGeom as any, {
           style: {
-            color: OVERLAP_COLOR,
+            color: overlapColor,
             weight: 1.5,
-            fillColor: OVERLAP_COLOR,
+            fillColor: overlapColor,
             fillOpacity: 0.45,
           },
         });
@@ -1007,7 +1030,7 @@ export default function SectionsClient() {
           setPanelOpen(true);
         });
         gj.bindTooltip(
-          `Chevauchement ${o.overlapAreaM2 != null ? `${Math.round(o.overlapAreaM2)} m²` : ""}`,
+          `Chevauchement${crossLot ? " entre lots" : ""} ${o.overlapAreaM2 != null ? `${Math.round(o.overlapAreaM2)} m²` : ""}`,
           { sticky: true },
         );
         gj.addTo(ovGroup);
@@ -1035,6 +1058,7 @@ export default function SectionsClient() {
     displayedSections,
     overlaps,
     pendingSectionIds,
+    selectedSources,
     mapReady,
     handleDeleteSection,
     toggleMergeSelection,
@@ -1045,27 +1069,39 @@ export default function SectionsClient() {
 
   // ── Surbrillance des sections sélectionnées pour fusion (restylage seul) ───
   // Rejoue aussi après chaque reconstruction des couches (styles de base).
+  // Priorité d'affichage : suppression en cours > sélection fusion > erreur.
   useEffect(() => {
     const sel = new Set(activeMergeSelection);
     const unnumberedIds = new Set(
       displayedSections.filter((s) => !s.numSection).map((s) => s.id),
     );
+    const sourceById = new Map(displayedSections.map((s) => [s.id, s.sourceFichier]));
     for (const [id, layer] of sectionLayersRef.current) {
       const hasError = pendingSectionIds.has(id);
       const unnumbered = unnumberedIds.has(id);
-      const color = sectionColor(hasError, unnumbered);
+      const src = sourceById.get(id);
+      const color =
+        (src != null ? lotCompareColor(src, selectedSources) : null) ?? sectionColor(hasError, unnumbered);
       try {
         layer.setStyle(
-          sel.has(id)
+          id === deletingSectionId
             ? {
-                color: MERGE_COLOR,
-                weight: 3,
-                fillColor: MERGE_COLOR,
-                fillOpacity: 0.35,
+                color: "#ef4444",
+                weight: 2,
+                fillColor: "#ef4444",
+                fillOpacity: 0.15,
+                dashArray: "4 4",
               }
-            : hasError || unnumbered
-              ? { color, weight: 2, fillColor: color, fillOpacity: 0.35 }
-              : { color, weight: 1.2, fillColor: color, fillOpacity: 0.15 },
+            : sel.has(id)
+              ? {
+                  color: MERGE_COLOR,
+                  weight: 3,
+                  fillColor: MERGE_COLOR,
+                  fillOpacity: 0.35,
+                }
+              : hasError || unnumbered
+                ? { color, weight: 2, fillColor: color, fillOpacity: 0.35 }
+                : { color, weight: 1.2, fillColor: color, fillOpacity: 0.15 },
         );
       } catch {
         /* ignore */
@@ -1076,8 +1112,45 @@ export default function SectionsClient() {
     displayedSections,
     overlaps,
     pendingSectionIds,
+    deletingSectionId,
+    selectedSources,
     mapReady,
   ]);
+
+  // ── Icône « suppression en cours » sur la carte (feedback visuel pendant la
+  // requête) — ajoutée directement à `map`, indépendante du cycle de vie de
+  // `secGroup` (détruit/reconstruit par l'effet de rendu principal, qui ne
+  // dépend PAS de `deletingSectionId` pour éviter un redessin complet — et la
+  // fermeture des popups ouverts — à chaque suppression). Fonctionne quel que
+  // soit le déclencheur (popup carte ou bouton de la table).
+  useEffect(() => {
+    const L = LRef.current;
+    const map = mapRef.current;
+    if (!L || !map || !mapReady || deletingSectionId == null) return;
+    const layer = sectionLayersRef.current.get(deletingSectionId);
+    if (!layer) return;
+    let marker: any = null;
+    try {
+      const center = layer.getBounds().getCenter();
+      marker = L.marker(center, {
+        icon: L.divIcon({
+          className: "",
+          html:
+            '<div style="width:16px;height:16px;border:2px solid #ef4444;' +
+            'border-top-color:transparent;border-radius:50%" class="animate-spin"></div>',
+          iconSize: [16, 16],
+          iconAnchor: [8, 8],
+        }),
+        interactive: false,
+        keyboard: false,
+      }).addTo(map);
+    } catch {
+      /* ignore */
+    }
+    return () => {
+      if (marker) map.removeLayer(marker);
+    };
+  }, [deletingSectionId, mapReady]);
 
   // ── Mise en évidence du chevauchement sélectionné (restylage seul) ─────────
   // Dépend aussi de sections/overlaps pour rejouer après chaque reconstruction
@@ -1450,36 +1523,43 @@ export default function SectionsClient() {
     ) => {
       setBatchCorrecting(true);
       try {
-        const res = await fetch("/api/cadastre/sections/correct-batch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ overlapIds: ids, action, targetLot, sourceFichier: selectedSources }),
-        });
-        const data = await res.json();
-        if (!res.ok)
-          throw new Error(data.error || "Correction groupée échouée");
-        setSections(data.sections ?? []);
-        setOverlaps(data.overlaps ?? []);
+        // Le serveur plafonne à 500 chevauchements par appel (protection
+        // contre une requête pathologique) — un lot dupliqué en entier peut
+        // largement dépasser ce plafond : on découpe côté client en appels
+        // séquentiels (le serveur traite déjà chaque appel séquentiellement,
+        // donc ce découpage ne change pas la sémantique, juste le nombre
+        // d'aller-retours réseau).
+        const CHUNK_SIZE = 500;
+        let nbOk = 0;
+        const failures: Array<{ overlapId: number; error?: string }> = [];
+        for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+          const chunk = ids.slice(i, i + CHUNK_SIZE);
+          const res = await fetch("/api/cadastre/sections/correct-batch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ overlapIds: chunk, action, targetLot, sourceFichier: selectedSources }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Correction groupée échouée");
+          const results: Array<{
+            overlapId: number;
+            ok: boolean;
+            error?: string;
+          }> = data.results ?? [];
+          nbOk += results.filter((r) => r.ok).length;
+          failures.push(...results.filter((r) => !r.ok));
+        }
+        await fetchData(selectedSources);
         setOverlapSelection([]);
-        const results: Array<{
-          overlapId: number;
-          ok: boolean;
-          error?: string;
-        }> = data.results ?? [];
-        const nbOk = results.filter((r) => r.ok).length;
-        const nbFail = results.length - nbOk;
-        if (nbFail === 0) {
+        if (failures.length === 0) {
           toast.success(
             `${nbOk} correction${nbOk > 1 ? "s" : ""} appliquée${nbOk > 1 ? "s" : ""}.`,
           );
         } else {
           toast.warning(
-            `${nbOk} correction${nbOk > 1 ? "s" : ""} appliquée${nbOk > 1 ? "s" : ""}, ${nbFail} échouée${nbFail > 1 ? "s" : ""}.`,
+            `${nbOk} correction${nbOk > 1 ? "s" : ""} appliquée${nbOk > 1 ? "s" : ""}, ${failures.length} échouée${failures.length > 1 ? "s" : ""}.`,
           );
-          console.warn(
-            "[correct-batch] échecs :",
-            results.filter((r) => !r.ok),
-          );
+          console.warn("[correct-batch] échecs :", failures);
         }
       } catch (err) {
         toast.error(String(err));
@@ -1487,7 +1567,7 @@ export default function SectionsClient() {
         setBatchCorrecting(false);
       }
     },
-    [selectedSources],
+    [selectedSources, fetchData],
   );
 
   const confirmBatchCorrection = useCallback(
@@ -1781,33 +1861,54 @@ export default function SectionsClient() {
 
               {/* Légende des couleurs de la carte */}
               <span className="flex flex-wrap items-center gap-3 rounded-xl border border-border/60 px-3 py-2 text-[11px] text-muted-foreground">
-                <span className="flex items-center gap-1.5">
-                  <span
-                    className="h-2.5 w-2.5 rounded-sm"
-                    style={{ background: SECTION_OK_COLOR }}
-                  />
-                  Section OK
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span
-                    className="h-2.5 w-2.5 rounded-sm"
-                    style={{ background: SECTION_ERROR_COLOR }}
-                  />
-                  Chevauchement à corriger
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span
-                    className="h-2.5 w-2.5 rounded-sm"
-                    style={{ background: SECTION_UNNUMBERED_COLOR }}
-                  />
-                  Sans numéro
-                </span>
+                {selectedSources.length === 2 ? (
+                  selectedSources.map((src, i) => (
+                    <span key={src} className="flex items-center gap-1.5">
+                      <span
+                        className="h-2.5 w-2.5 rounded-sm"
+                        style={{ background: LOT_COMPARE_COLORS[i] }}
+                      />
+                      {src}
+                    </span>
+                  ))
+                ) : (
+                  <>
+                    <span className="flex items-center gap-1.5">
+                      <span
+                        className="h-2.5 w-2.5 rounded-sm"
+                        style={{ background: SECTION_OK_COLOR }}
+                      />
+                      Section OK
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span
+                        className="h-2.5 w-2.5 rounded-sm"
+                        style={{ background: SECTION_ERROR_COLOR }}
+                      />
+                      Chevauchement à corriger
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span
+                        className="h-2.5 w-2.5 rounded-sm"
+                        style={{ background: SECTION_UNNUMBERED_COLOR }}
+                      />
+                      Sans numéro
+                    </span>
+                  </>
+                )}
                 <span className="flex items-center gap-1.5">
                   <span
                     className="h-2.5 w-2.5 rounded-sm"
                     style={{ background: OVERLAP_COLOR }}
                   />
                   Zone d&apos;intersection
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span
+                    className="h-2.5 w-2.5 rounded-sm"
+                    style={{ background: OVERLAP_CROSS_LOT_COLOR }}
+                  />
+                  Intersection entre lots
                 </span>
               </span>
             </div>
@@ -2119,7 +2220,7 @@ export default function SectionsClient() {
                                 )}
                               </div>
                               {o.aSourceFichier !== o.bSourceFichier && (
-                                <div className="mb-1.5 -mt-1 text-[10px] text-amber-500">
+                                <div className="mb-1.5 -mt-1 text-[10px] text-cyan-500">
                                   Chevauchement entre lots : {o.aSourceFichier}{" "}
                                   ↔ {o.bSourceFichier}
                                 </div>

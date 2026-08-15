@@ -38,7 +38,6 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { NavBar } from "@/components/NavBar";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 import { toNum, errorTypeColor } from "@/lib/utils";
@@ -602,7 +601,10 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   const correctedSinceLoad = correctedErrorIds.size;
   const displayConformeCount =
     conformeCount != null ? conformeCount + correctedSinceLoad : null;
-  const displayErrorCount = Math.max(0, (analysis.errorCount ?? 0) - correctedSinceLoad);
+  const displayErrorCount = Math.max(
+    0,
+    (analysis.errorCount ?? 0) - correctedSinceLoad,
+  );
 
   // Emprise globale pour le fit initial de la carte (rendu par tuiles) : servie
   // par map-meta, indépendante du chargement du GeoJSON complet.
@@ -645,8 +647,13 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       try {
         const res = await fetch(`/api/analyses/${analysis.id}/errors`);
         if (!res.ok) return;
-        const fresh = (await res.json()) as { id: number; corrected: boolean }[];
-        const newlyCorrected = fresh.filter((e) => e.corrected).map((e) => e.id);
+        const fresh = (await res.json()) as {
+          id: number;
+          corrected: boolean;
+        }[];
+        const newlyCorrected = fresh
+          .filter((e) => e.corrected)
+          .map((e) => e.id);
         if (newlyCorrected.length > 0) {
           setCorrectedErrorIds((prev) => new Set([...prev, ...newlyCorrected]));
         }
@@ -654,7 +661,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         /* rafraîchissement best-effort */
       }
     })();
-    toast.info("Carte mise à jour — un numéro de section a été modifié ailleurs.");
+    toast.info(
+      "Carte mise à jour — un numéro de section a été modifié ailleurs.",
+    );
   }, [analysis.id]);
   useAnalysisUpdateListener(analysis.id, handleExternalAnalysisUpdate);
 
@@ -1541,7 +1550,10 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         );
         return;
       }
-      setNicadFillPreview({ plans: result.plans, unresolvedCount: result.unresolvedCount });
+      setNicadFillPreview({
+        plans: result.plans,
+        unresolvedCount: result.unresolvedCount,
+      });
       setNicadFillSelection(new Set(result.plans.map((p) => p.numSection)));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
@@ -1658,13 +1670,13 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 className="text-green-400"
                 title="Parcelles sans erreur topologique"
               >
-                {displayConformeCount != null ? displayConformeCount.toLocaleString() : "…"}{" "}
+                {displayConformeCount != null
+                  ? displayConformeCount.toLocaleString()
+                  : "…"}{" "}
                 conformes
               </span>
               <span>·</span>
-              <span className="text-red-400">
-                {displayErrorCount} erreurs
-              </span>
+              <span className="text-red-400">{displayErrorCount} erreurs</span>
               {(analysis.outOfSenegalCount ?? 0) > 0 && (
                 <>
                   <span>·</span>
@@ -1802,7 +1814,11 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 <DropdownMenuTrigger asChild>
                   <Button
                     size="sm"
-                    variant={ADMIN_LEVELS.some((level) => adminShow[level]) ? "default" : "outline"}
+                    variant={
+                      ADMIN_LEVELS.some((level) => adminShow[level])
+                        ? "default"
+                        : "outline"
+                    }
                     className="gap-1.5 flex-1 h-8 text-xs"
                   >
                     <Layers className="w-3 h-3" />
@@ -1824,11 +1840,17 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                         checked={adminShow[level]}
                         onSelect={(e) => e.preventDefault()}
                         onCheckedChange={(checked) =>
-                          setAdminShow((prev) => ({ ...prev, [level]: checked === true }))
+                          setAdminShow((prev) => ({
+                            ...prev,
+                            [level]: checked === true,
+                          }))
                         }
                       >
                         <span className="flex items-center gap-1.5">
-                          <span className="h-2.5 w-2.5 rounded-sm" style={{ background: st.color }} />
+                          <span
+                            className="h-2.5 w-2.5 rounded-sm"
+                            style={{ background: st.color }}
+                          />
                           {st.label}
                         </span>
                       </DropdownMenuCheckboxItem>
@@ -2510,10 +2532,16 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         {/* Bascule d'affichage du panneau latéral. */}
         <button
           onClick={() => setLeftPanelOpen((v) => !v)}
-          title={leftPanelOpen ? "Masquer le panneau latéral" : "Afficher le panneau latéral"}
+          title={
+            leftPanelOpen
+              ? "Masquer le panneau latéral"
+              : "Afficher le panneau latéral"
+          }
           className="shrink-0 w-4 flex items-center justify-center border-r border-border bg-card hover:bg-secondary/60 text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
         >
-          <ChevronLeft className={`w-3 h-3 transition-transform ${leftPanelOpen ? "" : "rotate-180"}`} />
+          <ChevronLeft
+            className={`w-3 h-3 transition-transform ${leftPanelOpen ? "" : "rotate-180"}`}
+          />
         </button>
 
         {/* Map + Attribute Table */}
@@ -2793,13 +2821,18 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                   className="text-xs text-primary hover:underline cursor-pointer"
                   onClick={() =>
                     setNicadFillSelection((prev) =>
-                      prev.size === new Set(nicadFillPreview.plans.map((p) => p.numSection)).size
+                      prev.size ===
+                      new Set(nicadFillPreview.plans.map((p) => p.numSection))
+                        .size
                         ? new Set()
-                        : new Set(nicadFillPreview.plans.map((p) => p.numSection)),
+                        : new Set(
+                            nicadFillPreview.plans.map((p) => p.numSection),
+                          ),
                     )
                   }
                 >
-                  {nicadFillSelection.size === new Set(nicadFillPreview.plans.map((p) => p.numSection)).size
+                  {nicadFillSelection.size ===
+                  new Set(nicadFillPreview.plans.map((p) => p.numSection)).size
                     ? "Tout désélectionner"
                     : "Tout sélectionner"}
                 </button>
@@ -2823,13 +2856,17 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                       }
                     />
                     <span className="flex-1">
-                      Section {p.numSection} — {p.count} ({p.fromParcelle} → {p.toParcelle})
+                      Section {p.numSection} — {p.count} ({p.fromParcelle} →{" "}
+                      {p.toParcelle})
                       {p.viaCommune2026 && (
-                        <span className="ml-1 text-amber-600" title={
-                          p.communeApprox
-                            ? "Aucune parcelle de référence dans la section : préfixe déduit de la commune 2026 par proximité — à vérifier."
-                            : "Aucune parcelle de référence dans la section : préfixe déduit de la commune 2026 — à vérifier."
-                        }>
+                        <span
+                          className="ml-1 text-amber-600"
+                          title={
+                            p.communeApprox
+                              ? "Aucune parcelle de référence dans la section : préfixe déduit de la commune 2026 par proximité — à vérifier."
+                              : "Aucune parcelle de référence dans la section : préfixe déduit de la commune 2026 — à vérifier."
+                          }
+                        >
                           ⚠ commune 2026{p.communeApprox ? " (approx.)" : ""}
                         </span>
                       )}

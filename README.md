@@ -87,8 +87,8 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 
 - ✅Ajouter l'ajout de section à partir de shape file
 - ✅Appliquer la polygonisation lors de la construction des sections
-- Appliquer la possibilité de mise à jour automatique des nicad d'une numero de section ajouter ou modifier
-- Ajouter l'affichage des numero_section dans le map cadastre/sections
+- ✅Appliquer la possibilité de mise à jour automatique des nicad d'une numero de section ajouter ou modifier
+- ✅Ajouter l'affichage des numero_section dans le map cadastre/sections
 - Qiusheng Wu - Building open-source tools for geospatial data science and GeoAI
 
 # Notes — Gestion Cadastrale / Sections / Parcelles
@@ -101,21 +101,23 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 
 **Parcelles :**
 
-- → Activer la barre d'évolution
-- → Effectuer les mêmes corrections avec les shapefiles que...
-- → Ajouter le mappage des fichiers .shp
+- → ✅Activer la barre d'évolution
+- → ✅Effectuer les mêmes corrections avec les shapefiles que...
+- → ✅Ajouter le mappage des fichiers .shp
 - Web-cache pour charger de gros volumes de données WFS
 - → Ajouter le départage des départements, syscol
+- ✅Dans la liste déroulante, "Lot stocké :" Ajouter la possibilité de selection/deselectionner des lots
+- ✅Vérifier les chevauchments et intersections entre les sections chargés et existant déjà
 
 ## claude --resume cf625d72-d092-4437-b99f-7ae0525999ac
 
 ## 2. Parcelle / Titre foncier — Plan cadastral / Plan foncier
 
 - → Récupération
-- → Erreur : limites parcelles avec 2 numéros de parcelles
-- → Récupérer le numéro même s'il y a débordement d'un numéro
+- → Signaler l'erreur suivant: limites parcelles avec 2 numéros de parcelles et permettre à l'utilisateur de choisir un numéro
+- → avec la récupération le numéro parcelle des fichiers dxf récupérer même s'il y a débordement d'un numéro de la parcelle
 - → Désactiver les limites sections
-- → Récupérer les sections depuis la base de données des sections
+- → ✅Récupérer les sections depuis la base de données des sections
 
 ---
 
@@ -143,3 +145,9 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 - → Chevauchement / Intersection
 - → Différencier les gaps et les chevauchements
 - → Effectuer le mappage des champs avant le traitement
+
+# Problèmes
+
+## 1. intersections des sections entre deux fichiers charger
+
+A véfifier

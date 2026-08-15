@@ -75,6 +75,7 @@ export interface SectionListItem {
   numSection: string | null;
   surfaceM2: number | null;
   geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon;
+  sourceFichier: string;
 }
 
 export interface OverlapListItem {
@@ -333,7 +334,7 @@ export async function listSections(
     Array<Omit<SectionListItem, "surfaceM2"> & { surfaceM2: string | number | null }>
   >`
     SELECT id, "region", "departement", "commune", "syscolCommune", "numSection",
-           "surfaceM2", "geomGeoJson"
+           "surfaceM2", "geomGeoJson", "sourceFichier"
     FROM "limite_section"
     ${where}
     ORDER BY "numSection" NULLS LAST, id

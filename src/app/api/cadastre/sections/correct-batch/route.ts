@@ -89,8 +89,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       if (action !== "ignore") for (const src of lots) touchedSources.add(src);
       results.push({ overlapId, ok: true });
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message === "Chevauchement introuvable") {
+        // `deleteSection` supprime AUSSI toutes les lignes `limite_section_overlap`
+        // référençant la section supprimée (sections-data.ts) : un item
+        // précédent du même lot a pu déjà faire disparaître ce chevauchement
+        // en effet de bord (sa section supprimée participait aussi à cette
+        // paire) — déjà résolu, pas un échec.
+        results.push({ overlapId, ok: true });
+        continue;
+      }
       console.error("[cadastre/sections/correct-batch] item failed", overlapId, err);
-      results.push({ overlapId, ok: false, error: err instanceof Error ? err.message : String(err) });
+      results.push({ overlapId, ok: false, error: message });
     }
   }
 

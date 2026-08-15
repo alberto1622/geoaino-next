@@ -2324,6 +2324,22 @@ chaque suppression reste une entrée `correct-batch` individuellement
 restaurable (§20/history.ts), le mécanisme ne distingue pas `delete_lot` des
 autres actions.
 
+Une section peut participer à PLUSIEURS chevauchements croisés à la fois
+(ex. une grande section du lot X recouvre deux petites sections Y1 et Y2 du
+lot Y) : `deleteSection` (`sections-data.ts`) supprime AUSSI toutes les
+lignes `limite_section_overlap` référençant l'id supprimé, donc traiter la
+paire (X, Y1) fait disparaître en effet de bord la ligne de la paire (X, Y2)
+encore dans la file du même appel batch. `getOverlap` renvoie alors `null`
+pour cet id → `applyOverlapCorrection` lève « Chevauchement introuvable ».
+`correct-batch/route.ts` reclasse spécifiquement ce message comme un succès
+déjà résolu (pas un échec) : sans ce traitement, une suppression groupée
+efficace remontait un nombre d'« échecs » trompeur pour des paires qui
+n'avaient en réalité plus besoin d'aucune correction. Le découpage client en
+appels de ≤ 500 ids (cf. `SectionsClient.tsx · performBatchCorrection`) ne
+change rien à ce comportement : chaque appel traite sa tranche
+séquentiellement, donc l'effet de bord ne peut se produire qu'entre deux ids
+du MÊME appel, jamais entre deux appels.
+
 Côté UI (`SectionsClient.tsx`), un encart dédié apparaît dans le panneau
 Chevauchements uniquement quand exactement 2 lots sont cochés dans « Lot
 stocké » ET qu'il existe des chevauchements PENDING dont les DEUX côtés sont
