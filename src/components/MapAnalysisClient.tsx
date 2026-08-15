@@ -515,6 +515,16 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   const [correctedErrorIds, setCorrectedErrorIds] = useState<Set<number>>(
     new Set(),
   );
+  // `errorCount`/`conformityScore` renvoyés par le serveur après CHAQUE
+  // correction (`correct/route.ts` les patche et les persiste désormais en
+  // base) — remplace `analysis.errorCount`/`analysis.conformityScore` (figés
+  // au chargement de la page) dès la première correction de cette session.
+  // `null` = aucune correction faite depuis le chargement, afficher les
+  // valeurs du serveur telles quelles.
+  const [statsOverride, setStatsOverride] = useState<{
+    errorCount: number;
+    conformityScore: number;
+  } | null>(null);
   // NICAD supprimés récemment : masqués immédiatement sur la carte (filtre vecteur)
   // en attendant que les tuiles MVT se resynchronisent (tilesVersion) sans reload visible.
   const [deletedNicads, setDeletedNicads] = useState<string[]>([]);
@@ -632,10 +642,23 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       : analysis.conformeCount != null
         ? conformeCount + correctedSinceLoad
         : conformeCount;
+<<<<<<< HEAD
   const displayErrorCount = Math.max(
     0,
     (analysis.errorCount ?? 0) - correctedSinceLoad,
   );
+=======
+  // `statsOverride` (posé par `handleCorrectError` depuis la réponse de
+  // `correct/route.ts`, qui patche et persiste désormais `errorCount`/
+  // `conformityScore` en base à chaque correction) est la valeur EXACTE,
+  // cumulée sur toutes les corrections de cette session — préférée à
+  // l'approximation `correctedSinceLoad` (poids uniforme -1, ne distingue pas
+  // les sévérités) dès qu'une correction est passée par ce chemin.
+  const displayErrorCount =
+    statsOverride?.errorCount ?? Math.max(0, (analysis.errorCount ?? 0) - correctedSinceLoad);
+  const displayConformityScore = statsOverride?.conformityScore ?? toNum(analysis.conformityScore);
+
+>>>>>>> worktree-shapefile-parcelles-section-coherence
   // Emprise globale pour le fit initial de la carte (rendu par tuiles) : servie
   // par map-meta, indépendante du chargement du GeoJSON complet.
   useEffect(() => {
@@ -1449,6 +1472,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         // Invalide le cache des tuiles vectorielles (la carte reflète la correction).
         setTileVersion((v) => v + 1);
         setCorrectedErrorIds((prev) => new Set(prev).add(errorId));
+        if (data.stats) setStatsOverride(data.stats);
         toast.success("Correction appliquée", { description: data.message });
         setSelectedError(null);
       } catch (err) {
@@ -1683,12 +1707,10 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 {analysis.fileName}
               </h2>
               <Badge
-                variant={
-                  analysis.conformityScore >= 70 ? "default" : "destructive"
-                }
+                variant={displayConformityScore >= 70 ? "default" : "destructive"}
                 className="text-xs shrink-0 ml-2"
               >
-                {toNum(analysis.conformityScore).toFixed(0)}%
+                {displayConformityScore.toFixed(0)}%
               </Badge>
             </div>
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
