@@ -567,7 +567,10 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   // DANS cette session (pas encore reflétées dans `analysis.errors`, prop figée
   // au chargement).
   const mapErrors = useMemo(
-    () => filteredErrors.filter((e) => !e.corrected && !correctedErrorIds.has(e.id)),
+    () =>
+      filteredErrors.filter(
+        (e) => !e.corrected && !correctedErrorIds.has(e.id),
+      ),
     [filteredErrors, correctedErrorIds],
   );
 
@@ -624,21 +627,15 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   // les erreurs corrigées — ne PAS lui rajouter `correctedSinceLoad`, sinon
   // double comptage. Seule la valeur AUTORITATIVE figée au chargement en a besoin.
   const displayConformeCount =
-<<<<<<< HEAD
-    conformeCount != null ? conformeCount + correctedSinceLoad : null;
-  const displayErrorCount = Math.max(
-    0,
-    (analysis.errorCount ?? 0) - correctedSinceLoad,
-  );
-=======
     conformeCount == null
       ? null
       : analysis.conformeCount != null
         ? conformeCount + correctedSinceLoad
         : conformeCount;
-  const displayErrorCount = Math.max(0, (analysis.errorCount ?? 0) - correctedSinceLoad);
->>>>>>> worktree-shapefile-parcelles-section-coherence
-
+  const displayErrorCount = Math.max(
+    0,
+    (analysis.errorCount ?? 0) - correctedSinceLoad,
+  );
   // Emprise globale pour le fit initial de la carte (rendu par tuiles) : servie
   // par map-meta, indépendante du chargement du GeoJSON complet.
   useEffect(() => {
