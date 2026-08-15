@@ -2430,6 +2430,40 @@ historique — donc tout nouveau consommateur de `analysis.errors` orienté
 filtre `corrected`/`correctedErrorIds` explicitement, jamais supposer que la
 liste ne contient que des erreurs actives.
 
+**Addendum — le score de conformité restait lui aussi figé.** Le badge
+pourcentage en haut du panneau latéral (`{toNum(analysis.conformityScore).toFixed(0)}%`)
+lisait `analysis.conformityScore` brut, jamais ajusté par `correctedSinceLoad`
+contrairement à `displayConformeCount`/`displayErrorCount` — une correction
+faite dans la session ne bougeait donc jamais ce chiffre, ni `errorCount`/
+`conformityScore` persistés en base (aucune route de correction unitaire ne
+les patchait, contrairement à `nicad-fill-missing.ts` pour l'attribution en
+masse de NICAD manquants, qui le fait déjà pour ce cas précis).
+
+**Solution** (`correct/route.ts` + `MapAnalysisClient.tsx`) : `correct/route.ts`
+patche désormais `Analysis.errorCount`/`conformityScore` EN BASE, dans la même
+transaction que `TopologicalError.corrected = true`, et renvoie les nouvelles
+valeurs (`stats: { errorCount, conformityScore }`). Formule reprise telle
+quelle de `nicad-fill-missing.ts · patchAnalysisStatsAfterNicadFill`
+(`conformityScore = 100 - (totalPenalty/features)*10` ⇒ résoudre une erreur de
+poids `w` déplace le score de `+(w/features)*10` points), généralisée à la
+sévérité RÉELLE de l'erreur (`SEVERITY_PENALTY`, `critical=10/high=5/medium=2/low=0`)
+au lieu du poids fixe « critical » propre à `MISSING_NICAD`. `errorCount` est
+simplement décrémenté de 1 (une erreur en moins, quelle que soit l'action —
+`ignore` y compris, cohérent avec `correctedErrorIds` qui traite déjà
+« ignorée » comme « résolue » pour les compteurs). Côté client, `handleCorrectError`
+stocke la réponse dans un nouvel état `statsOverride`, préféré à
+`analysis.conformityScore`/l'approximation `correctedSinceLoad` dès la
+première correction de la session — valeur EXACTE et cumulée, pas une
+estimation à poids uniforme.
+
+Délibérément PAS étendu à `summaryStats.conformeCount` ici (contrairement à
+`nicad-fill-missing.ts`) : une erreur corrigée ne rend pas forcément SA
+parcelle conforme (elle peut porter plusieurs erreurs actives simultanément,
+ex. un OVERLAP et un GAP sur la même parcelle) — un `+1` par erreur résolue
+surestimerait `conformeCount`, contrairement à `nonConformeNicads` côté
+client qui, lui, ne retire un NICAD qu'une fois TOUTES ses erreurs corrigées
+(§ 22 ci-dessus) et reste donc la source fiable pour ce compteur précis.
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait

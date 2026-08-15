@@ -35,6 +35,12 @@ const ACTIONS_BY_TYPE: Record<string, string[]> = {
   SECTION_MISMATCH: ["assign_section", "ignore"],
 };
 
+// Poids de pénalité par sévérité — même barème que `geo-engine.ts ·
+// analyzeGeoJSON` (`totalPenalty = critical*10 + high*5 + medium*2`), utilisé
+// pour patcher `conformityScore` de façon incrémentale après CETTE erreur
+// (cf. le patch équivalent, poids fixe "critical", dans `nicad-fill-missing.ts`).
+const SEVERITY_PENALTY: Record<string, number> = { CRITICAL: 10, HIGH: 5, MEDIUM: 2, LOW: 0 };
+
 // Surface planaire (shoelace) dans le système de coordonnées natif — sert
 // uniquement à classer les chevauchements, indépendamment du CRS (UTM ou WGS84).
 function ringArea(ring: number[][]): number {
@@ -349,8 +355,31 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
 
   const correctedGeoJson = geoJson ? JSON.stringify(geoJson) : analysis.correctedData ?? analysis.geoJsonData;
 
+  // Patch incrémental `errorCount`/`conformityScore` — sinon ces deux champs
+  // restent figés à l'état du dernier calcul complet (import ou « Régénérer le
+  // rapport ») et l'écran `/map/[analysisId]` continue d'afficher un score
+  // périmé après une correction, même après rechargement de page (même
+  // problème que réglé par `nicad-fill-missing.ts · patchAnalysisStatsAfterNicadFill`
+  // pour l'attribution en masse de NICAD, généralisé ici à la sévérité réelle
+  // de l'erreur au lieu du poids fixe "critical").
+  const totalFeatures = analysis.totalFeatures ?? 0;
+  const weight = SEVERITY_PENALTY[error.severity?.toUpperCase()] ?? 0;
+  const prevScore = Number(analysis.conformityScore) || 0;
+  const newScore =
+    totalFeatures > 0 && weight > 0
+      ? Math.max(0, Math.min(100, Math.round((prevScore + (weight / totalFeatures) * 10) * 10) / 10))
+      : prevScore;
+  const newErrorCount = Math.max(0, (analysis.errorCount ?? 0) - 1);
+
   await prisma.$transaction([
-    ...(geoJson ? [prisma.analysis.update({ where: { id: analysisId }, data: { correctedData: correctedGeoJson } })] : []),
+    prisma.analysis.update({
+      where: { id: analysisId },
+      data: {
+        ...(geoJson ? { correctedData: correctedGeoJson } : {}),
+        errorCount: newErrorCount,
+        conformityScore: newScore.toString(),
+      },
+    }),
     prisma.topologicalError.update({
       where: { id: errorIdNum },
       data: {
@@ -360,5 +389,11 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
     }),
   ]);
 
-  return NextResponse.json({ success: true, action, message, correctedGeoJson });
+  return NextResponse.json({
+    success: true,
+    action,
+    message,
+    correctedGeoJson,
+    stats: { errorCount: newErrorCount, conformityScore: newScore },
+  });
 }
