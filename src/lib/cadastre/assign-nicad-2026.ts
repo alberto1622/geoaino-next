@@ -3,22 +3,23 @@
  *
  * Étape DB du pipeline DXF : assemble le NICAD 16 caractères de chaque parcelle
  * extraite (cf. `parcelle-ingestion.ts`) en résolvant Syscol + section par
- * JOINTURE SPATIALE, avec DEUX sources par ordre de priorité :
+ * JOINTURE SPATIALE sur `limite_section` (table QA construite via
+ * /cadastre/sections) — SEULE source du numéro de section : la couche DXF
+ * `limites_sections` embarquée dans le fichier de parcelles n'est plus lue
+ * du tout pour cela (`parcelle-ingestion.ts` laisse `numeroSection` `null` à
+ * l'ingestion), trop peu fiable (souvent absente, ou sujette aux anneaux
+ * invalides/débordements documentés dans docs/CONCEPTS-TRAITEMENT-DXF.md) —
+ * `limite_section` reflète en plus toutes les corrections faites depuis cette
+ * page (chevauchements résolus, fusions, numéros complétés).
  *
- *   1. `limite_section` (table QA construite via /cadastre/sections) —
- *      prioritaire quand elle couvre le point : Syscol ET section viennent de
- *      la MÊME ligne, cohérents par construction, et bénéficient de toutes
- *      les corrections apportées depuis cette page (chevauchements résolus,
- *      fusions, numéros complétés) — contrairement à la couche `limites_sections`
- *      embarquée dans CE DXF (souvent absente, ou sujette aux mêmes anneaux
- *      invalides/débordements que documentés dans
- *      docs/CONCEPTS-TRAITEMENT-DXF.md), qui ne fait donc plus foi que par défaut.
- *   2. `cad_communes_2026` (repli) : ne fournit QUE le Syscol (communes,
- *      pas de découpage par section) — utilisé pour le Syscol quand aucune
- *      `limite_section` ne couvre le point, la section restant alors celle déjà
- *      résolue en ingestion (jointure sur la couche DXF `limites_sections`).
+ * Une parcelle hors couverture de `limite_section` reste SANS section, et
+ * donc sans NICAD : `cad_communes_2026` (communes, pas de découpage par
+ * section) sert alors de repli pour renseigner au moins le Syscol/nom de
+ * commune (métadonnée utile même sans NICAD), jamais pour deviner une
+ * section — `buildNicad` traiterait une section `null` comme « 000 »
+ * silencieusement (cf. § 17), un NICAD strictement interdit ici.
  *
- *   NICAD = [Syscol×8] + [Section×3] + [Parcelle×5 DXF]
+ *   NICAD = [Syscol×8] + [Section×3 limite_section] + [Parcelle×5 DXF]
  *
  * Le DXF ne porte pas le préfixe territorial : il faut toujours une jointure
  * spatiale externe pour le Syscol. Cette étape est isolée de l'ingestion
@@ -56,9 +57,9 @@ export async function assignNicad2026FromCommunes(
     const sm = sectionMatches[i];
     if (sm?.syscolCommune && sm.numSection) {
       // `limite_section` couvre le point : Syscol ET section en font autorité
-      // ensemble, prioritaire sur la couche DXF `limites_sections` (souvent
-      // absente ou moins fiable que la table QA de /cadastre/sections).
-      if (p.numeroSection === null && report.nbSansSection > 0) report.nbSansSection--;
+      // ensemble — SEULE source du numéro de section (`p.numeroSection` vaut
+      // toujours `null` à ce stade, cf. `parcelle-ingestion.ts`).
+      if (report.nbSansSection > 0) report.nbSansSection--;
       p.syscolCommune2026 = sm.syscolCommune;
       p.nomCommune2026 = sm.commune ?? communeMatches[i]?.nomCommune ?? null;
       p.numeroSection = sm.numSection;
@@ -68,11 +69,14 @@ export async function assignNicad2026FromCommunes(
       return;
     }
 
+    // Hors couverture `limite_section` : Syscol/commune seuls, en repli sur
+    // `cad_communes_2026` — jamais de NICAD ici, `p.numeroSection` reste
+    // `null` (`buildNicad` le traiterait comme une section « 000 » bidon).
     const m = communeMatches[i];
     if (m?.syscol) {
       p.syscolCommune2026 = m.syscol;
       p.nomCommune2026 = m.nomCommune;
-      p.nicad = buildNicad(m.syscol, p.numeroSection, p.numeroParcelle5);
+      p.nicad = null;
       if (m.approx) nbCommune2026Approx++;
     } else {
       p.syscolCommune2026 = null;
@@ -97,6 +101,13 @@ export async function assignNicad2026FromCommunes(
     report.warnings.push(
       `${nbSectionApprox} parcelle(s) rattachée(s) à une section /cadastre/sections par proximité ` +
         "(point hors contenance stricte, ≤ 50 m d'une limite) — section à vérifier.",
+    );
+  }
+  if (report.nbSansSection > 0) {
+    report.warnings.push(
+      `${report.nbSansSection} parcelle(s) sans section correspondante dans /cadastre/sections ` +
+        "(hors emprise de la table limite_section, ou section non encore construite pour cette " +
+        "zone) — NICAD non construit.",
     );
   }
   if (nbCommune2026Approx > 0) {
