@@ -2597,5 +2597,70 @@ un gain nul sur le cas dominant.
 
 ---
 
+## 24. Encodage DXF mal deviné (UTF-8 figé) → calque « Numéro Parcelle » illisible → 0 % de conformité sur tout le fichier
+
+**Problème métier** : import de « PLAN CADASTRAL PIKINE.dxf » (73 573 parcelles) —
+0 % de conformité, `MISSING_NICAD` sur la totalité des parcelles, alors que
+les sections /cadastre/sections étaient déjà construites, alignées et
+numérotées (piste § 21 écartée). Le calque annotant les numéros de parcelle
+(74 752 `TEXT`/`MTEXT`, quasi 1:1 avec le nombre de parcelles) portait pourtant
+un nom parfaitement reconnu par la nomenclature DGID (`numero_parcelle`,
+alias « Numéro Parcelle ») — mais AUCUN numéro n'était extrait.
+
+**Cause technique** : `dxf-native.ts · readDxfWorldFeatures` décodait TOUJOURS
+le buffer DXF en UTF-8, quel que soit l'encodage réel déclaré par le fichier
+(`$DWGCODEPAGE`) — un choix déjà correctif d'un bug SYMÉTRIQUE antérieur (cf.
+le commentaire historique retiré par ce changement : décoder un DXF UTF-8 en
+latin1 mutilait « Numéros Parcelle » en « NumÃ©ros Parcelle »). Ce DXF Pikine
+est en `$ACADVER = AC1018` (AutoCAD 2004/R2004) avec `$DWGCODEPAGE = ANSI_1252` —
+un format PRÉ-R2007 : la norme DXF officielle réserve l'UTF-8 systématique aux
+versions R2007+ (`AC1021`+), les versions antérieures encodant en mono-octet
+selon `$DWGCODEPAGE`. Décoder ce fichier en UTF-8 transforme l'octet isolé
+0xE9 (« é » en ANSI_1252/latin1) — qui n'est pas une séquence UTF-8 valide seul —
+en `U+FFFD` : « Numéro Parcelle » devient « Num<0xFFFD>ro Parcelle », qui ne
+matche plus AUCUN alias de `cadastral-filter.ts · normalizeText` (le
+remplacement `U+FFFD` n'est pas un diacritique combinant, la normalisation NFD
+ne le retire pas). Résultat : `classifyCadastralLayer` renvoie `null` pour ce
+calque → `filterDxfCadastralFeatures` écarte la totalité de ses 74 752
+étiquettes AVANT `parcelle-ingestion.ts` (`if (!classification) continue`),
+SANS repli permissif possible : ce repli n'active que si `selected.length === 0`
+sur tout le fichier, or `numero_lot`/`numero_tf` (les enveloppes/calques
+voisins) étaient, eux, correctement reconnus — le fallback texte
+(`classifyLabelText`) de `parcelle-ingestion.ts` n'était donc même jamais
+atteint pour ces étiquettes, écartées bien plus en amont. Confirmé par
+inspection directe du fichier réel (script Node ad hoc, hors pipeline) :
+décodage UTF-8 → `"Num�ro Parcelle"` ; décodage latin1 → `"Numéro Parcelle"`.
+
+**Solution** (`detectDxfEncoding`, `src/lib/dxf-native.ts`) : lit `$ACADVER`/
+`$DWGCODEPAGE` depuis un PRÉFIXE du buffer (200 Ko, largement suffisant — le
+HEADER est toujours en tête) décodé en latin1 — sûr pour CETTE passe
+uniquement, les codes de groupe et noms de variables système DXF étant
+toujours de l'ASCII pur quel que soit l'encodage réel. Règle : `$ACADVER` ≥
+`AC1021` (R2007+) → UTF-8 systématique (comportement historique préservé pour
+les DXF modernes) ; sinon, `$DWGCODEPAGE` commençant par `ANSI_` → latin1
+(couvre `ANSI_1252` et les codepages Windows apparentés — latin1/CP1252
+divergent seulement sur 0x80-0x9F, hors de la plage des lettres accentuées
+françaises usuelles 0xA0-0xFF) ; détection non concluante (l'un des deux
+absent/illisible) → repli UTF-8, comportement historique inchangé. L'encodage
+détecté sert à UN SEUL décodage de la totalité du buffer, en amont de
+`tokenize` — calques, textes et noms de bloc en héritent uniformément.
+
+**Pourquoi (pièges inclus)** : ce bug est le symétrique EXACT du précédent déjà
+corrigé (latin1 figé mutilant les DXF UTF-8) — un encodage unique et figé, dans
+QUELQUE direction que ce soit, casse nécessairement une des deux familles de
+fichiers réels en circulation (exports DGID/Microstation anciens en ANSI_125x
+vs exports ODA/AutoCAD R2007+ en UTF-8). La détection par en-tête DXF
+(`$ACADVER`/`$DWGCODEPAGE`) n'est pas une heuristique de contenu (BOM,
+fréquence d'octets hauts, etc.) mais suit la norme DXF officielle elle-même —
+fiable et sans faux positif tant que le fichier n'a pas été altéré/tronqué.
+Piège à ne pas réintroduire : ne JAMAIS décoder la totalité du buffer en
+latin1 pour la passe de DÉTECTION — seul le PRÉFIXE l'est (le HEADER étant
+structurellement ASCII, ce choix est neutre même pour un fichier réellement
+UTF-8) ; décoder tout le fichier en latin1 par défaut réintroduirait le bug
+symétrique (mojibake des DXF UTF-8) que ce correctif ne fait que déplacer,
+pas résoudre, si la détection n'est pas appliquée AVANT le décodage complet.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*
