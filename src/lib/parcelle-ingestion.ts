@@ -108,6 +108,9 @@ export interface DxfIngestionReport {
   nbHorsEmprise: number;
   nbPolylignesOuvertesIgnorees: number;
   nbTextesHorsParcelle: number;
+  /** Numéros de parcelle récupérés par repli débordement (point d'insertion
+   *  hors de toute parcelle, ≤ NUMERO_LABEL_OVERFLOW_TOLERANCE_M) — cf. § 23. */
+  nbNumerosRecuperesParDebordement: number;
   /** Parcelles contenant plusieurs numéros distincts (fusion probable de voisines). */
   nbParcellesMultiNumeros: number;
   nbPolygonesInvalidesRejetes: number;
@@ -181,6 +184,16 @@ const POLYGONIZE_MAX_AREA_M2 = Number(process.env.DXF_POLYGONIZE_MAX_AREA_M2 || 
 // ou la limite mitoyenne pendante (sections fusionnées). 1 m reste sans risque :
 // deux sommets légitimes d'une section sont à des centaines de mètres.
 const SECTION_SNAP_TOLERANCE_M = Number(process.env.DXF_SECTION_SNAP_TOLERANCE_M || 1);
+
+// Tolérance (mètres, EPSG:32628) de repli pour un numéro de parcelle DONT LE
+// POINT D'INSERTION DÉBORDE hors de toute parcelle — cas fréquent en CAO pour
+// une parcelle étroite/petite : le texte est décalé vers l'extérieur pour
+// rester lisible. Sans ce repli, `findContainingPolygon` (contenance stricte)
+// rejette silencieusement le numéro (`nbTextesHorsParcelle`), et la parcelle
+// reste sans numéro alors que le rattachement visuel est évident. Ne
+// s'applique QU'aux libellés classés "numero" (cf. § 23, docs/CONCEPTS-TRAITEMENT-DXF.md) —
+// jamais aux numéros de section (`findSectionNumero`, hors DXF depuis § 21).
+const NUMERO_LABEL_OVERFLOW_TOLERANCE_M = Number(process.env.DXF_NUMERO_LABEL_TOLERANCE_M || 3);
 
 // ───────────────────────────── Conversion DXF ─────────────────────────────
 
@@ -1260,6 +1273,81 @@ function findSmallestContainingPolygon(
   return best;
 }
 
+// Distance point-segment PLANAIRE (mètres, coordonnées déjà en UTM28N à ce
+// stade du pipeline) — jamais `turf.pointToPolygonDistance`/`turf.distance` :
+// ces fonctions turf supposent des degrés géodésiques ([lng, lat]) et
+// renvoient des valeurs aberrantes sur des coordonnées planaires en mètres
+// (cf. docs/CONCEPTS-TRAITEMENT-DXF.md § 23).
+function pointToSegmentDistanceM(
+  p: [number, number],
+  a: [number, number],
+  b: [number, number]
+): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+  let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+}
+
+function pointToRingDistanceM(point: [number, number], ring: number[][]): number {
+  let min = Infinity;
+  for (let i = 0; i < ring.length - 1; i++) {
+    const d = pointToSegmentDistanceM(point, ring[i] as [number, number], ring[i + 1] as [number, number]);
+    if (d < min) min = d;
+  }
+  return min;
+}
+
+/** Distance d'un point au contour (anneaux extérieurs ET trous) d'un Polygon/MultiPolygon. */
+function pointToPolygonBoundaryDistanceM(point: [number, number], geom: PolygonGeom): number {
+  const rings: number[][][] = geom.type === "Polygon" ? geom.coordinates : geom.coordinates.flat();
+  let min = Infinity;
+  for (const ring of rings) {
+    const d = pointToRingDistanceM(point, ring);
+    if (d < min) min = d;
+  }
+  return min;
+}
+
+/**
+ * Repli pour un point HORS de toute parcelle (contenance stricte déjà
+ * essayée et échouée) : plus petit polygone dont le contour passe à moins de
+ * `toleranceM` du point — même principe « plus petit contenant » que
+ * `findSmallestContainingPolygon` (une enveloppe proche ne doit pas rafler un
+ * numéro qui déborde d'une petite parcelle qu'elle englobe). `queryRange`
+ * (pas `query`) est nécessaire ici : la parcelle la plus proche peut être
+ * enregistrée dans une cellule voisine de celle du point, puisque son bbox ne
+ * contient pas forcément le point (contrairement au cas de contenance stricte).
+ */
+function findNearestPolygonWithinTolerance(
+  point: [number, number],
+  polygons: ValidPolygon[],
+  index: BBoxGridIndex,
+  toleranceM: number
+): number {
+  const searchBbox: BBox = [
+    point[0] - toleranceM,
+    point[1] - toleranceM,
+    point[0] + toleranceM,
+    point[1] + toleranceM,
+  ];
+  let best = -1;
+  let bestArea = Infinity;
+  for (const idx of index.queryRange(searchBbox)) {
+    const p = polygons[idx];
+    if (p.surfaceM2 >= bestArea) continue;
+    const d = pointToPolygonBoundaryDistanceM(point, p.geom);
+    if (d <= toleranceM) {
+      best = idx;
+      bestArea = p.surfaceM2;
+    }
+  }
+  return best;
+}
+
 // Profilage par phase (activé via DXF_PROFILE=1) — aucun effet sur le résultat.
 const PROFILE = !!process.env.DXF_PROFILE;
 function phase(label: string, t0: number): number {
@@ -1285,7 +1373,8 @@ function blankIngestionReport(warnings: string[] = []): DxfIngestionReport {
     nbSansSection: 0, nbSansCommune2026: 0, nbCommune2026Approx: 0,
     nbSectionDepuisTableSections: 0, nbSectionApprox: 0, nbNumeroNonConforme: 0,
     nbPiscines: 0, nbParcellesPolygonisees: 0, nbPolygonesEnveloppeIgnores: 0, nbHorsEmprise: 0,
-    nbPolylignesOuvertesIgnorees: 0, nbTextesHorsParcelle: 0, nbParcellesMultiNumeros: 0,
+    nbPolylignesOuvertesIgnorees: 0, nbTextesHorsParcelle: 0, nbNumerosRecuperesParDebordement: 0,
+    nbParcellesMultiNumeros: 0,
     nbPolygonesInvalidesRejetes: 0,
     nbAutresCouchesIgnorees: 0, nbDoublonsGeometrie: 0, nbDoublonsRecouvrement: 0,
     nbEnveloppesSupprimees: 0, nbChevauchements: 0, nbChevauchementsCorriges: 0,
@@ -1424,7 +1513,18 @@ export function buildParcellesFromFc32628(
   const preIndex = new BBoxGridIndex(validPolygonsPreDedup.map((p) => p.bbox));
   const hasNumero = new Array<boolean>(validPolygonsPreDedup.length).fill(false);
   for (const lbl of numeroLabels) {
-    const idx = findSmallestContainingPolygon(lbl.point, validPolygonsPreDedup, preIndex);
+    let idx = findSmallestContainingPolygon(lbl.point, validPolygonsPreDedup, preIndex);
+    // Débordement : le point d'insertion du numéro tombe hors de toute
+    // parcelle (petite parcelle, texte décalé pour rester lisible) — repli
+    // sur la plus petite parcelle dont le contour passe à ≤ NUMERO_LABEL_OVERFLOW_TOLERANCE_M.
+    if (idx < 0) {
+      idx = findNearestPolygonWithinTolerance(
+        lbl.point,
+        validPolygonsPreDedup,
+        preIndex,
+        NUMERO_LABEL_OVERFLOW_TOLERANCE_M
+      );
+    }
     if (idx >= 0) hasNumero[idx] = true;
   }
 
@@ -1448,7 +1548,15 @@ export function buildParcellesFromFc32628(
   const dedupIndex = new BBoxGridIndex(dedupedPolygons.map((p) => p.bbox));
   const dedupHasNumero = new Array<boolean>(dedupedPolygons.length).fill(false);
   for (const lbl of numeroLabels) {
-    const idx = findSmallestContainingPolygon(lbl.point, dedupedPolygons, dedupIndex);
+    let idx = findSmallestContainingPolygon(lbl.point, dedupedPolygons, dedupIndex);
+    if (idx < 0) {
+      idx = findNearestPolygonWithinTolerance(
+        lbl.point,
+        dedupedPolygons,
+        dedupIndex,
+        NUMERO_LABEL_OVERFLOW_TOLERANCE_M
+      );
+    }
     if (idx >= 0) dedupHasNumero[idx] = true;
   }
   const {
@@ -1501,9 +1609,22 @@ export function buildParcellesFromFc32628(
   const index = new BBoxGridIndex(validPolygons.map((p) => p.bbox));
   const labelsByPolygon: RawLabel[][] = validPolygons.map(() => []);
   let nbTextesHorsParcelle = 0;
+  let nbNumerosRecuperesParDebordement = 0;
 
   for (const label of labels) {
-    const idx = findContainingPolygon(label.point, validPolygons, index);
+    let idx = findContainingPolygon(label.point, validPolygons, index);
+    // Repli débordement RÉSERVÉ aux numéros de parcelle (cf. § 23) — un lot/
+    // propriétaire/dénomination hors de toute parcelle reste hors parcelle,
+    // aucune ambiguïté de lisibilité à corriger pour ces classes.
+    if (idx < 0 && (label.cls ?? classifyLabelText(label.text)) === "numero") {
+      idx = findNearestPolygonWithinTolerance(
+        label.point,
+        validPolygons,
+        index,
+        NUMERO_LABEL_OVERFLOW_TOLERANCE_M
+      );
+      if (idx >= 0) nbNumerosRecuperesParDebordement++;
+    }
     if (idx >= 0) labelsByPolygon[idx].push(label);
     else nbTextesHorsParcelle++;
   }
@@ -1686,6 +1807,12 @@ export function buildParcellesFromFc32628(
   if (nbTextesHorsParcelle > 0) {
     warnings.push(`${nbTextesHorsParcelle} texte(s)/annotation(s) ne se trouvant à l'intérieur d'aucune parcelle.`);
   }
+  if (nbNumerosRecuperesParDebordement > 0) {
+    warnings.push(
+      `${nbNumerosRecuperesParDebordement} numéro(s) de parcelle récupéré(s) par repli débordement ` +
+        `(point d'insertion à ≤ ${NUMERO_LABEL_OVERFLOW_TOLERANCE_M} m hors de la parcelle la plus proche) — à vérifier.`
+    );
+  }
   if (nbNumeroNonConforme > 0) {
     warnings.push(
       `${nbNumeroNonConforme} numéro(s) de parcelle ajusté(s) à 5 chiffres (padding/troncature) pour le NICAD.`
@@ -1727,6 +1854,7 @@ export function buildParcellesFromFc32628(
       nbHorsEmprise,
       nbPolylignesOuvertesIgnorees,
       nbTextesHorsParcelle,
+      nbNumerosRecuperesParDebordement,
       nbParcellesMultiNumeros,
       nbPolygonesInvalidesRejetes,
       nbAutresCouchesIgnorees,

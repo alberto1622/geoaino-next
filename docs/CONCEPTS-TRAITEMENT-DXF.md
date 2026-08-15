@@ -2466,5 +2466,71 @@ client qui, lui, ne retire un NICAD qu'une fois TOUTES ses erreurs corrigées
 
 ---
 
+## 23. Récupération du numéro de parcelle en cas de débordement du texte hors de la parcelle
+
+**Problème métier** : dans un DXF cadastral, le numéro de parcelle (MTEXT/TEXT)
+est parfois inséré LÉGÈREMENT à l'extérieur du polygone qu'il désigne — cas
+fréquent sur une parcelle étroite ou petite, où le texte à taille de police
+fixe ne tient pas dans l'emprise et est décalé vers l'extérieur pour rester
+lisible sur le plan papier d'origine. La jointure point-dans-polygone
+STRICTE (`findContainingPolygon`) rejetait alors silencieusement ce numéro
+(compté dans `nbTextesHorsParcelle`) : la parcelle ressortait numérotée
+`null`, alors que le rattachement visuel — pour un géomaticien relisant le
+plan — ne fait aucun doute.
+
+**Cause technique** : trois jointures point-dans-polygone strictes
+utilisaient toutes le même critère « contenance ou rien » pour un numéro de
+parcelle : le marquage `hasNumero`/`dedupHasNumero` (priorité numéro pour le
+dédoublonnage par recouvrement et la résolution des chevauchements) et la
+jointure finale `labelsByPolygon` (qui alimente `numero` sur `ParcelleCandidate`,
+donc le NICAD). Aucune des trois ne tolérait le moindre débordement.
+
+**Solution** (`src/lib/parcelle-ingestion.ts`) :
+- `NUMERO_LABEL_OVERFLOW_TOLERANCE_M` (`DXF_NUMERO_LABEL_TOLERANCE_M`,
+  défaut 3 m) : nouvelle tolérance dédiée, dans le même style que
+  `SECTION_SNAP_TOLERANCE_M`/`CLOSE_SNAP_TOLERANCE_M`.
+- `pointToSegmentDistanceM`/`pointToRingDistanceM`/`pointToPolygonBoundaryDistanceM` :
+  distance point-segment/anneau/polygone PLANAIRE (mètres, coordonnées déjà en
+  UTM28N à ce stade du pipeline) — écrites à la main, PAS `turf.pointToPolygonDistance`
+  ni `turf.distance` : confirmé par test direct (`node -e`), ces fonctions turf
+  supposent des coordonnées géodésiques `[lng, lat]` en degrés et renvoient des
+  distances aberrantes (centaines de milliers de « mètres » pour un décalage de
+  quelques mètres) sur des coordonnées planaires — cf. § 4,
+  docs/SUPPORT-COURS-GEOMATIQUE.md, « mesurer en mètres, stocker en degrés ».
+- `findNearestPolygonWithinTolerance` : repli appelé UNIQUEMENT quand la
+  contenance stricte échoue (`idx < 0`) — plus petite parcelle dont le contour
+  passe à ≤ `NUMERO_LABEL_OVERFLOW_TOLERANCE_M` du point, via `queryRange`
+  (pas `query`, à cellule unique) sur une bbox élargie de la tolérance : la
+  parcelle la plus proche peut être enregistrée dans une cellule voisine de
+  celle du point, son propre bbox ne contenant pas forcément le point.
+  Même logique « plus petit contenant » que `findSmallestContainingPolygon`
+  (évite qu'une enveloppe proche rafle un numéro qui déborde d'une petite
+  parcelle qu'elle englobe).
+- Appliqué aux TROIS jointures numéro (`hasNumero`, `dedupHasNumero`,
+  `labelsByPolygon`), en repli seulement — la contenance stricte reste
+  essayée en premier partout. La jointure finale restreint explicitement le
+  repli aux libellés classés `"numero"` (`l.cls ?? classifyLabelText(l.text)`) :
+  lot/propriétaire/dénomination hors parcelle restent hors parcelle, aucune
+  ambiguïté de lisibilité à corriger pour ces classes.
+- Nouveau compteur `nbNumerosRecuperesParDebordement` + avertissement dédié
+  (compté une seule fois, à la jointure finale — les deux marquages
+  `hasNumero`/`dedupHasNumero` portent sur les MÊMES libellés avant/après
+  dédoublonnage, les compter aussi aurait doublé le total).
+
+**Pourquoi (pièges inclus)** : `findSectionNumero` (jointure DXF pour les
+NUMÉROS DE SECTION) est hors du champ de ce changement — la section n'est de
+toute façon plus résolue depuis le DXF du tout depuis § 21, et cette fonction
+a été supprimée à cette occasion ; ne pas réintroduire de repli tolérance
+pour un usage section, la table `limite_section` (/cadastre/sections) fait
+seule autorité pour la section. Piège de performance à ne pas réintroduire :
+`findNearestPolygonWithinTolerance` n'est appelée QU'en repli (contenance
+stricte déjà tentée et échouée), jamais en première intention — sur un DXF de
+100k+ parcelles où la quasi-totalité des numéros sont bien contenus, appeler
+systématiquement une jointure `queryRange` (plus coûteuse que `query`, cellule
+unique) pour chaque libellé dégraderait sensiblement le temps d'ingestion pour
+un gain nul sur le cas dominant.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*
