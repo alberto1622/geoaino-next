@@ -16,7 +16,8 @@ export const runtime = "nodejs";
 const SINGLE_CORRECT_ACTIONS = new Set<OverlapAction>([
   "clip_a",
   "clip_b",
-  "merge",
+  "merge_a",
+  "merge_b",
   "delete_a",
   "delete_b",
   "ignore",
