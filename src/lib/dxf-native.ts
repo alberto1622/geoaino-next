@@ -48,6 +48,11 @@ interface RawEntity {
   // LWPOLYLINE : facteur de renflement (bulge) par sommet (arc entre ce sommet et
   // le suivant). Aligné sur `verts` ; 0 = segment droit.
   bulges: number[];
+  // TEXT/MTEXT/ATTRIB : hauteur de texte (code groupe 40, unités du dessin) —
+  // sert à estimer l'emprise occupée par l'étiquette (cf. § 26,
+  // docs/CONCEPTS-TRAITEMENT-DXF.md). Non corrigée par l'échelle d'un bloc
+  // INSERT parent (repli volontaire — cf. commentaire à l'appel de `emitText`).
+  textHeight: number | null;
 }
 
 interface BlockDef {
@@ -103,6 +108,7 @@ function newEntity(type: string): RawEntity {
     major: null,
     ratio: null,
     bulges: [],
+    textHeight: null,
   };
 }
 
@@ -214,10 +220,12 @@ function parseEntities(pairs: Pair[], start: number, end: number): RawEntity[] {
           if ((type === "3DFACE" || type === "SOLID") && e.verts.length) e.verts[e.verts.length - 1][1] = parseFloat(v);
           break;
         case "40":
-          // Rayon (ARC/CIRCLE) ou ratio petit/grand axe (ELLIPSE). Pour les autres
-          // types (LWPOLYLINE = largeur de départ…), on ignore.
+          // Rayon (ARC/CIRCLE), ratio petit/grand axe (ELLIPSE), ou hauteur de
+          // texte (TEXT/MTEXT/ATTRIB — sert à estimer l'emprise d'une étiquette,
+          // § 26). Pour les autres types (LWPOLYLINE = largeur de départ…), ignoré.
           if (type === "ARC" || type === "CIRCLE") e.radius = parseFloat(v);
           else if (type === "ELLIPSE") e.ratio = parseFloat(v);
+          else if (type === "TEXT" || type === "MTEXT" || type === "ATTRIB") e.textHeight = parseFloat(v);
           break;
         case "41":
           if (type === "INSERT") e.scale[0] = parseFloat(v) || 1;
@@ -478,8 +486,12 @@ function emitGeometryFeatures(
       out.push({ type: "Feature", geometry, properties: { Layer: layer } });
       if (census) bump(census.emitted, e.type);
     };
-    const emitText = (text: string, pt: Pt): void => {
-      out.push({ type: "Feature", geometry: { type: "Point", coordinates: pt }, properties: { Layer: layer, Text: text } });
+    const emitText = (text: string, pt: Pt, height: number | null): void => {
+      out.push({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: pt },
+        properties: { Layer: layer, Text: text, Height: height },
+      });
       if (census) bump(census.emitted, e.type);
     };
     const skip = (reason: string): void => {
@@ -503,7 +515,7 @@ function emitGeometryFeatures(
       if (!pt || pt.some((n) => !Number.isFinite(n))) { skip("texte_sans_point"); continue; }
       const text = decodeMText(e.text ?? "").trim();
       if (!text) { skip("texte_vide"); continue; }
-      emitText(text, xform(pt));
+      emitText(text, xform(pt), e.textHeight);
       continue;
     }
 

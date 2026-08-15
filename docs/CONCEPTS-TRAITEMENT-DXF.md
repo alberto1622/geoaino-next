@@ -2497,7 +2497,9 @@ donc le NICAD). Aucune des trois ne tolérait le moindre débordement.
   distances aberrantes (centaines de milliers de « mètres » pour un décalage de
   quelques mètres) sur des coordonnées planaires — cf. § 4,
   docs/SUPPORT-COURS-GEOMATIQUE.md, « mesurer en mètres, stocker en degrés ».
-- `findNearestPolygonWithinTolerance` : repli appelé UNIQUEMENT quand la
+- `findNearestPolygonWithinTolerance` (**remplacée depuis par la comparaison
+  d'aire d'emprise de texte, § 26** — cette description reste pour le contexte
+  historique) : repli appelé UNIQUEMENT quand la
   contenance stricte échoue (`idx < 0`) — plus petite parcelle dont le contour
   passe à ≤ `NUMERO_LABEL_OVERFLOW_TOLERANCE_M` du point, via `queryRange`
   (pas `query`, à cellule unique) sur une bbox élargie de la tolérance : la
@@ -2659,6 +2661,73 @@ susceptible de produire une erreur `MULTI_NUMERO`, sans quoi
 (valeur d'enum inconnue en base) — échec silencieusement absorbé par le
 `try/catch` déjà en place autour de cette insertion (`run-job.ts`), qui logue
 mais ne fait pas échouer tout le job.
+
+---
+
+## 26. Numéro de parcelle qui commence/déborde dans la voisine : rattachement par emprise de texte, pas seulement par point
+
+**Problème métier** : le repli débordement du § 23 ne traitait qu'un seul cas
+— le point d'insertion du numéro tombant HORS de toute parcelle. Un cas tout
+aussi fréquent lui échappait entièrement : le point d'insertion tombe encore
+DANS une parcelle (souvent une toute petite, ou juste à cheval sur la limite
+mitoyenne), mais le TEXTE lui-même — qui a une largeur, pas seulement un point
+— déborde et occupe VISUELLEMENT plus de place dans la parcelle VOISINE. La
+contenance stricte du § 23 (`findContainingPolygon`/`findSmallestContainingPolygon`)
+ne voit que le point : elle rattachait alors le numéro à la petite parcelle où
+il « commence », pas à celle qu'il désigne réellement.
+
+**Cause technique** : `RawLabel` (et le DXF lui-même côté lecteur natif) ne
+portait que le POINT d'insertion d'un texte, jamais son emprise — aucune
+notion de largeur/hauteur n'existait en amont pour comparer un recouvrement
+entre deux parcelles candidates.
+
+**Solution** :
+- `dxf-native.ts` capture désormais la hauteur de texte DXF (code groupe 40,
+  TEXT/MTEXT/ATTRIB) dans `RawEntity.textHeight`, reportée sur la Feature
+  Point émise (`emitText`, propriété `Height`) — non corrigée par l'échelle
+  d'un éventuel bloc INSERT parent (repli volontaire, cas marginal pour des
+  numéros de parcelle qui sont presque toujours des TEXT/MTEXT directs, pas
+  des attributs de bloc).
+- `parcelle-ingestion.ts · RawLabel.height` porte cette valeur (`null` si
+  absente — ex. repli ogr2ogr, dont le driver DXF n'expose pas cet attribut).
+- `labelFootprint` : rectangle NON tourné centré sur le point d'insertion,
+  largeur estimée `hauteur × nb_caractères × DXF_TEXT_CHAR_WIDTH_RATIO`
+  (0,6 par défaut — police CAO condensée type SHX, aucun rendu de police réel
+  disponible ici) ; hauteur de repli `DXF_DEFAULT_TEXT_HEIGHT_M` (1,5 m) si le
+  DXF ne porte pas la hauteur. Justification DXF réelle (codes 72/73 — le
+  point d'insertion peut être au bord plutôt qu'au centre du texte) NON
+  capturée : un rectangle centré reste une approximation raisonnable dans les
+  deux sens de débordement.
+- `findPolygonByLabelFootprint` : parmi les parcelles à portée (`queryRange`),
+  celle dont l'INTERSECTION avec `labelFootprint` a l'AIRE la plus grande
+  (`turf.intersect` + `geometryAreaM2`, jamais `turf.area` — piège planaire/
+  géodésique déjà documenté § 23) — pas la plus proche/petite : l'emprise
+  gagnante est celle qui recouvre RÉELLEMENT le plus de texte.
+- `resolveNumeroLabelPolygon` : point d'entrée unique, remplace l'ancien
+  `findNearestPolygonWithinTolerance` (§ 23, supprimée) à tous les rattachements
+  numéro. Contenance stricte d'abord (cas dominant, bon marché) ; si le point
+  contenu est à MOINS de la demi-largeur d'emprise estimée du bord de sa
+  parcelle (`pointToPolygonBoundaryDistanceM`, § 23), OU si le point est hors
+  de toute parcelle, bascule sur la comparaison d'aire — qui peut alors
+  RÉASSIGNER un numéro à une voisine même si son point d'insertion était
+  contenu ailleurs (nouveauté par rapport au § 23, qui ne se déclenchait que
+  point hors de tout polygone).
+
+**Pourquoi (pièges inclus)** : le seuil « assez loin du bord pour ignorer tout
+voisin » réutilise directement la demi-largeur d'emprise du texte lui-même —
+cohérent : un texte 2× plus large a mécaniquement plus de chances de déborder,
+donc mérite une zone de vigilance plus large. Piège de performance à ne pas
+réintroduire (même logique que § 23) : `findPolygonByLabelFootprint`
+(`turf.intersect` par candidat, nettement plus coûteux qu'un simple test de
+contenance) n'est appelée QUE quand la contenance stricte échoue ou que le
+point est près d'un bord — sur un DXF de 100k+ parcelles où la quasi-totalité
+des numéros sont loin de toute limite, le chemin bon marché (`findSmallestContainingPolygon`
++ un seul calcul de distance au bord) reste le cas dominant. `nbNumerosRecuperesParDebordement`
+compte maintenant tout rattachement passé par la comparaison d'aire (`viaFootprint`),
+qu'il ait ou non changé de parcelle par rapport à la contenance stricte
+initiale — un numéro « confirmé » par l'emprise après un point proche du bord
+compte aussi, car sa fiabilité méritait d'être vérifiée même si le résultat
+final coïncide avec le point.
 
 ---
 
