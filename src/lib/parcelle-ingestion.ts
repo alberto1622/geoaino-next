@@ -195,15 +195,26 @@ const POLYGONIZE_MAX_AREA_M2 = Number(process.env.DXF_POLYGONIZE_MAX_AREA_M2 || 
 // deux sommets légitimes d'une section sont à des centaines de mètres.
 const SECTION_SNAP_TOLERANCE_M = Number(process.env.DXF_SECTION_SNAP_TOLERANCE_M || 1);
 
-// Tolérance (mètres, EPSG:32628) de repli pour un numéro de parcelle DONT LE
-// POINT D'INSERTION DÉBORDE hors de toute parcelle — cas fréquent en CAO pour
-// une parcelle étroite/petite : le texte est décalé vers l'extérieur pour
-// rester lisible. Sans ce repli, `findContainingPolygon` (contenance stricte)
-// rejette silencieusement le numéro (`nbTextesHorsParcelle`), et la parcelle
-// reste sans numéro alors que le rattachement visuel est évident. Ne
-// s'applique QU'aux libellés classés "numero" (cf. § 23, docs/CONCEPTS-TRAITEMENT-DXF.md) —
-// jamais aux numéros de section (`findSectionNumero`, hors DXF depuis § 21).
+// Rayon de recherche (mètres, EPSG:32628) des parcelles candidates pour un
+// numéro de parcelle dont le point d'insertion DÉBORDE hors de toute parcelle,
+// ou tombe près d'un bord — cas fréquent en CAO pour une parcelle étroite/
+// petite : le texte est décalé vers l'extérieur (ou simplement centré à
+// cheval sur la limite) pour rester lisible. Sans repli, `findContainingPolygon`
+// (contenance stricte) rejette silencieusement le numéro (`nbTextesHorsParcelle`),
+// et la parcelle reste sans numéro alors que le rattachement visuel est
+// évident. Ne s'applique QU'aux libellés classés "numero" (cf. § 23/§ 26,
+// docs/CONCEPTS-TRAITEMENT-DXF.md) — jamais aux numéros de section
+// (`findSectionNumero`, hors DXF depuis § 21).
 const NUMERO_LABEL_OVERFLOW_TOLERANCE_M = Number(process.env.DXF_NUMERO_LABEL_TOLERANCE_M || 3);
+
+// Ratio largeur/hauteur moyen par caractère (police CAO condensée type SHX) —
+// approximation grossière, aucun rendu de police réel disponible ici. Sert à
+// estimer l'emprise occupée par un numéro de parcelle (§ 26) quand son texte
+// déborde/chevauche une parcelle voisine.
+const TEXT_CHAR_WIDTH_RATIO = Number(process.env.DXF_TEXT_CHAR_WIDTH_RATIO || 0.6);
+// Hauteur de repli (m) quand le DXF ne porte pas la hauteur de texte (code
+// groupe 40 absent — ex. repli ogr2ogr) — cf. § 26.
+const DEFAULT_TEXT_HEIGHT_M = Number(process.env.DXF_DEFAULT_TEXT_HEIGHT_M || 1.5);
 
 // ───────────────────────────── Conversion DXF ─────────────────────────────
 
@@ -862,6 +873,9 @@ interface RawLabel {
   text: string;
   /** Catégorie imposée par le calque DGID, sinon `null` (repli heuristique). */
   cls: LabelKind | null;
+  /** Hauteur de texte DXF (mètres, déjà en UTM28N) — `null` si absente du
+   *  dessin. Sert à estimer l'emprise occupée par l'étiquette (§ 26). */
+  height: number | null;
 }
 
 /** Texte d'un point géolocalisé (libellé de numéro de section à rattacher aux sections). */
@@ -979,6 +993,10 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
       const cls = layerClass === FALLBACK_CLASS ? null : classifyLabelLayer(layerClass);
       const points: number[][] =
         geom.type === "Point" ? [geom.coordinates as number[]] : (geom.coordinates as number[][]);
+      // Hauteur de texte (posée par dxf-native.ts · emitText) — absente du
+      // repli ogr2ogr (driver DXF n'expose pas systématiquement cet attribut).
+      const rawHeight = props.Height ?? props.height;
+      const height = typeof rawHeight === "number" && Number.isFinite(rawHeight) && rawHeight > 0 ? rawHeight : null;
       // Étape 5 : une même annotation peut regrouper plusieurs lignes
       // (ex. numéro + titre) — on les éclate avant classification.
       for (const text of splitTextLines(rawText)) {
@@ -986,7 +1004,7 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
           if (pt.length < 2) continue;
           const point: [number, number] = [pt[0], pt[1]];
           if (isSectionLabel) sectionLabels.push({ point, text });
-          else labels.push({ point, text, cls });
+          else labels.push({ point, text, cls, height });
         }
       }
     }
@@ -1322,40 +1340,105 @@ function pointToPolygonBoundaryDistanceM(point: [number, number], geom: PolygonG
   return min;
 }
 
+/** Demi-largeur estimée (m) de l'emprise occupée par un texte — approximation
+ *  grossière (pas de rendu de police réel), cf. § 26. Sert à la fois de
+ *  dimension du rectangle d'emprise (`labelFootprint`) et de seuil « assez
+ *  loin du bord pour ignorer tout voisin » (`resolveNumeroLabelPolygon`). */
+function labelFootprintHalfWidthM(text: string, height: number | null): number {
+  const h = height ?? DEFAULT_TEXT_HEIGHT_M;
+  return Math.max(h, h * text.length * TEXT_CHAR_WIDTH_RATIO) / 2;
+}
+
 /**
- * Repli pour un point HORS de toute parcelle (contenance stricte déjà
- * essayée et échouée) : plus petit polygone dont le contour passe à moins de
- * `toleranceM` du point — même principe « plus petit contenant » que
- * `findSmallestContainingPolygon` (une enveloppe proche ne doit pas rafler un
- * numéro qui déborde d'une petite parcelle qu'elle englobe). `queryRange`
- * (pas `query`) est nécessaire ici : la parcelle la plus proche peut être
- * enregistrée dans une cellule voisine de celle du point, puisque son bbox ne
- * contient pas forcément le point (contrairement au cas de contenance stricte).
+ * Rectangle (non tourné, centré sur le point d'insertion) approximant
+ * l'emprise occupée par un texte — la justification DXF réelle (codes 72/73,
+ * qui peuvent placer le point d'insertion au bord plutôt qu'au centre) n'est
+ * pas capturée ; un rectangle centré reste une approximation raisonnable dans
+ * les deux sens (texte qui déborde à gauche ou à droite d'une limite), cf. § 26.
  */
-function findNearestPolygonWithinTolerance(
+function labelFootprint(point: [number, number], text: string, height: number | null): PolygonGeom {
+  const h = height ?? DEFAULT_TEXT_HEIGHT_M;
+  const hw = labelFootprintHalfWidthM(text, height);
+  const hh = h / 2;
+  const [x, y] = point;
+  return {
+    type: "Polygon",
+    coordinates: [[
+      [x - hw, y - hh], [x + hw, y - hh], [x + hw, y + hh], [x - hw, y + hh], [x - hw, y - hh],
+    ]],
+  };
+}
+
+/**
+ * Parmi les polygones à portée de `toleranceM` du point, celui que l'emprise
+ * ESTIMÉE du texte (`labelFootprint`) recouvre le PLUS (aire d'intersection
+ * planaire maximale) — pas le plus petit contenant : un numéro dont le texte
+ * occupe surtout la voisine doit lui être rattaché, que le point d'insertion
+ * soit dedans, dehors, ou juste à cheval sur la limite. `turf.intersect` est
+ * un calcul géométrique pur (Sutherland-Hodgman), indépendant du système de
+ * coordonnées — contrairement aux fonctions de distance/aire de turf, il n'y
+ * a pas de piège planaire/géodésique ici ; l'aire du résultat est en revanche
+ * mesurée avec `geometryAreaM2` (planaire), jamais `turf.area`.
+ */
+function findPolygonByLabelFootprint(
   point: [number, number],
+  text: string,
+  height: number | null,
   polygons: ValidPolygon[],
   index: BBoxGridIndex,
   toleranceM: number
 ): number {
-  const searchBbox: BBox = [
-    point[0] - toleranceM,
-    point[1] - toleranceM,
-    point[0] + toleranceM,
-    point[1] + toleranceM,
-  ];
+  const footprint = turf.feature(labelFootprint(point, text, height));
+  const halfWidth = labelFootprintHalfWidthM(text, height);
+  const radius = Math.max(toleranceM, halfWidth * 1.5);
+  const searchBbox: BBox = [point[0] - radius, point[1] - radius, point[0] + radius, point[1] + radius];
   let best = -1;
-  let bestArea = Infinity;
+  let bestArea = 0;
   for (const idx of index.queryRange(searchBbox)) {
-    const p = polygons[idx];
-    if (p.surfaceM2 >= bestArea) continue;
-    const d = pointToPolygonBoundaryDistanceM(point, p.geom);
-    if (d <= toleranceM) {
+    let inter: GeoJSON.Feature<PolygonGeom> | null;
+    try {
+      inter = turf.intersect(turf.featureCollection([footprint, turf.feature(polygons[idx].geom)])) as
+        | GeoJSON.Feature<PolygonGeom>
+        | null;
+    } catch {
+      continue;
+    }
+    if (!inter?.geometry) continue;
+    const area = geometryAreaM2(inter.geometry);
+    if (area > bestArea) {
       best = idx;
-      bestArea = p.surfaceM2;
+      bestArea = area;
     }
   }
   return best;
+}
+
+/**
+ * Résout la parcelle d'un LIBELLÉ NUMÉRO (§ 26) : contenance stricte du point
+ * d'insertion d'abord (cas dominant sur un DXF de 100k+ parcelles — chemin
+ * bon marché à préserver, cf. § 23). Si le point tombe hors de toute
+ * parcelle, OU s'il est contenu mais TROP PRÈS du bord pour exclure qu'un
+ * voisin recouvre davantage le texte (distance au bord < demi-largeur estimée
+ * de l'emprise), compare l'aire de recouvrement du texte sur chaque parcelle
+ * à portée (`findPolygonByLabelFootprint`) et retient celle qui en recouvre
+ * le plus — au lieu du simple point de contenance/proximité.
+ */
+function resolveNumeroLabelPolygon(
+  point: [number, number],
+  text: string,
+  height: number | null,
+  polygons: ValidPolygon[],
+  index: BBoxGridIndex,
+  toleranceM: number
+): { idx: number; viaFootprint: boolean } {
+  const contained = findSmallestContainingPolygon(point, polygons, index);
+  if (contained >= 0) {
+    const distanceToEdge = pointToPolygonBoundaryDistanceM(point, polygons[contained].geom);
+    if (distanceToEdge >= labelFootprintHalfWidthM(text, height)) return { idx: contained, viaFootprint: false };
+  }
+  const byFootprint = findPolygonByLabelFootprint(point, text, height, polygons, index, toleranceM);
+  if (byFootprint >= 0) return { idx: byFootprint, viaFootprint: byFootprint !== contained };
+  return { idx: contained, viaFootprint: false };
 }
 
 // Profilage par phase (activé via DXF_PROFILE=1) — aucun effet sur le résultat.
@@ -1523,18 +1606,14 @@ export function buildParcellesFromFc32628(
   const preIndex = new BBoxGridIndex(validPolygonsPreDedup.map((p) => p.bbox));
   const hasNumero = new Array<boolean>(validPolygonsPreDedup.length).fill(false);
   for (const lbl of numeroLabels) {
-    let idx = findSmallestContainingPolygon(lbl.point, validPolygonsPreDedup, preIndex);
-    // Débordement : le point d'insertion du numéro tombe hors de toute
-    // parcelle (petite parcelle, texte décalé pour rester lisible) — repli
-    // sur la plus petite parcelle dont le contour passe à ≤ NUMERO_LABEL_OVERFLOW_TOLERANCE_M.
-    if (idx < 0) {
-      idx = findNearestPolygonWithinTolerance(
-        lbl.point,
-        validPolygonsPreDedup,
-        preIndex,
-        NUMERO_LABEL_OVERFLOW_TOLERANCE_M
-      );
-    }
+    const { idx } = resolveNumeroLabelPolygon(
+      lbl.point,
+      lbl.text,
+      lbl.height,
+      validPolygonsPreDedup,
+      preIndex,
+      NUMERO_LABEL_OVERFLOW_TOLERANCE_M
+    );
     if (idx >= 0) hasNumero[idx] = true;
   }
 
@@ -1558,15 +1637,14 @@ export function buildParcellesFromFc32628(
   const dedupIndex = new BBoxGridIndex(dedupedPolygons.map((p) => p.bbox));
   const dedupHasNumero = new Array<boolean>(dedupedPolygons.length).fill(false);
   for (const lbl of numeroLabels) {
-    let idx = findSmallestContainingPolygon(lbl.point, dedupedPolygons, dedupIndex);
-    if (idx < 0) {
-      idx = findNearestPolygonWithinTolerance(
-        lbl.point,
-        dedupedPolygons,
-        dedupIndex,
-        NUMERO_LABEL_OVERFLOW_TOLERANCE_M
-      );
-    }
+    const { idx } = resolveNumeroLabelPolygon(
+      lbl.point,
+      lbl.text,
+      lbl.height,
+      dedupedPolygons,
+      dedupIndex,
+      NUMERO_LABEL_OVERFLOW_TOLERANCE_M
+    );
     if (idx >= 0) dedupHasNumero[idx] = true;
   }
   const {
@@ -1622,18 +1700,24 @@ export function buildParcellesFromFc32628(
   let nbNumerosRecuperesParDebordement = 0;
 
   for (const label of labels) {
-    let idx = findContainingPolygon(label.point, validPolygons, index);
-    // Repli débordement RÉSERVÉ aux numéros de parcelle (cf. § 23) — un lot/
-    // propriétaire/dénomination hors de toute parcelle reste hors parcelle,
-    // aucune ambiguïté de lisibilité à corriger pour ces classes.
-    if (idx < 0 && (label.cls ?? classifyLabelText(label.text)) === "numero") {
-      idx = findNearestPolygonWithinTolerance(
+    let idx: number;
+    // Résolution DÉDIÉE (contenance + repli débordement/emprise de texte,
+    // § 23/§ 26) RÉSERVÉE aux numéros de parcelle — un lot/propriétaire/
+    // dénomination hors de toute parcelle reste hors parcelle, aucune
+    // ambiguïté de lisibilité à corriger pour ces classes.
+    if ((label.cls ?? classifyLabelText(label.text)) === "numero") {
+      const resolved = resolveNumeroLabelPolygon(
         label.point,
+        label.text,
+        label.height,
         validPolygons,
         index,
         NUMERO_LABEL_OVERFLOW_TOLERANCE_M
       );
-      if (idx >= 0) nbNumerosRecuperesParDebordement++;
+      idx = resolved.idx;
+      if (resolved.viaFootprint && idx >= 0) nbNumerosRecuperesParDebordement++;
+    } else {
+      idx = findContainingPolygon(label.point, validPolygons, index);
     }
     if (idx >= 0) labelsByPolygon[idx].push(label);
     else nbTextesHorsParcelle++;
@@ -1821,8 +1905,9 @@ export function buildParcellesFromFc32628(
   }
   if (nbNumerosRecuperesParDebordement > 0) {
     warnings.push(
-      `${nbNumerosRecuperesParDebordement} numéro(s) de parcelle récupéré(s) par repli débordement ` +
-        `(point d'insertion à ≤ ${NUMERO_LABEL_OVERFLOW_TOLERANCE_M} m hors de la parcelle la plus proche) — à vérifier.`
+      `${nbNumerosRecuperesParDebordement} numéro(s) de parcelle rattaché(s) par emprise de texte ` +
+        `(point d'insertion hors de la parcelle, ou proche d'un bord avec le texte majoritairement ` +
+        `sur une parcelle voisine) — à vérifier.`
     );
   }
   if (nbNumeroNonConforme > 0) {
