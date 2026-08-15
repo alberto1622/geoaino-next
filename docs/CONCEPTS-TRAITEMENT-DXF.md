@@ -950,9 +950,9 @@ filtre `showUnnumberedOnly`).
 laissait entendre le §11 ter d'origine : `updateSectionNumero` est un
 `UPDATE` d'attribut isolé, sans aucun effet de bord sur les parcelles déjà
 importées. Le NICAD d'une parcelle DXF (module Map, `Analysis.correctedData`)
-est calculé **une seule fois, à l'ingestion**, à partir des étiquettes de
-section lues dans le DXF *à ce moment-là* (`parcelle-ingestion.ts ·
-findSectionNumero` → `assign-nicad-2026.ts · buildNicad`). Numéroter une
+est calculé **une seule fois, à l'ingestion**, à partir de la section résolue
+*à ce moment-là* (`assign-nicad-2026.ts · buildNicad` — depuis `limite_section`
+uniquement depuis § 21 ; à l'origine depuis les étiquettes du DXF). Numéroter une
 section après coup dans l'outil QA (`SectionsClient.tsx`) laissait donc les
 NICAD déjà générés inchangés — silencieusement faux tant qu'un utilisateur
 ne relançait pas manuellement chaque parcelle une à une via
@@ -2023,9 +2023,9 @@ Sections. Le job se terminait « completed » avec des parcelles orphelines de
 NICAD, sans qu'aucune tentative de résolution n'ait été faite.
 
 **Cause technique** : contrairement au DXF, qui résout systématiquement le
-Syscol par jointure spatiale sur les communes (`assign-nicad-2026.ts`) — la
-section, elle, étant déjà portée par le dessin —, ce chemin shapefile ne
-bénéficiait d'AUCUNE résolution : ni commune, ni section. `finishParcellesJob`
+Syscol par jointure spatiale — sur `limite_section` en priorité, puis sur les
+communes (`assign-nicad-2026.ts`, § 21) —, ce chemin shapefile ne bénéficiait
+d'AUCUNE résolution : ni commune, ni section. `finishParcellesJob`
 enchaînait directement sur l'analyse, qui se contente d'extraire
 génériquement ce qui existe déjà dans les propriétés (`extractNicad()`, § 16)
 sans jamais chercher à combler un NICAD absent ou invalide.
@@ -2295,6 +2295,7 @@ croisée (A, B) déjà insérée par le rafraîchissement de A.
 
 ---
 
+<<<<<<< HEAD
 ## 21. Suppression groupée des sections en chevauchement entre deux lots
 
 **Problème métier.** Après détection des chevauchements croisés (§20), corriger
@@ -2357,6 +2358,79 @@ ids. Restreindre la portée UI aux paires STRICTEMENT entre les 2 lots cochés
 (et non tout chevauchement touchant l'un des deux) évite qu'un clic sur
 « Supprimer lot X » n'efface aussi, par effet de bord, des sections de X en
 chevauchement avec un lot Z non voulu dans cette opération.
+=======
+## 21. NICAD du pipeline DXF : la section vient EXCLUSIVEMENT de `limite_section` (/cadastre/sections), plus de la couche DXF `limites_sections`
+
+**Problème métier** : le pipeline DXF (`parcelle-ingestion.ts` → `assign-nicad-2026.ts`)
+résolvait le numéro de section d'une parcelle depuis la couche `limites_sections`
+embarquée dans le MÊME fichier DXF que les parcelles (jointure point-dans-polygone
+en mémoire, sans DB). Un DXF de parcelles sans cette couche (fréquent — sections
+et parcelles sont souvent livrées dans des fichiers séparés) ou avec une couche
+de sections incomplète/erronée (anneaux invalides rejetés, débordements de
+numéro non recouvrés — § 9, § 11 decies) ne produisait tout simplement aucun
+NICAD pour les parcelles concernées, alors même que la commune contenant ces
+parcelles avait déjà sa table `limite_section` correctement construite et
+corrigée via /cadastre/sections (chevauchements résolus, fusions manuelles,
+numéros complétés — § 13, § 20, et le picker de fusion « quel côté conserver »).
+Décision produit explicite : la couche DXF `limites_sections`/`numero_section`
+ne doit PLUS jamais servir à déterminer la section d'une parcelle — seule la
+table de gestion des sections fait autorité.
+
+**Cause technique** : deux mécanismes concurrents coexistaient pour la même
+donnée. `buildParcellesFromFc32628` (`parcelle-ingestion.ts`) résolvait
+`numeroSection` en mémoire via `findSectionNumero`, une jointure point-dans-
+polygone contre les `SectionCandidate` extraits de LA COUCHE DXF DU FICHIER
+COURANT (pas la table `limite_section`) ; `assignNicad2026FromCommunes`
+(`assign-nicad-2026.ts`) ne résolvait ensuite que le Syscol, par jointure sur
+`cad_communes_2026`, sans jamais consulter `limite_section` — alors que ce
+référentiel, au moment où le job DXF de parcelles s'exécute, peut déjà couvrir
+la même commune (import Sections antérieur) avec une qualité largement
+supérieure à une extraction DXF brute.
+
+**Solution** :
+- `parcelle-ingestion.ts` : `findSectionNumero` est SUPPRIMÉE — la jointure
+  parcelle ∈ section de la couche DXF n'est plus jamais faite pour les
+  parcelles. `numeroSection` est laissé `null` à l'ingestion, quelle que soit
+  la présence d'une couche `limites_sections` dans le fichier (`validSections`/
+  `sectionIndex`/`sectionNumeros` restent calculés — toujours nécessaires pour
+  construire `sections: SectionCandidate[]`, le résultat consommé par le
+  parcours `sectionsOnly` qui alimente `limite_section` DEPUIS /cadastre/sections ;
+  seule la RÉUTILISATION de ces sections pour numéroter des PARCELLES est
+  retirée).
+- `assign-nicad-2026.ts` (`assignNicad2026FromCommunes`) : résout Syscol +
+  section EN PARALLÈLE contre `limite_section` (`getSectionsForPoints`, même
+  fonction que le chemin shapefile page d'accueil — § 17) et `cad_communes_2026`
+  (`getSyscols2026ForPoints`, Syscol seul). Si `limite_section` couvre le
+  point, Syscol ET section viennent de la MÊME ligne — SEULE source retenue
+  pour la section. Sinon, repli sur `cad_communes_2026` pour le Syscol/nom de
+  commune seuls (métadonnée utile même sans NICAD) : `p.nicad` reste `null`,
+  jamais construit avec une section absente (`buildNicad` traiterait `null`
+  comme une section « 000 » silencieuse — § 17 — un NICAD strictement interdit
+  ici).
+- L'avertissement « parcelle(s) sans section » est déplacé de l'ingestion (où
+  le compte aurait été celui, provisoire, d'AVANT résolution DB — donc
+  trompeur) vers `assign-nicad-2026.ts`, sur `report.nbSansSection` APRÈS
+  résolution. Deux nouveaux compteurs (`nbSectionDepuisTableSections`,
+  `nbSectionApprox`) et avertissements associés, même style que
+  `nbCommune2026Approx`/`nbSansCommune2026` déjà en place.
+
+**Pourquoi (pièges inclus)** : les deux jointures (`limite_section` et
+`cad_communes_2026`) sont lancées EN PARALLÈLE (`Promise.all`) pour tous les
+points plutôt que la seconde seulement pour les échecs de la première — plus
+simple à lire, et le coût d'une jointure batch supplémentaire sur une table
+indexée (GiST) reste marginal face au volume de travail géométrique déjà
+effectué en ingestion. Piège à retenir : `buildNicad(prefix, section, parcelle)`
+traite un `section` `null` comme `"000".repeat(...)`, PAS comme un échec — sans
+la garde explicite (jamais appeler `buildNicad` hors couverture `limite_section`),
+une parcelle sans section aurait silencieusement reçu un NICAD à la section
+« 000 » bidon dès que `cad_communes_2026` seul la couvrait, un défaut latent
+déjà présent avant ce changement (tout DXF sans couche `limites_sections`
+propre y était exposé) mais devenu systématique une fois la couche DXF
+définitivement écartée. Contrairement à `assignSectionNicad` (§ 17), qui ne
+touche JAMAIS un NICAD déjà valide, il n'y a pas ici d'équivalent « déjà
+valide » à préserver : le numéro de section brut n'est qu'une donnée
+intermédiaire vers le NICAD, jamais un NICAD lui-même déjà construit.
+>>>>>>> worktree-shapefile-parcelles-section-coherence
 
 ---
 

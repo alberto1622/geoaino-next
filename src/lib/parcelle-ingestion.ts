@@ -96,6 +96,11 @@ export interface DxfIngestionReport {
   nbSansCommune2026: number;
   /** Parcelles rattachées à une commune 2026 par proximité (hors contenance stricte). */
   nbCommune2026Approx: number;
+  /** Parcelles dont Syscol + section viennent de `limite_section` (/cadastre/sections)
+   *  plutôt que de la couche DXF `limites_sections` — cf. assign-nicad-2026.ts. */
+  nbSectionDepuisTableSections: number;
+  /** Parmi celles-ci, rattachées par proximité (hors contenance stricte). */
+  nbSectionApprox: number;
   nbNumeroNonConforme: number;
   nbPiscines: number;
   nbParcellesPolygonisees: number;
@@ -1255,41 +1260,6 @@ function findSmallestContainingPolygon(
   return best;
 }
 
-/**
- * Numéro de section d'un point : PLUS PETITE section NUMÉROTÉE le contenant.
- * Alimente la composante section du NICAD (jointure parcelle ∈ section).
- *
- * Même logique que la jointure des libellés de section (§4 bis) : un point
- * tombe à la fois dans sa vraie section ET dans tout anneau d'ensemble /
- * face sans numéro qui l'englobe. Au « premier contenant » (ordre de grille
- * arbitraire), une enveloppe ou une face non numérotée raflait la jointure →
- * numero_section absent (« 000 ») ou faux → NICAD erronés et collisions
- * (faux doublons). Seule la plus fine section PORTEUSE d'un numéro compte ;
- * s'il n'y en a aucune, la parcelle est « sans section » (comptabilisée).
- */
-function findSectionNumero(
-  point: [number, number],
-  sections: ValidPolygon[],
-  index: BBoxGridIndex,
-  numeros: (string | null)[]
-): string | null {
-  const pt = turf.point(point);
-  let best = -1;
-  let bestArea = Infinity;
-  for (const idx of index.query(point)) {
-    if (numeros[idx] === null) continue;
-    const s = sections[idx];
-    if (s.surfaceM2 >= bestArea) continue;
-    const [bx0, by0, bx1, by1] = s.bbox;
-    if (point[0] < bx0 || point[0] > bx1 || point[1] < by0 || point[1] > by1) continue;
-    if (turf.booleanPointInPolygon(pt, turf.feature(s.geom))) {
-      best = idx;
-      bestArea = s.surfaceM2;
-    }
-  }
-  return best >= 0 ? numeros[best] : null;
-}
-
 // Profilage par phase (activé via DXF_PROFILE=1) — aucun effet sur le résultat.
 const PROFILE = !!process.env.DXF_PROFILE;
 function phase(label: string, t0: number): number {
@@ -1312,7 +1282,8 @@ export interface IngestOptions {
 function blankIngestionReport(warnings: string[] = []): DxfIngestionReport {
   return {
     nbParcelles: 0, nbSansNumero: 0, nbSansDenomination: 0, nbSansProprietaire: 0,
-    nbSansSection: 0, nbSansCommune2026: 0, nbCommune2026Approx: 0, nbNumeroNonConforme: 0,
+    nbSansSection: 0, nbSansCommune2026: 0, nbCommune2026Approx: 0,
+    nbSectionDepuisTableSections: 0, nbSectionApprox: 0, nbNumeroNonConforme: 0,
     nbPiscines: 0, nbParcellesPolygonisees: 0, nbPolygonesEnveloppeIgnores: 0, nbHorsEmprise: 0,
     nbPolylignesOuvertesIgnorees: 0, nbTextesHorsParcelle: 0, nbParcellesMultiNumeros: 0,
     nbPolygonesInvalidesRejetes: 0,
@@ -1589,16 +1560,18 @@ export function buildParcellesFromFc32628(
     }
     if (numerosVus.size > 1) nbParcellesMultiNumeros++;
 
-    // Section : par jointure spatiale parcelle ∈ limites_sections — plus petite
-    // section NUMÉROTÉE contenante (cf. findSectionNumero : au premier-contenant,
-    // un anneau d'ensemble/une face sans numéro pouvait rafler la jointure →
-    // section « 000 » ou fausse → NICAD erronés).
+    // Section : NON résolue depuis la couche DXF `limites_sections` de CE
+    // fichier (peu fiable/absente — anneaux invalides rejetés, débordements
+    // de numéro non recouvrés, cf. § 9/§ 11 decies) — laissée `null` ici,
+    // résolue exclusivement par jointure spatiale sur `limite_section` (table
+    // QA construite via /cadastre/sections), l'étape DB suivante du pipeline
+    // (cf. `assign-nicad-2026.ts`, § 21).
     const repPoint = representativePoint(poly.geom);
-    const numeroSection = findSectionNumero(repPoint, validSections, sectionIndex, sectionNumeros);
+    const numeroSection: string | null = null;
 
     // Numéro de parcelle normalisé à 5 chiffres (composante parcelle du NICAD).
-    // Le NICAD complet est assemblé après coup, une fois le Syscol résolu par
-    // jointure spatiale sur cad_communes_2026 (cf. assign-nicad-2026.ts).
+    // Le NICAD complet est assemblé après coup, une fois Syscol + section
+    // résolus par jointure spatiale (cf. assign-nicad-2026.ts).
     const numero5 = normalizeNumeroParcelle(numero);
     if (numero5.status === "padded" || numero5.status === "truncated") nbNumeroNonConforme++;
 
@@ -1718,11 +1691,11 @@ export function buildParcellesFromFc32628(
       `${nbNumeroNonConforme} numéro(s) de parcelle ajusté(s) à 5 chiffres (padding/troncature) pour le NICAD.`
     );
   }
-  if (nbSansSection > 0) {
-    warnings.push(
-      `${nbSansSection} parcelle(s) sans section rattachée (hors limites_sections ou numero_section absent).`
-    );
-  }
+  // Pas d'avertissement `nbSansSection` ici : la section n'est plus résolue à
+  // l'ingestion (cf. § 21) mais à l'étape DB suivante, par jointure sur
+  // `limite_section` — `assign-nicad-2026.ts` avertit sur le compte FINAL,
+  // après cette résolution, sans quoi ce compte provisoire (tous les
+  // parcelles, avant jointure) serait trompeur.
   if (nbSansProprietaire > 0) {
     warnings.push(`${nbSansProprietaire} parcelle(s) sans propriétaire identifié.`);
   }
@@ -1742,9 +1715,11 @@ export function buildParcellesFromFc32628(
       nbSansDenomination,
       nbSansProprietaire,
       nbSansSection,
-      // Résolus lors de l'assemblage du NICAD (jointure cad_communes_2026).
+      // Résolus lors de l'assemblage du NICAD (jointure cad_communes_2026 / limite_section).
       nbSansCommune2026: 0,
       nbCommune2026Approx: 0,
+      nbSectionDepuisTableSections: 0,
+      nbSectionApprox: 0,
       nbNumeroNonConforme,
       nbPiscines,
       nbParcellesPolygonisees,
