@@ -642,12 +642,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       : analysis.conformeCount != null
         ? conformeCount + correctedSinceLoad
         : conformeCount;
-<<<<<<< HEAD
-  const displayErrorCount = Math.max(
-    0,
-    (analysis.errorCount ?? 0) - correctedSinceLoad,
-  );
-=======
+
   // `statsOverride` (posé par `handleCorrectError` depuis la réponse de
   // `correct/route.ts`, qui patche et persiste désormais `errorCount`/
   // `conformityScore` en base à chaque correction) est la valeur EXACTE,
@@ -655,10 +650,11 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   // l'approximation `correctedSinceLoad` (poids uniforme -1, ne distingue pas
   // les sévérités) dès qu'une correction est passée par ce chemin.
   const displayErrorCount =
-    statsOverride?.errorCount ?? Math.max(0, (analysis.errorCount ?? 0) - correctedSinceLoad);
-  const displayConformityScore = statsOverride?.conformityScore ?? toNum(analysis.conformityScore);
+    statsOverride?.errorCount ??
+    Math.max(0, (analysis.errorCount ?? 0) - correctedSinceLoad);
+  const displayConformityScore =
+    statsOverride?.conformityScore ?? toNum(analysis.conformityScore);
 
->>>>>>> worktree-shapefile-parcelles-section-coherence
   // Emprise globale pour le fit initial de la carte (rendu par tuiles) : servie
   // par map-meta, indépendante du chargement du GeoJSON complet.
   useEffect(() => {
@@ -1707,7 +1703,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 {analysis.fileName}
               </h2>
               <Badge
-                variant={displayConformityScore >= 70 ? "default" : "destructive"}
+                variant={
+                  displayConformityScore >= 70 ? "default" : "destructive"
+                }
                 className="text-xs shrink-0 ml-2"
               >
                 {displayConformityScore.toFixed(0)}%
