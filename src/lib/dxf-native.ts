@@ -608,6 +608,64 @@ function emitGeometryFeatures(
 const IDENTITY: TransformFn = (p) => p;
 
 /**
+ * Détecte l'encodage réel du DXF pour décoder correctement calques/textes
+ * accentués — sans quoi une fausse déduction dans un sens comme dans l'autre
+ * produit le MÊME symptôme : un calque comme « Numéro Parcelle » ne matche
+ * plus aucun alias (`cadastral-filter.ts · normalizeText`), la moindre de
+ * ses étiquettes est écartée SANS repli permissif possible dès qu'un AUTRE
+ * calque du même fichier est reconnu (`filterDxfCadastralFeatures` exige
+ * `selected.length === 0` pour activer le repli global) → aucun numéro de
+ * parcelle extrait pour tout le fichier → NICAD non construits partout.
+ *   - décoder un fichier UTF-8 en latin1 : « Numéros Parcelle » (UTF-8, 0xC3 0xA9)
+ *     → « NumÃ©ros Parcelle » (chaque octet UTF-8 relu comme un caractère latin1) ;
+ *   - décoder un fichier ANSI/latin1 en UTF-8 (bug inverse, jusqu'ici la seule
+ *     stratégie de ce lecteur) : « Numéro Parcelle » (ANSI_1252, octet 0xE9)
+ *     → « Num<0xFFFD>ro Parcelle » (0xE9 seul n'est pas une séquence UTF-8 valide).
+ *
+ * Règle DXF officielle : R2007+ (AC1021+) encode systématiquement en UTF-8,
+ * quel que soit `$DWGCODEPAGE` (devenu vestigial dans ces versions) ; les
+ * versions antérieures (AC1018/2004 et plus anciennes — largement répandues
+ * dans les exports DGID/Microstation existants) utilisent l'encodage
+ * mono-octet déclaré par `$DWGCODEPAGE` (quasi toujours `ANSI_125x`,
+ * compatible latin1 sur la plage 0xA0-0xFF où vivent tous les caractères
+ * accentués français usuels — les deux ne divergent que sur 0x80-0x9F,
+ * ponctuation typographique rarement présente dans un nom de calque).
+ *
+ * Détection sur un PRÉFIXE du buffer (le HEADER est toujours en tête,
+ * largement sous la limite ci-dessous même sur un DXF de 100+ Mo) décodé en
+ * latin1 — sûr pour CETTE passe uniquement : les codes de groupe et noms de
+ * variables système DXF sont toujours de l'ASCII pur, quel que soit
+ * l'encodage réel du fichier, donc lisibles sans erreur par n'importe quel
+ * décodage mono-octet.
+ */
+function detectDxfEncoding(buffer: Buffer): "utf8" | "latin1" {
+  const prefixLen = Math.min(buffer.length, 200_000);
+  const headerPairs = tokenize(buffer.toString("latin1", 0, prefixLen));
+
+  const findHeaderVar = (name: string): string | null => {
+    for (let i = 0; i + 1 < headerPairs.length; i++) {
+      if (headerPairs[i][0] === "9" && headerPairs[i][1].trim() === name) {
+        return headerPairs[i + 1][1].trim();
+      }
+    }
+    return null;
+  };
+
+  const acadver = findHeaderVar("$ACADVER");
+  const versionMatch = acadver ? /^AC(\d+)/.exec(acadver) : null;
+  if (versionMatch && parseInt(versionMatch[1], 10) >= 1021) return "utf8";
+
+  const codepage = findHeaderVar("$DWGCODEPAGE");
+  if (codepage && /^ANSI_/i.test(codepage)) return "latin1";
+
+  // Détection non concluante ($ACADVER absent/illisible ET $DWGCODEPAGE
+  // absent ou non-ANSI) : repli UTF-8, comportement historique de ce lecteur —
+  // préserve les DXF déjà correctement traités par ce chemin (R2007+, ou sans
+  // en-tête $DWGCODEPAGE mais réellement UTF-8).
+  return "utf8";
+}
+
+/**
  * Lit un DXF (Buffer) et retourne toutes les entités géométriques en
  * coordonnées monde (EPSG:32628), blocs dépliés. Lève une erreur si le DXF
  * ne contient pas de section ENTITIES exploitable.
@@ -646,14 +704,10 @@ function logCensus(census: Census): void {
 }
 
 export function readDxfWorldFeatures(buffer: Buffer): DxfFeatureCollection {
-  // UTF-8 : les exports DXF modernes (ODA/AutoCAD R2007+/AC1021+) encodent les
-  // noms de calques et textes en UTF-8. Décoder en latin1 mutilait les calques
-  // accentués (« Numéros Parcelle » → « NumÃ©ros Parcelle » → non classé, donc
-  // aucun numéro de parcelle extrait → NICAD non construits). Les codes de groupe
-  // restant ASCII (sous-ensemble d'UTF-8), le parsing géométrique est inchangé ;
-  // un fichier réellement latin1 dégrade proprement (octets hauts → U+FFFD, de
-  // toute façon retirés par la normalisation des noms de calques).
-  const pairs = tokenize(buffer.toString("utf8"));
+  // Encodage détecté (UTF-8 pour R2007+/AC1021+, sinon `$DWGCODEPAGE`) — cf.
+  // `detectDxfEncoding`. Les codes de groupe restent ASCII (sous-ensemble des
+  // deux encodages), le parsing géométrique est inchangé quel que soit le choix.
+  const pairs = tokenize(buffer.toString(detectDxfEncoding(buffer)));
 
   const [es, ee] = sectionRange(pairs, "ENTITIES");
   if (es < 0 || ee < 0) {
