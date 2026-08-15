@@ -819,6 +819,14 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     );
   }, [analysis.errors]);
 
+  // Lookup O(1) nicad → groupe (cf. `selectDuplicateGroup`) — utilisé pour
+  // déclencher le zoom + les marqueurs numérotés d'occurrences dès la liste
+  // générale des erreurs, pas seulement depuis le panneau « doublons » dédié.
+  const duplicateGroupsByNicad = useMemo(
+    () => new Map(duplicateGroups.map((g) => [g.nicad, g])),
+    [duplicateGroups],
+  );
+
   // NICAD dupliqués (lookup O(1)) pour déclencher l'affichage du groupe au clic.
   const duplicateNicadSet = useMemo(
     () => new Set(duplicateGroups.map((g) => g.nicad)),
@@ -2001,10 +2009,25 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                     <button
                       key={err.id}
                       onClick={() => {
-                        setSelectedDupNicad(null);
-                        setSelectedError(
-                          selectedError?.id === err.id ? null : err,
-                        );
+                        if (selectedError?.id === err.id) {
+                          setSelectedError(null);
+                          if (selectedDupNicad) clearDuplicateFocus();
+                          return;
+                        }
+                        // DUPLICATE : zoome sur l'emprise de TOUTES les occurrences
+                        // et pose des marqueurs numérotés dessus (§ `selectDuplicateGroup`),
+                        // au lieu de juste sélectionner cette ligne d'erreur —
+                        // même comportement que le panneau « doublons » dédié.
+                        const group =
+                          err.errorType?.toUpperCase() === "DUPLICATE"
+                            ? duplicateGroupsByNicad.get(err.nicad1 ?? "")
+                            : undefined;
+                        if (group) {
+                          selectDuplicateGroup(group);
+                        } else {
+                          setSelectedDupNicad(null);
+                          setSelectedError(err);
+                        }
                       }}
                       className={`cursor-pointer w-full text-left p-3 rounded-lg border transition-all ${
                         selectedError?.id === err.id
