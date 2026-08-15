@@ -414,8 +414,14 @@ export default function HomeClient({ user, stats }: Props) {
       };
 
       if (parsed.microstationReport?.warnings?.length) {
+        // Tous les avertissements (pas seulement les 3 premiers, séparateur
+        // " · " — sonner ne préserve pas les retours à la ligne bruts sans
+        // config CSS dédiée) : un rapport DXF en porte facilement 10+, et le
+        // diagnostic pertinent (ex. section/NICAD non résolu) était souvent
+        // hors des 3 premiers, donc invisible. Durée allongée pour tout lire.
         toast.warning("Vérifications Microstation", {
-          description: parsed.microstationReport.warnings.slice(0, 3).join(" · "),
+          description: parsed.microstationReport.warnings.join(" · "),
+          duration: 20000,
         });
       }
 
