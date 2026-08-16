@@ -123,7 +123,13 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 ## 3. Vérification du NICAD
 
 - → ✅Ajouter de quel syscol il s'agit : 2013 / 2026
-- → ✅Basculement :
+- → ✅Le principe du basculement :
+  - L'utilisateur renseigne un nicad.
+  - Le process est de récupérer et syscol et d'identifier les deux syscols de 2013 et 2026
+    - l'identification part depuis sa section, le syscol, la commune, le département et la region
+    - S'il ya des différences, les soulever.
+    - S'il elle correspond à celle de 2013, proposer un basculement vers 2026
+
   - Niveau : 2013 syscol
   - syscol 2026
   - Niveau section
@@ -135,7 +141,7 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 - → Gérer les contraintes sur le n° section (3 caractères)
 - → ✅Loading lors des modifications
 - → Identifier et exporter les sections ayant des anomalies
-<<<<<<< HEAD
+  <<<<<<< HEAD
 - → Sélection suivant les fichiers
 - → ✅Corriger l'affichage (Mark)
 - → Chevauchement / Intersection
@@ -146,11 +152,11 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 
 ## 1. intersections des sections entre deux fichiers charger
 
-A véfifier
-=======
+# A véfifier
+
 - → ✅Sélection suivant les fichiers
 - → Corriger l'affichage (Mark)
 - → ✅Chevauchement / Intersection
 - → ✅Différencier les gaps et les chevauchements
 - → ✅Effectuer le mappage des champs avant le traitement
->>>>>>> worktree-shapefile-parcelles-section-coherence
+  > > > > > > > worktree-shapefile-parcelles-section-coherence

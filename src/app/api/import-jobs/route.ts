@@ -146,7 +146,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         fileName: body.fileName,
         sourceType: body.sourceType as SourceType,
       };
-      return startJob(source, userId, sanitizeLayerMapping(body.layerMapping), body.fileKey);
+      // "sections" : mappage de calques DXF/DGN pour la gestion des sections
+      // (SectionsClient) — même job/pipeline que "parcelles" (défaut), juste
+      // ciblé sur `limite_section` (cf. run-job.ts). Tout autre/absent `kind`
+      // retombe sur le défaut historique de `createImportJob` ("parcelles").
+      const kind = body.kind === "sections" ? "sections" : undefined;
+      return startJob(source, userId, sanitizeLayerMapping(body.layerMapping), body.fileKey, kind);
     }
 
     // Voie multipart : upload direct (sans mappage).
