@@ -146,6 +146,7 @@ export default function CadastreMap() {
   }, []);
 
   // Changer de millésime : réinitialiser la sélection et la couche affichée
+  // (la région par défaut sera re-résolue par l'effet ci-dessous)
   function changeVersion(v: Version) {
     if (v === version) return;
     setSyscol("");
@@ -155,6 +156,18 @@ export default function CadastreMap() {
       layerRef.current = null;
     }
     setVersion(v);
+  }
+
+  // Changer de région : réinitialiser la sélection de commune/parcelle
+  function changeRegion(r: string) {
+    if (r === region) return;
+    setSyscol("");
+    setSelected(null);
+    if (layerRef.current && mapRef.current) {
+      mapRef.current.removeLayer(layerRef.current);
+      layerRef.current = null;
+    }
+    setRegion(r);
   }
 
   // Charger une seule fois les cartes type de changement (2013 & 2026)
@@ -171,19 +184,39 @@ export default function CadastreMap() {
     };
   }, []);
 
-  // Charger la liste des communes selon le millésime Syscol sélectionné
+  // Charger la liste des régions du millésime sélectionné et présélectionner
+  // Dakar par défaut (comparaison insensible à la casse — la donnée en base
+  // est stockée en majuscules).
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const list = (await (version === "2013"
-        ? listCommunes2013()
-        : listCommunes2026WithGeom())) as Commune[];
-      if (!cancelled) setCommunes(list);
+      setRegion(null);
+      const list = await (version === "2013" ? listRegions2013() : listRegions2026());
+      if (cancelled) return;
+      setRegions(list);
+      const dakar = list.find((r) => r.toUpperCase() === DEFAULT_REGION);
+      setRegion(dakar ?? "");
     })();
     return () => {
       cancelled = true;
     };
   }, [version]);
+
+  // Charger la liste des communes selon le millésime et la région sélectionnés
+  // (région "" = toutes). Attend la résolution de la région par défaut (Dakar).
+  useEffect(() => {
+    if (region === null) return;
+    let cancelled = false;
+    (async () => {
+      const list = (await (version === "2013"
+        ? listCommunes2013ByRegion({ region: region || undefined })
+        : listCommunes2026WithGeom({ region: region || undefined }))) as Commune[];
+      if (!cancelled) setCommunes(list);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [version, region]);
 
   // Type de changement d'une commune selon le millésime affiché.
   function changeInfoOf(syscolPadded: string): ChangementInfo | null {
@@ -346,9 +379,24 @@ export default function CadastreMap() {
             </button>
           ))}
         </div>
+        <select
+          className={selectCls}
+          value={region ?? ""}
+          onChange={(e) => changeRegion(e.target.value)}
+          aria-label="Choisir une région"
+        >
+          <option className={optionCls} value="">
+            Toutes les régions
+          </option>
+          {regions.map((r) => (
+            <option className={optionCls} key={r} value={r}>
+              {r}
+            </option>
+          ))}
+        </select>
         <select className={selectCls} value={syscol} onChange={(e) => setSyscol(e.target.value)} aria-label="Choisir une commune">
           <option className={optionCls} value="">
-            Toutes les communes ({version})
+            Toutes les communes ({region || "toutes régions"}, {version})
           </option>
           {communes.map((c) => (
             <option className={optionCls} key={c.id} value={c.syscolPadded}>
