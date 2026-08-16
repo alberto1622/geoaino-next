@@ -2690,25 +2690,32 @@ entre deux parcelles candidates.
   des attributs de bloc).
 - `parcelle-ingestion.ts · RawLabel.height` porte cette valeur (`null` si
   absente — ex. repli ogr2ogr, dont le driver DXF n'expose pas cet attribut).
-- `labelFootprint` : rectangle NON tourné centré sur le point d'insertion,
-  largeur estimée `hauteur × nb_caractères × DXF_TEXT_CHAR_WIDTH_RATIO`
-  (0,6 par défaut — police CAO condensée type SHX, aucun rendu de police réel
-  disponible ici) ; hauteur de repli `DXF_DEFAULT_TEXT_HEIGHT_M` (1,5 m) si le
-  DXF ne porte pas la hauteur. Justification DXF réelle (codes 72/73 — le
-  point d'insertion peut être au bord plutôt qu'au centre du texte) NON
-  capturée : un rectangle centré reste une approximation raisonnable dans les
-  deux sens de débordement.
-- `findPolygonByLabelFootprint` : parmi les parcelles à portée (`queryRange`),
-  celle dont l'INTERSECTION avec `labelFootprint` a l'AIRE la plus grande
-  (`turf.intersect` + `geometryAreaM2`, jamais `turf.area` — piège planaire/
-  géodésique déjà documenté § 23) — pas la plus proche/petite : l'emprise
-  gagnante est celle qui recouvre RÉELLEMENT le plus de texte.
+- `labelFootprintHalfWidthM` : demi-largeur estimée `hauteur × nb_caractères ×
+  DXF_TEXT_CHAR_WIDTH_RATIO / 2` (ratio 0,6 par défaut — police CAO condensée
+  type SHX, aucun rendu de police réel disponible ici) ; hauteur de repli
+  `DXF_DEFAULT_TEXT_HEIGHT_M` (1,5 m) si le DXF ne porte pas la hauteur. Sert
+  de seuil de vigilance (« assez loin du bord pour ignorer tout voisin »).
+- `labelCharacterPoints` : un point d'échantillonnage PAR CARACTÈRE, le long
+  d'une ligne de base horizontale centrée sur le point d'insertion (largeur de
+  caractère = `hauteur × DXF_TEXT_CHAR_WIDTH_RATIO`). Justification DXF réelle
+  (codes 72/73 — le point d'insertion peut être au bord plutôt qu'au centre du
+  texte) et rotation (code 50) NON capturées : une ligne centrée et horizontale
+  reste une approximation raisonnable dans les deux sens de débordement.
+- `findPolygonByLabelCharacterCount` : parmi les parcelles à portée
+  (`queryRange`), celle qui CONTIENT LE PLUS de ces points-caractères
+  (`turf.booleanPointInPolygon` par point/candidat) — pas la plus proche/
+  petite, ni la plus grande aire de recouvrement (repli antérieur) : le
+  décompte de caractères colle plus directement à l'intuition « où tombe
+  VISUELLEMENT la majorité du texte » qu'une aire d'intersection rectangle/
+  polygone, insensible à la forme du polygone candidat (un polygone étroit et
+  long peut avoir une grande aire de recouvrement sans qu'aucun caractère n'y
+  tombe réellement au centre).
 - `resolveNumeroLabelPolygon` : point d'entrée unique, remplace l'ancien
   `findNearestPolygonWithinTolerance` (§ 23, supprimée) à tous les rattachements
   numéro. Contenance stricte d'abord (cas dominant, bon marché) ; si le point
   contenu est à MOINS de la demi-largeur d'emprise estimée du bord de sa
   parcelle (`pointToPolygonBoundaryDistanceM`, § 23), OU si le point est hors
-  de toute parcelle, bascule sur la comparaison d'aire — qui peut alors
+  de toute parcelle, bascule sur le décompte de caractères — qui peut alors
   RÉASSIGNER un numéro à une voisine même si son point d'insertion était
   contenu ailleurs (nouveauté par rapport au § 23, qui ne se déclenchait que
   point hors de tout polygone).
@@ -2717,17 +2724,18 @@ entre deux parcelles candidates.
 voisin » réutilise directement la demi-largeur d'emprise du texte lui-même —
 cohérent : un texte 2× plus large a mécaniquement plus de chances de déborder,
 donc mérite une zone de vigilance plus large. Piège de performance à ne pas
-réintroduire (même logique que § 23) : `findPolygonByLabelFootprint`
-(`turf.intersect` par candidat, nettement plus coûteux qu'un simple test de
-contenance) n'est appelée QUE quand la contenance stricte échoue ou que le
-point est près d'un bord — sur un DXF de 100k+ parcelles où la quasi-totalité
-des numéros sont loin de toute limite, le chemin bon marché (`findSmallestContainingPolygon`
-+ un seul calcul de distance au bord) reste le cas dominant. `nbNumerosRecuperesParDebordement`
-compte maintenant tout rattachement passé par la comparaison d'aire (`viaFootprint`),
-qu'il ait ou non changé de parcelle par rapport à la contenance stricte
-initiale — un numéro « confirmé » par l'emprise après un point proche du bord
-compte aussi, car sa fiabilité méritait d'être vérifiée même si le résultat
-final coïncide avec le point.
+réintroduire (même logique que § 23) : `findPolygonByLabelCharacterCount`
+(N tests de contenance par candidat, un par caractère, nettement plus coûteux
+qu'un simple test de contenance du point) n'est appelée QUE quand la
+contenance stricte échoue ou que le point est près d'un bord — sur un DXF de
+100k+ parcelles où la quasi-totalité des numéros sont loin de toute limite, le
+chemin bon marché (`findSmallestContainingPolygon` + un seul calcul de
+distance au bord) reste le cas dominant. `nbNumerosRecuperesParDebordement`
+compte maintenant tout rattachement passé par le décompte de caractères
+(`viaFootprint`), qu'il ait ou non changé de parcelle par rapport à la
+contenance stricte initiale — un numéro « confirmé » après un point proche du
+bord compte aussi, car sa fiabilité méritait d'être vérifiée même si le
+résultat final coïncide avec le point.
 
 ---
 

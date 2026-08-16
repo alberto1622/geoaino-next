@@ -1350,37 +1350,34 @@ function labelFootprintHalfWidthM(text: string, height: number | null): number {
 }
 
 /**
- * Rectangle (non tourné, centré sur le point d'insertion) approximant
- * l'emprise occupée par un texte — la justification DXF réelle (codes 72/73,
- * qui peuvent placer le point d'insertion au bord plutôt qu'au centre) n'est
- * pas capturée ; un rectangle centré reste une approximation raisonnable dans
- * les deux sens (texte qui déborde à gauche ou à droite d'une limite), cf. § 26.
+ * Points d'échantillonnage, un par caractère, le long de la ligne de base
+ * ESTIMÉE du texte — centrée sur le point d'insertion, horizontale (la
+ * rotation DXF réelle n'est pas capturée, même simplification qu'ailleurs en
+ * § 26). Chaque point est le centre estimé d'UN caractère.
  */
-function labelFootprint(point: [number, number], text: string, height: number | null): PolygonGeom {
+function labelCharacterPoints(
+  point: [number, number],
+  text: string,
+  height: number | null
+): [number, number][] {
   const h = height ?? DEFAULT_TEXT_HEIGHT_M;
-  const hw = labelFootprintHalfWidthM(text, height);
-  const hh = h / 2;
-  const [x, y] = point;
-  return {
-    type: "Polygon",
-    coordinates: [[
-      [x - hw, y - hh], [x + hw, y - hh], [x + hw, y + hh], [x - hw, y + hh], [x - hw, y - hh],
-    ]],
-  };
+  const charWidth = h * TEXT_CHAR_WIDTH_RATIO;
+  const n = Math.max(1, text.length);
+  const startX = point[0] - (n * charWidth) / 2;
+  const points: [number, number][] = [];
+  for (let i = 0; i < n; i++) points.push([startX + (i + 0.5) * charWidth, point[1]]);
+  return points;
 }
 
 /**
- * Parmi les polygones à portée de `toleranceM` du point, celui que l'emprise
- * ESTIMÉE du texte (`labelFootprint`) recouvre le PLUS (aire d'intersection
- * planaire maximale) — pas le plus petit contenant : un numéro dont le texte
- * occupe surtout la voisine doit lui être rattaché, que le point d'insertion
- * soit dedans, dehors, ou juste à cheval sur la limite. `turf.intersect` est
- * un calcul géométrique pur (Sutherland-Hodgman), indépendant du système de
- * coordonnées — contrairement aux fonctions de distance/aire de turf, il n'y
- * a pas de piège planaire/géodésique ici ; l'aire du résultat est en revanche
- * mesurée avec `geometryAreaM2` (planaire), jamais `turf.area`.
+ * Parmi les polygones à portée de `toleranceM` du point, celui qui CONTIENT
+ * LE PLUS DE CARACTÈRES du texte (compte des points de `labelCharacterPoints`
+ * tombant dans chaque candidat) — pas le plus petit contenant : un numéro
+ * dont la majorité des caractères tombe sur la voisine doit lui être
+ * rattaché, que le point d'insertion soit dedans, dehors, ou à cheval sur la
+ * limite.
  */
-function findPolygonByLabelFootprint(
+function findPolygonByLabelCharacterCount(
   point: [number, number],
   text: string,
   height: number | null,
@@ -1388,26 +1385,21 @@ function findPolygonByLabelFootprint(
   index: BBoxGridIndex,
   toleranceM: number
 ): number {
-  const footprint = turf.feature(labelFootprint(point, text, height));
+  const charPoints = labelCharacterPoints(point, text, height);
   const halfWidth = labelFootprintHalfWidthM(text, height);
   const radius = Math.max(toleranceM, halfWidth * 1.5);
   const searchBbox: BBox = [point[0] - radius, point[1] - radius, point[0] + radius, point[1] + radius];
   let best = -1;
-  let bestArea = 0;
+  let bestCount = 0;
   for (const idx of index.queryRange(searchBbox)) {
-    let inter: GeoJSON.Feature<PolygonGeom> | null;
-    try {
-      inter = turf.intersect(turf.featureCollection([footprint, turf.feature(polygons[idx].geom)])) as
-        | GeoJSON.Feature<PolygonGeom>
-        | null;
-    } catch {
-      continue;
+    const feature = turf.feature(polygons[idx].geom);
+    let count = 0;
+    for (const cp of charPoints) {
+      if (turf.booleanPointInPolygon(turf.point(cp), feature)) count++;
     }
-    if (!inter?.geometry) continue;
-    const area = geometryAreaM2(inter.geometry);
-    if (area > bestArea) {
+    if (count > bestCount) {
       best = idx;
-      bestArea = area;
+      bestCount = count;
     }
   }
   return best;
@@ -1418,10 +1410,11 @@ function findPolygonByLabelFootprint(
  * d'insertion d'abord (cas dominant sur un DXF de 100k+ parcelles — chemin
  * bon marché à préserver, cf. § 23). Si le point tombe hors de toute
  * parcelle, OU s'il est contenu mais TROP PRÈS du bord pour exclure qu'un
- * voisin recouvre davantage le texte (distance au bord < demi-largeur estimée
- * de l'emprise), compare l'aire de recouvrement du texte sur chaque parcelle
- * à portée (`findPolygonByLabelFootprint`) et retient celle qui en recouvre
- * le plus — au lieu du simple point de contenance/proximité.
+ * voisin contienne davantage de caractères du texte (distance au bord <
+ * demi-largeur estimée de l'emprise), compare le nombre de caractères tombant
+ * sur chaque parcelle à portée (`findPolygonByLabelCharacterCount`) et
+ * retient celle qui en contient le plus — au lieu du simple point de
+ * contenance/proximité.
  */
 function resolveNumeroLabelPolygon(
   point: [number, number],
@@ -1436,8 +1429,8 @@ function resolveNumeroLabelPolygon(
     const distanceToEdge = pointToPolygonBoundaryDistanceM(point, polygons[contained].geom);
     if (distanceToEdge >= labelFootprintHalfWidthM(text, height)) return { idx: contained, viaFootprint: false };
   }
-  const byFootprint = findPolygonByLabelFootprint(point, text, height, polygons, index, toleranceM);
-  if (byFootprint >= 0) return { idx: byFootprint, viaFootprint: byFootprint !== contained };
+  const byCharCount = findPolygonByLabelCharacterCount(point, text, height, polygons, index, toleranceM);
+  if (byCharCount >= 0) return { idx: byCharCount, viaFootprint: byCharCount !== contained };
   return { idx: contained, viaFootprint: false };
 }
 
