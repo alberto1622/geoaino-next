@@ -217,16 +217,21 @@ function parseEntities(pairs: Pair[], start: number, end: number): RawEntity[] {
           endX = parseFloat(v);
           // 3DFACE/SOLID : 2ᵉ sommet (codes 11/21, 12/22, 13/23 = coins 2 à 4).
           // ELLIPSE : extrémité du grand axe (relative au centre).
-          // TEXT/MTEXT/ATTRIB : second point d'alignement (§ 27 bis).
+          // TEXT/ATTRIB : second point d'alignement, une position absolue (§ 27 bis).
+          // MTEXT (jamais ici, § 28 bis) : 11/21/31 est le vecteur unitaire de
+          // direction du texte (« X-axis direction »), PAS une position — un
+          // sens DXF complètement différent malgré le même code de groupe.
+          // Le confondre avec un point plaçait l'étiquette près de (0,0),
+          // hors de toute parcelle (toutes ses valeurs MTEXT rejetées).
           if (type === "3DFACE" || type === "SOLID") e.verts.push([endX, NaN]);
           else if (type === "ELLIPSE") e.major = [endX, NaN];
-          else if (type === "TEXT" || type === "MTEXT" || type === "ATTRIB") e.textAlign2 = [endX, NaN];
+          else if (type === "TEXT" || type === "ATTRIB") e.textAlign2 = [endX, NaN];
           break;
         case "21":
           if (type === "LINE") e.verts[1] = [endX ?? 0, parseFloat(v)];
           else if ((type === "3DFACE" || type === "SOLID") && e.verts.length) e.verts[e.verts.length - 1][1] = parseFloat(v);
           else if (type === "ELLIPSE" && e.major) e.major[1] = parseFloat(v);
-          else if ((type === "TEXT" || type === "MTEXT" || type === "ATTRIB") && e.textAlign2) e.textAlign2[1] = parseFloat(v);
+          else if ((type === "TEXT" || type === "ATTRIB") && e.textAlign2) e.textAlign2[1] = parseFloat(v);
           break;
         case "12":
           if (type === "3DFACE" || type === "SOLID") e.verts.push([parseFloat(v), NaN]);
@@ -267,14 +272,20 @@ function parseEntities(pairs: Pair[], start: number, end: number): RawEntity[] {
           if (type === "ARC") e.angleEnd = parseFloat(v); // degrés
           break;
         case "72":
-          // Justification horizontale TEXT/MTEXT/ATTRIB (§ 27) — absent du
-          // fichier ⇒ reste à 0 (Left), le défaut DXF.
-          if (type === "TEXT" || type === "MTEXT" || type === "ATTRIB") e.textHJustify = parseInt(v, 10) || 0;
+          // Justification horizontale TEXT/ATTRIB (§ 27) — absent du fichier
+          // ⇒ reste à 0 (Left), le défaut DXF. Pour MTEXT, le code 72 a un
+          // sens DXF DIFFÉRENT (« drawing direction » : 1=gauche→droite,
+          // 3=haut→bas, 5=par style) — presque toujours 1, donc quasiment
+          // toujours ≠ 0 : le lire comme une justification déclenchait à tort
+          // le repli sur `textAlign2` pour la quasi-totalité des MTEXT (§ 28 bis).
+          if (type === "TEXT" || type === "ATTRIB") e.textHJustify = parseInt(v, 10) || 0;
           break;
         case "73":
-          // Justification verticale TEXT/MTEXT/ATTRIB (§ 27 bis) — absente du
-          // fichier ⇒ reste à 0 (Baseline), le défaut DXF.
-          if (type === "TEXT" || type === "MTEXT" || type === "ATTRIB") e.textVJustify = parseInt(v, 10) || 0;
+          // Justification verticale TEXT/ATTRIB (§ 27 bis) — absente du
+          // fichier ⇒ reste à 0 (Baseline), le défaut DXF. Pour MTEXT, le
+          // code 73 est le style d'interlignage (« line spacing style »,
+          // 1=Au moins, 2=Exact), sans rapport avec une justification (§ 28 bis).
+          if (type === "TEXT" || type === "ATTRIB") e.textVJustify = parseInt(v, 10) || 0;
           break;
       }
     }
@@ -542,10 +553,13 @@ function emitGeometryFeatures(
     // à émettre comme texte pour ne pas la perdre. ATTDEF (gabarit d'attribut dans
     // la définition de bloc) reste écarté : c'est une invite, pas une donnée.
     if (e.type === "TEXT" || e.type === "MTEXT" || e.type === "ATTRIB") {
-      // Point d'ancrage RÉEL : dès que la justification (72/73) n'est pas
-      // Left/Baseline par défaut, la norme DXF fait foi du SECOND point
-      // d'alignement (11/21), pas du premier (10/20 — un repli hérité, pas la
-      // position de rendu) — cf. § 27 bis, docs/CONCEPTS-TRAITEMENT-DXF.md.
+      // Point d'ancrage RÉEL (TEXT/ATTRIB) : dès que la justification (72/73)
+      // n'est pas Left/Baseline par défaut, la norme DXF fait foi du SECOND
+      // point d'alignement (11/21), pas du premier (10/20 — un repli hérité,
+      // pas la position de rendu) — cf. § 27 bis, docs/CONCEPTS-TRAITEMENT-DXF.md.
+      // MTEXT ne renseigne jamais `textHJustify`/`textVJustify`/`textAlign2`
+      // (§ 28 bis : les codes 72/73/11/21 ont un sens DXF différent pour ce
+      // type) → `pt` retombe toujours sur le point d'insertion (10/20).
       const align2Valid = e.textAlign2 && e.textAlign2.every((n) => Number.isFinite(n));
       const pt =
         (e.textHJustify !== 0 || e.textVJustify !== 0) && align2Valid ? e.textAlign2! : e.verts[0];

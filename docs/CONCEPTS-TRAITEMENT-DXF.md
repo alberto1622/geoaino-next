@@ -2988,5 +2988,81 @@ a bien été polygonisée).
 
 ---
 
+## 28 bis. MTEXT « Numéro Parcelle » téléporté près de (0,0) : les codes 11/21/72/73 n'ont PAS le même sens que pour TEXT
+
+**Problème métier** : le § 28 a écarté la piste « zone entière perdue » —
+confirmé par l'utilisateur (les contours de parcelles sont bien visibles sur
+la carte pour GUINAW RAIL NORD/SUD et THIAROYE GARE, seul le numéro/NICAD
+manque). Comparaison directe du DXF réel entre ces 3 communes et THIAROYE
+SUR MER (qui fonctionne) : calque `Numéro Parcelle` identiquement nommé,
+`hjustify`/`vjustify` identiques (1/2) partout — SEULE différence mesurable :
+la proportion d'étiquettes MTEXT (vs TEXT) est nettement plus élevée dans
+les 3 communes en échec (63–76 % du calque numéro) que dans la commune
+témoin (52 %). Extraction brute d'un MTEXT réel du calque numéro :
+```
+10/20 (point d'insertion) : 246412.069419 / 1633473.462631   ← position réelle
+11/21                      : 0.999997 / 0.002309              ← PAS une position
+71 : 5   72 : 1   73 : 2   44 : 0.6   40 : 1.0
+```
+Le point 11/21 vaut environ (1, 0), une norme de vecteur unitaire, PAS une
+coordonnée UTM plausible.
+
+**Cause technique** : le lecteur natif (`dxf-native.ts`) traite TEXT, MTEXT
+et ATTRIB de façon identique pour les codes de groupe 11/21/72/73 (ajoutés au
+§ 27/§ 27 bis) — or la norme DXF donne un sens COMPLÈTEMENT différent à ces
+mêmes numéros de code selon le type d'entité :
+
+| Code | TEXT/ATTRIB (sous-classe `AcDbText`) | MTEXT (sous-classe `AcDbMText`) |
+|---|---|---|
+| 11/21/31 | second point d'alignement (une **position** absolue, cf. § 27 bis) | vecteur unitaire de direction du texte (« X-axis direction ») — **pas une position** |
+| 72 | justification horizontale (0=Left…5=Fit) | sens d'écriture (« drawing direction » : 1=gauche→droite, 3=haut→bas, 5=par style) — presque toujours `1` |
+| 73 | justification verticale (0=Baseline…3=Top) | style d'interlignage (« line spacing style » : 1=Au moins, 2=Exact) |
+
+Le code exigeait seulement `textHJustify !== 0 || textVJustify !== 0` pour
+basculer sur `textAlign2` comme ancrage — condition presque TOUJOURS vraie
+pour un MTEXT (72=1 quasi systématique, un simple sens d'écriture, pas un
+indicateur d'absence de justification). Résultat : pour la quasi-totalité
+des MTEXT de ce calque, `textAlign2` (en réalité le vecteur direction
+`[0.999997, 0.002309]`) remplaçait le vrai point d'insertion — l'étiquette
+«00360 », par exemple, était émise en `(0.999997, 0.002309)` au lieu de
+`(246412, 1633473)` : à des années-lumière de toute parcelle réelle
+(hors de l'emprise Sénégal UTM28N). `resolveNumeroLabelPolygon` ne trouve
+alors ni contenant ni voisin candidat dans son rayon de recherche → le
+numéro est purement et simplement perdu, sans même remonter dans
+`nbTextesHorsParcelle` (le point n'est pas juste « hors parcelle », il est
+hors de la planète cadastrale).
+
+**Solution** (`dxf-native.ts`) : retirer `MTEXT` des trois branches de
+capture (codes 11, 21, 72, 73) — seuls `TEXT`/`ATTRIB` renseignent désormais
+`textAlign2`/`textHJustify`/`textVJustify`. Pour MTEXT, ces trois champs
+restent à leur valeur par défaut (`null`/`0`/`0`), et l'émission
+(`e.type === "TEXT" || "MTEXT" || "ATTRIB"`, inchangée) retombe alors
+TOUJOURS sur le point d'insertion réel (10/20, `e.verts[0]`) pour ce type —
+comportement correct et déjà prévu par le commentaire du § 27 bis
+(« repli … MTEXT »), simplement empêché par ce bug de collision de codes.
+
+**Pourquoi (pièges inclus)** : la leçon du § 27 bis restait juste en soi
+(« le point 10/20 n'est pas toujours le centre visuel du texte ») mais son
+implémentation a été généralisée à MTEXT par SIMPLE COMMODITÉ SYNTAXIQUE
+(même branche `if (type === "TEXT" || type === "MTEXT" || type ===
+"ATTRIB")` réutilisée pour 3 types de group codes) sans revérifier que la
+norme DXF attribue un sens DIFFÉRENT à ces codes pour MTEXT — un piège
+classique : le NUMÉRO de code de groupe DXF n'est PAS un identifiant stable
+de sémantique, son sens dépend de la sous-classe (`AcDbText` vs
+`AcDbMText`) qui le porte. Second piège, qui explique pourquoi ce bug est
+resté invisible sur THIAROYE SUR MER (déjà testé au § 27 bis) : cette
+commune a une proportion de MTEXT plus faible ET son mélange TEXT/MTEXT a
+suffi à faire remonter assez de numéros pour que le score de conformité
+reste globalement correct — un bug qui casse une PROPORTION d'étiquettes
+(pas 100 % du fichier) peut donc rester invisible tant qu'on ne compare pas
+commune par commune. MTEXT reste donc, comme au § 27 bis, hors du champ de
+la correction fine par second point d'alignement : son point d'ancrage
+« exact » selon son attachement (code 71, jamais lu ici) resterait à
+implémenter séparément si une précision supérieure au simple point
+d'insertion s'avérait nécessaire pour MTEXT — mais au moins il n'est plus
+téléporté hors du Sénégal.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*
