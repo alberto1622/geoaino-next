@@ -1,4 +1,11 @@
-## Traitement des shapefiles
+# Gestion des sections
+
+La gestion des sections est promordiales pour la gestion des parcelles car elle permet de geolocaliser les parcelles et de construire les nicad à partir du syscol, numéro section et numéro parcelle.
+On peut les contruire en chargeant des fichiers de type shapefile ou dxf.
+
+# Gestion des parcelles
+
+## Traitement des shapefiles et dxf
 
 ### 1. Selection des parcelles en shapefile
 
@@ -36,3 +43,10 @@ Cette erreur est dû au fait que le calques "numéro parcelle" a été utilisé 
 Il est necessaire de fait une vérification depuis les plans de microstation pour appliquer des modifications.
 Exemple: la parcelle ci après contient 2 numero (00447-00702) et on peut voir la mention "NICD MERE" sur l'une.
 ![alt text](image-8.png)
+
+### Duplication de numero parcelle
+
+Dans cette parcelle, la première parcelle contient un numéro qui est dupliqué dans la deuxieme. Ce dernier contient deux numéro.
+![alt text](image-9.png)
+
+**Remarque:** Les erreurs duplications, plusieurs numero et numéro manquant d'une parcelle sont souvant liées entre eux.
