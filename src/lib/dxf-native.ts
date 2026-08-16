@@ -55,9 +55,19 @@ interface RawEntity {
   textHeight: number | null;
   // TEXT/MTEXT/ATTRIB : justification horizontale (code groupe 72 — 0=Left
   // [par défaut DXF si absent], 1=Center, 2=Right, 3=Aligned, 4=Middle,
-  // 5=Fit). Détermine si le point d'insertion (10/20) est le DÉBUT, le
-  // CENTRE ou la FIN du texte — cf. § 27, docs/CONCEPTS-TRAITEMENT-DXF.md.
+  // 5=Fit). Détermine si le point d'ancrage (10/20 ou 11/21 selon ci-dessous)
+  // est le DÉBUT, le CENTRE ou la FIN du texte — cf. § 27,
+  // docs/CONCEPTS-TRAITEMENT-DXF.md.
   textHJustify: number;
+  // TEXT/MTEXT/ATTRIB : justification verticale (code groupe 73 — 0=Baseline
+  // [défaut], 1=Bottom, 2=Middle, 3=Top).
+  textVJustify: number;
+  // TEXT/MTEXT/ATTRIB : SECOND point d'alignement (codes groupe 11/21) — fait
+  // foi comme point d'ancrage RÉEL dès que `textHJustify`/`textVJustify` ≠ 0
+  // (norme DXF : le premier point, 10/20, n'est alors qu'un repli hérité pour
+  // les lecteurs ne comprenant pas la justification, pas la position de rendu
+  // réelle) — cf. § 27 bis, docs/CONCEPTS-TRAITEMENT-DXF.md.
+  textAlign2: Pt | null;
 }
 
 interface BlockDef {
@@ -115,6 +125,8 @@ function newEntity(type: string): RawEntity {
     bulges: [],
     textHeight: null,
     textHJustify: 0,
+    textVJustify: 0,
+    textAlign2: null,
   };
 }
 
@@ -205,13 +217,16 @@ function parseEntities(pairs: Pair[], start: number, end: number): RawEntity[] {
           endX = parseFloat(v);
           // 3DFACE/SOLID : 2ᵉ sommet (codes 11/21, 12/22, 13/23 = coins 2 à 4).
           // ELLIPSE : extrémité du grand axe (relative au centre).
+          // TEXT/MTEXT/ATTRIB : second point d'alignement (§ 27 bis).
           if (type === "3DFACE" || type === "SOLID") e.verts.push([endX, NaN]);
           else if (type === "ELLIPSE") e.major = [endX, NaN];
+          else if (type === "TEXT" || type === "MTEXT" || type === "ATTRIB") e.textAlign2 = [endX, NaN];
           break;
         case "21":
           if (type === "LINE") e.verts[1] = [endX ?? 0, parseFloat(v)];
           else if ((type === "3DFACE" || type === "SOLID") && e.verts.length) e.verts[e.verts.length - 1][1] = parseFloat(v);
           else if (type === "ELLIPSE" && e.major) e.major[1] = parseFloat(v);
+          else if ((type === "TEXT" || type === "MTEXT" || type === "ATTRIB") && e.textAlign2) e.textAlign2[1] = parseFloat(v);
           break;
         case "12":
           if (type === "3DFACE" || type === "SOLID") e.verts.push([parseFloat(v), NaN]);
@@ -255,6 +270,11 @@ function parseEntities(pairs: Pair[], start: number, end: number): RawEntity[] {
           // Justification horizontale TEXT/MTEXT/ATTRIB (§ 27) — absent du
           // fichier ⇒ reste à 0 (Left), le défaut DXF.
           if (type === "TEXT" || type === "MTEXT" || type === "ATTRIB") e.textHJustify = parseInt(v, 10) || 0;
+          break;
+        case "73":
+          // Justification verticale TEXT/MTEXT/ATTRIB (§ 27 bis) — absente du
+          // fichier ⇒ reste à 0 (Baseline), le défaut DXF.
+          if (type === "TEXT" || type === "MTEXT" || type === "ATTRIB") e.textVJustify = parseInt(v, 10) || 0;
           break;
       }
     }
@@ -522,7 +542,13 @@ function emitGeometryFeatures(
     // à émettre comme texte pour ne pas la perdre. ATTDEF (gabarit d'attribut dans
     // la définition de bloc) reste écarté : c'est une invite, pas une donnée.
     if (e.type === "TEXT" || e.type === "MTEXT" || e.type === "ATTRIB") {
-      const pt = e.verts[0];
+      // Point d'ancrage RÉEL : dès que la justification (72/73) n'est pas
+      // Left/Baseline par défaut, la norme DXF fait foi du SECOND point
+      // d'alignement (11/21), pas du premier (10/20 — un repli hérité, pas la
+      // position de rendu) — cf. § 27 bis, docs/CONCEPTS-TRAITEMENT-DXF.md.
+      const align2Valid = e.textAlign2 && e.textAlign2.every((n) => Number.isFinite(n));
+      const pt =
+        (e.textHJustify !== 0 || e.textVJustify !== 0) && align2Valid ? e.textAlign2! : e.verts[0];
       if (!pt || pt.some((n) => !Number.isFinite(n))) { skip("texte_sans_point"); continue; }
       const text = decodeMText(e.text ?? "").trim();
       if (!text) { skip("texte_vide"); continue; }

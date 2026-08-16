@@ -2795,5 +2795,67 @@ débordement, pas à en créer un nouveau plus grand.
 
 ---
 
+## 27 bis. Le point 10/20 n'est PAS le centre d'un texte Center-justifié : second point d'alignement (11/21) ignoré
+
+**Problème métier** : le § 27 corrigeait la DIRECTION d'extension du texte
+selon la justification, mais le cas THIAROYE SUR MER/section 006/00056↔00057
+persistait — inspection directe du DXF réel (script Node ad hoc, hors
+pipeline) : la totalité des étiquettes du calque « Numéro Parcelle » de ce
+fichier ont `72 (hjustify) = 1` (Center) ET `73 (vjustify) = 2` (Middle), PAS
+0/0 (Left/Baseline) comme supposé par défaut. Le § 27 traitait bien ce cas
+comme « centré sur le point » — mais LE POINT LUI-MÊME (10/20) n'est pas le
+centre visuel du texte pour une justification non-Left : la norme DXF réserve
+alors cette position au SECOND point d'alignement (codes groupe 11/21), que
+le lecteur natif ne capturait pas du tout. Pour l'occurrence inspectée, 10/20
+et 11/21 diffèrent d'environ 3,5 m en X et 0,76 m en Y — un écart du même
+ordre de grandeur que la largeur totale estimée du texte (~4,5 m pour 5
+caractères) : le rectangle/ligne de caractères du § 26/§ 27 était donc
+construit à une position quasi entièrement DÉCALÉE de la position réelle du
+texte, indépendamment de toute correction de direction.
+
+**Cause technique** : la norme DXF (groupe TEXT, sous-classe AcDbText) est
+explicite : le point 10/20 (« first alignment point ») ne fait foi QUE pour
+une justification Left/Baseline par défaut (72=0 ET 73=0) ; dès que l'une des
+deux est non nulle, c'est le point 11/21 (« second alignment point ») qui
+donne la position de rendu réelle — 10/20 n'est alors qu'un repli hérité pour
+les lecteurs DXF ne comprenant pas la justification (souvent recopié à une
+valeur arbitraire ou approximative par l'exportateur). `dxf-native.ts` ne
+capturait que 10/20 pour TEXT/MTEXT/ATTRIB (via le traitement générique des
+codes 10/20 partagé par tous les types d'entité) ; les codes 11/21 n'étaient
+lus que pour 3DFACE/SOLID/ELLIPSE.
+
+**Solution** (`dxf-native.ts`) :
+- `RawEntity.textAlign2: Pt | null` — second point d'alignement, capturé
+  UNIQUEMENT pour TEXT/MTEXT/ATTRIB via de nouvelles branches sur les codes
+  11/21 (qui gardent leur sens existant pour 3DFACE/SOLID/ELLIPSE — chaînes
+  `else if` indépendantes, aucune collision).
+- `RawEntity.textVJustify` — justification verticale (code groupe 73, défaut
+  0/Baseline), capturée symétriquement à `textHJustify` (§ 27) : le second
+  point fait foi dès que L'UNE OU L'AUTRE des deux justifications est non
+  nulle (règle DXF exacte, pas seulement l'horizontale).
+- Point d'ancrage effectivement émis (`emitText`) : `textAlign2` si
+  (`textHJustify !== 0 || textVJustify !== 0`) ET que ses deux coordonnées
+  sont finies, sinon repli sur le premier point (10/20) — cas Left/Baseline
+  par défaut, ou entité sans second point valide (ex. MTEXT, qui n'a jamais
+  de 11/21 dans ce fichier — cf. piège ci-dessous).
+
+**Pourquoi (pièges inclus)** : MTEXT n'utilise PAS le système à deux points
+de TEXT — son point d'ancrage relatif au texte est déterminé par un code
+groupe DIFFÉRENT (71, « attachment point »), non capturé ici ; `textAlign2`
+reste donc toujours `null` pour MTEXT dans ce fichier (confirmé par
+inspection directe), et le repli sur 10/20 s'applique systématiquement —
+correct pour MTEXT tant qu'aucune sémantique de code 71 n'est ajoutée
+séparément, mais signifie que MTEXT reste, pour l'instant, hors du champ de
+cette correction précise (minoritaire dans ce fichier : quelques dizaines
+d'occurrences MTEXT contre plusieurs centaines de TEXT sur le même calque).
+Second piège : la garde `align2Valid` (coordonnées finies) est nécessaire
+car un exportateur peut émettre 72/73 non nuls SANS jamais écrire les codes
+11/21 correspondants (texte réellement Left mais avec un indicateur de
+justification résiduel/erroné) — sans cette garde, `pt` deviendrait
+`[NaN, NaN]` et l'étiquette serait purement et simplement perdue
+(`skip("texte_sans_point")`), pire que le comportement d'avant ce correctif.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*
