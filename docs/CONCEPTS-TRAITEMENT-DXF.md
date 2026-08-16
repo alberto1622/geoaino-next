@@ -3159,6 +3159,17 @@ fonctionnait — `ImportJob.layerMapping` (stocké), `runDxfImportJob`
 - `src/app/api/cadastre/sections/import/route.ts` (l'ancienne route
   multipart sans mappage) est supprimée : son seul appelant a été récrit,
   elle n'avait plus de raison d'exister en parallèle du nouveau parcours.
+- `LayerMappingModal` reçoit un prop optionnel `allowedClasses` (filtre les
+  options du menu déroulant + « Ignorer » toujours présent) : pour les
+  sections, seules « Limites de section » et « N° de section » sont
+  proposées — les 11 autres classes DGID (limites de parcelle, bâtiment,
+  piscine…) n'ont aucun sens pour ce traitement (`sectionsOnly: true`) et
+  n'auraient fait que dérouter l'utilisateur. Une proposition automatique
+  hors du périmètre restreint (calque reconnu comme `limites_parcelles` par
+  exemple) retombe sur « Ignorer » à l'initialisation, plutôt que de rester
+  en mémoire sans jamais apparaître dans le menu filtré — sans ce repli, un
+  mappage hors-périmètre aurait été soumis tel quel au clic sans que
+  l'utilisateur ne l'ait jamais vu dans la liste.
 
 **Pourquoi (pièges inclus)** : ce n'était PAS un problème de pipeline de
 traitement (celui-ci acceptait déjà `layerMapping` de bout en bout, comme le

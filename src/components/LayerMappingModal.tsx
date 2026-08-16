@@ -36,6 +36,13 @@ interface Props {
   onCancel: () => void;
   /** Reçoit le mappage validé { calque_normalisé → classe | "ignore" }. */
   onConfirm: (mapping: Record<string, string>) => void;
+  /**
+   * Restreint les classes proposées dans le menu déroulant (ex. sections
+   * seules : `["limites_sections", "numero_section"]`) — « Ignorer » reste
+   * toujours disponible. Par défaut (omis) : toutes les classes DGID, comme
+   * pour le pipeline parcelles.
+   */
+  allowedClasses?: string[];
 }
 
 /** Badge indiquant l'origine de la proposition automatique. */
@@ -59,10 +66,26 @@ function MethodBadge({ method }: { method: LayerInventoryEntry["method"] }) {
  * avant de lancer le traitement. Chaque ligne est pré-remplie avec la classe
  * proposée automatiquement (ou « Ignorer » si le calque n'est pas reconnu).
  */
-export default function LayerMappingModal({ fileName, layers, onCancel, onConfirm }: Props) {
+export default function LayerMappingModal({ fileName, layers, onCancel, onConfirm, allowedClasses }: Props) {
+  const classOptions = useMemo(
+    () =>
+      allowedClasses
+        ? CLASS_OPTIONS.filter((o) => o.value === "ignore" || allowedClasses.includes(o.value))
+        : CLASS_OPTIONS,
+    [allowedClasses],
+  );
+
   const [mapping, setMapping] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
-    for (const l of layers) init[l.layer] = l.proposedClass ?? "ignore";
+    for (const l of layers) {
+      const proposed = l.proposedClass ?? "ignore";
+      // Une proposition automatique hors du périmètre restreint (ex. calque
+      // reconnu comme "limites_parcelles" alors que seules les classes
+      // section sont proposées ici) doit retomber sur "Ignorer" — sinon elle
+      // resterait en mémoire (état initial) sans jamais apparaître dans le
+      // menu déroulant filtré, et serait soumise telle quelle au clic.
+      init[l.layer] = !allowedClasses || allowedClasses.includes(proposed) ? proposed : "ignore";
+    }
     return init;
   });
 
@@ -123,7 +146,7 @@ export default function LayerMappingModal({ fileName, layers, onCancel, onConfir
                 onChange={(e) => setMapping((m) => ({ ...m, [l.layer]: e.target.value }))}
                 className="shrink-0 w-52 rounded-md border border-white/10 bg-[oklch(0.16_0.02_240)] px-2 py-1.5 text-sm text-white outline-none focus:border-cyan-400/60"
               >
-                {CLASS_OPTIONS.map((o) => (
+                {classOptions.map((o) => (
                   <option key={o.value} value={o.value}>
                     {o.label}
                   </option>
