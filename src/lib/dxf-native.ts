@@ -53,6 +53,11 @@ interface RawEntity {
   // docs/CONCEPTS-TRAITEMENT-DXF.md). Non corrigée par l'échelle d'un bloc
   // INSERT parent (repli volontaire — cf. commentaire à l'appel de `emitText`).
   textHeight: number | null;
+  // TEXT/MTEXT/ATTRIB : justification horizontale (code groupe 72 — 0=Left
+  // [par défaut DXF si absent], 1=Center, 2=Right, 3=Aligned, 4=Middle,
+  // 5=Fit). Détermine si le point d'insertion (10/20) est le DÉBUT, le
+  // CENTRE ou la FIN du texte — cf. § 27, docs/CONCEPTS-TRAITEMENT-DXF.md.
+  textHJustify: number;
 }
 
 interface BlockDef {
@@ -109,6 +114,7 @@ function newEntity(type: string): RawEntity {
     ratio: null,
     bulges: [],
     textHeight: null,
+    textHJustify: 0,
   };
 }
 
@@ -244,6 +250,11 @@ function parseEntities(pairs: Pair[], start: number, end: number): RawEntity[] {
           break;
         case "51":
           if (type === "ARC") e.angleEnd = parseFloat(v); // degrés
+          break;
+        case "72":
+          // Justification horizontale TEXT/MTEXT/ATTRIB (§ 27) — absent du
+          // fichier ⇒ reste à 0 (Left), le défaut DXF.
+          if (type === "TEXT" || type === "MTEXT" || type === "ATTRIB") e.textHJustify = parseInt(v, 10) || 0;
           break;
       }
     }
@@ -486,11 +497,11 @@ function emitGeometryFeatures(
       out.push({ type: "Feature", geometry, properties: { Layer: layer } });
       if (census) bump(census.emitted, e.type);
     };
-    const emitText = (text: string, pt: Pt, height: number | null): void => {
+    const emitText = (text: string, pt: Pt, height: number | null, hJustify: number): void => {
       out.push({
         type: "Feature",
         geometry: { type: "Point", coordinates: pt },
-        properties: { Layer: layer, Text: text, Height: height },
+        properties: { Layer: layer, Text: text, Height: height, HJustify: hJustify },
       });
       if (census) bump(census.emitted, e.type);
     };
@@ -515,7 +526,7 @@ function emitGeometryFeatures(
       if (!pt || pt.some((n) => !Number.isFinite(n))) { skip("texte_sans_point"); continue; }
       const text = decodeMText(e.text ?? "").trim();
       if (!text) { skip("texte_vide"); continue; }
-      emitText(text, xform(pt), e.textHeight);
+      emitText(text, xform(pt), e.textHeight, e.textHJustify);
       continue;
     }
 
