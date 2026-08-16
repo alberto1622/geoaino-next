@@ -114,6 +114,10 @@ export interface DxfIngestionReport {
   nbNumeroNonConforme: number;
   nbPiscines: number;
   nbParcellesPolygonisees: number;
+  /** Zones dont le réseau de limites n'a pas pu être nodé/polygonisé, même après
+   *  subdivision maximale (cf. `polygonizeTiled` § 28) : TOUTES les parcelles de
+   *  ces zones (géométrie + numéro) sont absentes de cet import. */
+  nbZonesPolygonisationEchouee: number;
   nbPolygonesEnveloppeIgnores: number;
   nbHorsEmprise: number;
   nbPolylignesOuvertesIgnorees: number;
@@ -1050,9 +1054,14 @@ function polygonizeBoundaries(
   parcelPolygons: RawPolygon[],
   sectionPolygons: RawPolygon[],
   piscinePolygons: RawPolygon[]
-): { reconstructed: number; oversized: number } {
+): {
+  reconstructed: number;
+  oversized: number;
+  droppedRegions: Array<{ x0: number; y0: number; x1: number; y1: number; segments: number }>;
+} {
   let reconstructed = 0;
   let oversized = 0;
+  const droppedRegions: Array<{ x0: number; y0: number; x1: number; y1: number; segments: number }> = [];
 
   // Arêtes des polygones de section « authored » (polylignes fermées/3DFACE du
   // calque sections, routés en polygones AVANT cet appel) : une limite mitoyenne
@@ -1110,6 +1119,7 @@ function polygonizeBoundaries(
       polygons = polygonizeLines(net.lines, {
         minAreaM2: POLYGONIZE_MIN_AREA_M2,
         ...(net.snapTol != null ? { snapToleranceM: net.snapTol } : {}),
+        droppedRegions,
       });
     } catch (err) {
       console.warn(`[parcelle-ingestion] polygonisation échouée pour ${net.label}:`, err);
@@ -1132,7 +1142,7 @@ function polygonizeBoundaries(
     }
   }
 
-  return { reconstructed, oversized };
+  return { reconstructed, oversized, droppedRegions };
 }
 
 /** Point représentatif garanti à l'intérieur de la géométrie (pour les jointures). */
@@ -1480,7 +1490,7 @@ function blankIngestionReport(warnings: string[] = []): DxfIngestionReport {
     nbParcelles: 0, nbSansNumero: 0, nbSansDenomination: 0, nbSansProprietaire: 0,
     nbSansSection: 0, nbSansCommune2026: 0, nbCommune2026Approx: 0,
     nbSectionDepuisTableSections: 0, nbSectionApprox: 0, nbNumeroNonConforme: 0,
-    nbPiscines: 0, nbParcellesPolygonisees: 0, nbPolygonesEnveloppeIgnores: 0, nbHorsEmprise: 0,
+    nbPiscines: 0, nbParcellesPolygonisees: 0, nbZonesPolygonisationEchouee: 0, nbPolygonesEnveloppeIgnores: 0, nbHorsEmprise: 0,
     nbPolylignesOuvertesIgnorees: 0, nbTextesHorsParcelle: 0, nbNumerosRecuperesParDebordement: 0,
     nbParcellesMultiNumeros: 0,
     nbPolygonesInvalidesRejetes: 0,
@@ -1523,8 +1533,26 @@ export function buildParcellesFromFc32628(
   // Polygonisation des limites dessinées en segments séparés (DGN→DXF) :
   // reconstruit les parcelles/sections/piscines fermées et les ajoute aux
   // couches correspondantes.
-  const { reconstructed: nbParcellesPolygonisees, oversized: nbPolygonesEnveloppeIgnores } =
-    polygonizeBoundaries(boundaryLinesByClass, parcelPolygons, sectionPolygons, piscinePolygons);
+  const {
+    reconstructed: nbParcellesPolygonisees,
+    oversized: nbPolygonesEnveloppeIgnores,
+    droppedRegions: nbParcellesZonesIrrecuperablesRegions,
+  } = polygonizeBoundaries(boundaryLinesByClass, parcelPolygons, sectionPolygons, piscinePolygons);
+  const nbZonesPolygonisationEchouee = nbParcellesZonesIrrecuperablesRegions.length;
+  if (nbZonesPolygonisationEchouee > 0) {
+    const totalSegments = nbParcellesZonesIrrecuperablesRegions.reduce((s, r) => s + r.segments, 0);
+    warnings.push(
+      `${nbZonesPolygonisationEchouee} zone(s) n'a/n'ont pas pu être polygonisée(s) (${totalSegments} segments au total, ` +
+        `réseau non nodable même après subdivision maximale) : TOUTES les parcelles de ces zones — géométrie ET ` +
+        `numéros — sont absentes de cet import. Zones concernées : ` +
+        nbParcellesZonesIrrecuperablesRegions
+          .slice(0, 5)
+          .map((r) => `[${r.x0.toFixed(0)},${r.y0.toFixed(0)}–${r.x1.toFixed(0)},${r.y1.toFixed(0)}] (${r.segments} segments)`)
+          .join(" ; ") +
+        (nbZonesPolygonisationEchouee > 5 ? `, +${nbZonesPolygonisationEchouee - 5} autre(s)` : "") +
+        "."
+    );
+  }
   _t = phase(`polygonize (+${nbParcellesPolygonisees})`, _t);
 
   // Validation géométrique : anneaux fermés, aire > plancher, validité topologique.
@@ -1965,6 +1993,7 @@ export function buildParcellesFromFc32628(
       nbNumeroNonConforme,
       nbPiscines,
       nbParcellesPolygonisees,
+      nbZonesPolygonisationEchouee,
       nbPolygonesEnveloppeIgnores: nbParcellesTropGrandes,
       nbHorsEmprise,
       nbPolylignesOuvertesIgnorees,
