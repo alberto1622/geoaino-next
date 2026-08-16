@@ -3187,5 +3187,61 @@ choisie manuellement existe bel et bien, pas pour établir une correspondance).
 
 ---
 
+## 32. `GET /api/analyses` plante avec « Failed to convert rust String into napi string » : pas des données corrompues, des blobs GeoJSON trop lourds cumulés
+
+**Problème métier** : `GET /api/analyses` (liste paginée des analyses)
+plantait systématiquement à partir d'une certaine page, avec l'erreur Prisma
+`Failed to convert rust \`String\` into napi \`string\`` sur
+`prisma.analysis.findMany(...)`. Le message évoque une conversion de chaîne
+ratée, ce qui pointe instinctivement vers des données CORROMPUES (UTF-8
+invalide) — piste naturelle vu l'historique de ce fichier cette même session
+(§ 24, encodage DXF mal deviné).
+
+**Cause technique** : PAS de corruption — chaque ligne, testée
+individuellement (`findUnique`, champ par champ, puis en select complet),
+répondait « OK ». Le vrai facteur : `Analysis.geoJsonData`,
+`.correctedData`, `.errorsData` et `.adminBoundaryData` sont des colonnes
+`@db.Text` qui embarquent le GeoJSON BRUT complet d'un import — pour un DXF
+cadastral 100k+ parcelles (Pikine, Kaolack, Thiès… tous manipulés cette
+session), chacune peut peser **50 à 100 Mo**. La route utilisait `include`
+(qui embarque TOUTES les colonnes par défaut) sans jamais exclure ces blobs.
+Bisection en reproduisant la requête exacte hors application (script Node ad
+hoc, chargement du `.env` en mémoire sans jamais l'afficher) : `take=17`
+(≈ 270 Mo cumulés sur les lignes les plus lourdes) passait, `take=18`
+échouait — la limite n'est PAS liée à une ligne précise mais au volume total
+transféré en un seul appel, qui dépasse une limite interne du pont
+Rust ↔ N-API du moteur Prisma une fois plusieurs gros imports cumulés dans
+la même page.
+
+**Solution** (`src/app/api/analyses/route.ts`) : remplacer `include: {
+_count: ... }` par un `select` explicite listant les champs scalaires
+réellement utiles à une VUE LISTE (id, nom de fichier, statut, compteurs,
+scores, dates…) et EXCLUANT les quatre blobs `@db.Text` — aucun n'est
+nécessaire pour une liste, le détail d'une analyse (carte, corrections) a
+déjà ses propres endpoints dédiés qui ne chargent PAS le GeoJSON brut dans le
+payload de la page (cf. commentaire « Tier 2 » de `map/[analysisId]/page.tsx`).
+Vérifié en rejouant la requête exacte (`take: 20, skip: 0`, même `select`)
+contre la base réelle après correctif : succès, 20 lignes récupérées sur 33.
+`src/app/history/page.tsx` (liste équivalente pour `/history`) utilisait
+DÉJÀ ce même `select` restreint — seule cette route API l'avait omis.
+
+**Pourquoi (pièges inclus)** : le message d'erreur Prisma est trompeur par
+défaut — « conversion de String ratée » évoque presque toujours des données
+invalides (encodage, caractères de contrôle), rarement un problème de VOLUME.
+Piège à éviter : ne pas se fier au message pour orienter le diagnostic sans
+vérifier — bisecter la taille du batch (`take=1,2,3…`) avant de bisecter les
+lignes une par une aurait fait gagner du temps, l'inverse (lignes d'abord)
+a fait perdre plusieurs allers-retours puisque CHAQUE ligne individuelle
+passait le test. Second piège, plus général et déjà documenté deux fois dans
+ce projet (§ 15 mappage de champs, § 29 plafond d'erreurs embarquées) : ne
+JAMAIS utiliser `include`/select-tout par défaut sur un modèle qui porte des
+colonnes `@db.Text` potentiellement énormes (GeoJSON, rapports IA…) dans une
+route de LISTE — toujours un `select` explicite dès qu'un modèle a ce genre
+de colonne, y compris dans les routes qui « marchaient très bien jusque-là »
+(le bug n'apparaît qu'une fois assez de gros imports accumulés en base — un
+projet jeune avec peu de données ne le voit jamais).
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

@@ -11,11 +11,25 @@ export async function GET(req: NextRequest) {
   const offset = parseInt(searchParams.get("offset") ?? "0");
 
   const [rows, total] = await Promise.all([
+    // `select` explicite plutôt que `include` (qui embarque TOUTES les
+    // colonnes par défaut, dont `geoJsonData`/`correctedData`/`errorsData`/
+    // `adminBoundaryData`/`aiReport` — des blobs `@db.Text` pouvant atteindre
+    // plusieurs dizaines/centaines de Mo pour un DXF cadastral 100k+
+    // parcelles). Cumulés sur `take` lignes, ces blobs dépassaient une limite
+    // du pont Rust→N-API de Prisma (« Failed to convert rust String into
+    // napi string »), faisant échouer la liste ENTIÈRE dès qu'assez de gros
+    // imports figuraient dans la page — aucun n'est nécessaire pour une liste
+    // (le détail d'une analyse a ses propres endpoints dédiés, cf. § « Tier 2
+    // : GeoJSON non embarqué dans le payload RSC »).
     prisma.analysis.findMany({
       orderBy: { createdAt: "desc" },
       take: limit,
       skip: offset,
-      include: {
+      select: {
+        id: true, fileName: true, fileFormat: true, fileSize: true, status: true,
+        totalFeatures: true, errorCount: true, conformityScore: true, totalSurface: true,
+        crs: true, commune: true, region: true, geojsonKey: true, geojsonUrl: true,
+        summaryStats: true, processingTime: true, createdAt: true, updatedAt: true,
         _count: { select: { topologicalErrors: true } },
       },
     }),
