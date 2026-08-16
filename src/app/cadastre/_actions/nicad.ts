@@ -29,7 +29,19 @@ import {
   getLastNumParcelleGlobal,
   insertParcelle,
   updateParcelleNicad,
+  getCorrespondanceBySyscol2013,
 } from "@/lib/cadastre/data";
+
+// Libellé lisible du type de changement de correspondance (cf.
+// `recalculerCorrespondancesSpatiales` — data.ts) pour affichage utilisateur.
+const TYPE_CHANGEMENT_LABELS: Record<string, string> = {
+  inchange: "Commune inchangée",
+  renomme: "Commune renommée",
+  rattachement_departement: "Commune rattachée à un autre département",
+  decoupe: "Commune découpée en plusieurs communes 2026",
+  fusion: "Commune fusionnée avec d'autres communes 2013",
+  disparue: "Aucune correspondance 2026 fiable trouvée",
+};
 
 // ─── Vérifier la validité d'un NICAD (format + existence en DB) ───────────────
 export async function verifierNicad(input: { nicad: string }) {
@@ -248,6 +260,108 @@ export async function genererNicad(input: z.infer<typeof genererSchema>) {
           ? `Première parcelle de la section ${sectionPadded}`
           : `Continuation après le numéro ${String(lastNum).padStart(5, "0")}`,
     },
+  };
+}
+
+// ─── Identification automatique de la cible 2026 avant basculement ───────────
+// Principe : l'utilisateur ne renseigne QUE le NICAD 2013. On identifie le
+// Syscol 2013 (extrait du NICAD), on retrouve sa correspondance 2026 (table
+// `cad_correspondance_2013_2026`, calculée par recouvrement spatial — cf.
+// `recalculerCorrespondancesSpatiales`), puis on vérifie que la SECTION du
+// NICAD existe bien telle quelle dans la commune 2026 identifiée. Toute
+// différence (correspondance provisoire/absente, découpage, fusion,
+// rattachement de département, section absente en 2026) est remontée dans
+// `flags` plutôt que masquée ; le basculement n'est PROPOSÉ (`proposition`)
+// que si la correspondance est confirmée, inchangée et la section retrouvée.
+const identifierSchema = z.object({ nicadAncien: z.string().length(16) });
+
+export async function identifierBasculement(input: z.infer<typeof identifierSchema>) {
+  const data = identifierSchema.parse(input);
+  await requireUserId();
+
+  const formatResult = validateNicadFormat(data.nicadAncien);
+  if (!formatResult.valid || !formatResult.parts) {
+    return { success: false as const, error: `NICAD invalide : ${formatResult.errors.join(", ")}` };
+  }
+  const { syscol: syscol2013, section, numParcelle } = formatResult.parts;
+
+  const [commune2013, correspondance] = await Promise.all([
+    getCommune2013BySyscol(syscol2013),
+    getCorrespondanceBySyscol2013(syscol2013),
+  ]);
+
+  const flags: string[] = [];
+  if (!commune2013) {
+    flags.push(`Commune 2013 introuvable pour le Syscol ${syscol2013} — vérifiez le NICAD saisi.`);
+  }
+
+  const syscol2026 = correspondance?.syscol2026 ?? null;
+  let commune2026: Awaited<ReturnType<typeof getCommune2026BySyscol>> = null;
+  let sectionExisteEn2026: boolean | null = null;
+
+  if (!correspondance || !syscol2026) {
+    flags.push(
+      "Aucune correspondance 2026 enregistrée pour cette commune — sélectionnez la commune cible manuellement.",
+    );
+  } else {
+    commune2026 = await getCommune2026BySyscol(syscol2026);
+
+    if (correspondance.statut === "provisoire") {
+      flags.push("Correspondance 2013 → 2026 provisoire (non confirmée) — à vérifier avant basculement.");
+    } else if (correspondance.statut === "sans_correspondance") {
+      flags.push("Correspondance 2013 → 2026 non fiable (recouvrement insuffisant) — à vérifier manuellement.");
+    }
+
+    if (correspondance.typeChangement && correspondance.typeChangement !== "inchange") {
+      const label = TYPE_CHANGEMENT_LABELS[correspondance.typeChangement] ?? correspondance.typeChangement;
+      flags.push(
+        correspondance.typeChangement === "decoupe" && correspondance.cibles2026
+          ? `${label} : ${correspondance.cibles2026}`
+          : label,
+      );
+    }
+
+    const sectionCible = await getSectionByKey(syscol2026, section, "2026");
+    sectionExisteEn2026 = !!sectionCible;
+    if (!sectionCible) {
+      flags.push(
+        `Section ${section} introuvable dans la commune 2026 identifiée (${commune2026?.nomCommune ?? syscol2026}) ` +
+          "— un nouveau numéro de section devra être choisi (cas complexe).",
+      );
+    }
+  }
+
+  const clean =
+    flags.length === 0 &&
+    !!correspondance &&
+    correspondance.statut === "confirme" &&
+    (correspondance.typeChangement === "inchange" || !correspondance.typeChangement) &&
+    sectionExisteEn2026 === true;
+
+  return {
+    success: true as const,
+    nicad: { syscol: syscol2013, section, numParcelle, full: data.nicadAncien },
+    commune2013: commune2013
+      ? { nomCommune: commune2013.nomCommune, region: commune2013.region, departement: commune2013.departement }
+      : null,
+    correspondance: correspondance
+      ? {
+          syscol2026,
+          nomCommune2026: correspondance.nomCommune2026,
+          statut: correspondance.statut,
+          typeChangement: correspondance.typeChangement,
+          departement2013: correspondance.departement,
+          departement2026: correspondance.departement2026,
+        }
+      : null,
+    sectionExisteEn2026,
+    flags,
+    clean,
+    // Pré-remplissage proposé du formulaire (syscol cible identifié — jamais de
+    // section : si l'ancienne section n'existe pas en 2026, c'est à l'utilisateur
+    // de choisir la section cible, cf. flag ci-dessus). L'utilisateur reste libre
+    // de tout corriger avant de confirmer le basculement (bouton "Basculer" séparé).
+    proposition: syscol2026 ? { syscolNouveau: syscol2026 } : null,
   };
 }
 

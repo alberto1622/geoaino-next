@@ -3186,5 +3186,57 @@ celle qu'on vient de tester) plutôt qu'à supposer symétrique.
 
 ---
 
+## 31. Basculement NICAD 2013 → 2026 : identification automatique de la commune 2026 avant de proposer le basculement
+
+**Problème métier** : la page `/cadastre/basculement` demandait à l'utilisateur
+de choisir LUI-MÊME, dans un menu déroulant de toutes les communes 2026, la
+commune cible correspondant à un NICAD 2013 — alors que l'application dispose
+déjà d'une table de correspondance 2013 → 2026 calculée par recouvrement
+spatial (`cad_correspondance_2013_2026`, cf. § 12 du support de cours). Le
+principe attendu : l'utilisateur ne renseigne QUE le NICAD, l'application
+retrouve elle-même le Syscol 2013, identifie sa correspondance 2026 (section,
+Syscol, commune, département, région), remonte toute différence (correspondance
+provisoire/absente, commune découpée/fusionnée/renommée/rattachée à un autre
+département, section absente en 2026), et ne PROPOSE le basculement que si
+tout correspond proprement.
+
+**Cause technique** : `basculerNicadAction` (`_actions/nicad.ts`) exécutait
+directement le basculement une fois `syscolNouveau` fourni, sans jamais
+consulter `cad_correspondance_2013_2026` — la correspondance existait en base
+(alimentée par `recalculerCorrespondancesSpatiales`, page `/cadastre/correspondance`
+séparée) mais n'était jamais lue par le PARCOURS de basculement lui-même.
+
+**Solution** (`_actions/nicad.ts`, `basculement/page.tsx`) :
+- Nouvelle action `identifierBasculement({ nicadAncien })` : extrait le Syscol
+  2013 du NICAD, lit `getCorrespondanceBySyscol2013` + `getCommune2013BySyscol`
+  + `getCommune2026BySyscol`, et vérifie via `getSectionByKey(syscol2026,
+  section, "2026")` que la section du NICAD existe TELLE QUELLE dans la
+  commune 2026 identifiée. Construit une liste `flags` (une entrée par
+  différence détectée : correspondance provisoire/sans correspondance,
+  `typeChangement` ≠ « inchangé » — avec le détail des communes cibles pour un
+  découpage — section absente en 2026) et un booléen `clean` (aucun flag,
+  correspondance confirmée + inchangée + section retrouvée).
+- Page : un bouton « Identifier » (avant « Basculer ») appelle cette action,
+  affiche un encart diagnostic (vert si `clean`, ambre + liste des `flags`
+  sinon) et PRÉ-REMPLIT la commune 2026 cible si une correspondance a été
+  trouvée — jamais la nouvelle section (si l'ancienne n'existe pas en 2026,
+  c'est à l'utilisateur de choisir, cas complexe). Les champs restent
+  éditables : « Identifier » propose, ne décide pas — le clic sur « Basculer »
+  (action existante, inchangée) reste l'étape de confirmation explicite.
+
+**Pourquoi (pièges inclus)** : la donnée nécessaire à l'automatisation
+existait déjà de bout en bout (table de correspondance + statut/typeChangement
+qualifiés par recouvrement spatial) mais dans une page SÉPARÉE
+(`/cadastre/correspondance`) sans aucun pont vers le parcours de basculement
+lui-même — deux fonctionnalités du même domaine qui ne se parlaient pas.
+Piège à ne pas reproduire : ne jamais AUTO-remplir la section cible en cas de
+découpage/section absente — contrairement à la commune (correspondance fiable
+à 1 pour 1 dans le cas confirmé), la bonne section 2026 pour une parcelle
+donnée requiert un jugement humain (quelle section héberge désormais cette
+parcelle), qu'aucune heuristique de ce projet ne peut fournir sans risque de
+mauvaise attribution silencieuse.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

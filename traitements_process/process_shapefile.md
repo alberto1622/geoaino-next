@@ -20,6 +20,8 @@ Le fichier peut être un shapefile (`.shp` + `.dbf`, `.shx`/`.prj` optionnels), 
 
 Un seul champ est à mapper : le **numéro de section** (colonne du `.dbf` correspondant, ex. `num_section`, `num_sect_n`, `section`…). Contrairement aux parcelles, aucun autre champ n'est demandé ici — la commune, la région, le département et le syscol sont résolus automatiquement à l'étape suivante.
 
+![alt text](image-02.png)
+
 <!-- screenshot à ajouter : mappage du champ numéro de section -->
 
 ### 3. Traitement automatique
@@ -39,6 +41,8 @@ Un message récapitule le nombre de sections construites, de chevauchements dét
 
 <!-- screenshot à ajouter : carte des sections -->
 
+![alt text](image-03.png)
+
 Les sections sont coloriées selon leur état :
 
 - **Bleu** : section saine.
@@ -50,6 +54,8 @@ Les sections sont coloriées selon leur état :
 ### 5. Lots stockés
 
 La liste déroulante « Lot stocké » permet de sélectionner un ou plusieurs fichiers déjà importés (avec leur nombre de sections et de chevauchements en attente) pour n'afficher/travailler que sur ceux-ci — utile pour éviter de charger toute la base à chaque fois, ou pour cibler la suppression/l'export d'un lot précis.
+
+![alt text](image-04.png)
 
 <!-- screenshot à ajouter : liste déroulante des lots stockés -->
 
@@ -75,6 +81,8 @@ Une limite mitoyenne absente du fichier source peut faire ressortir deux section
 - **NICAD manquants dans une section** : action dédiée « Attribuer les NICAD manquants », avec aperçu avant application.
 
 Toute action destructrice demande confirmation et reste annulable depuis le panneau Historique.
+
+![alt text](image-05.png)
 
 <!-- screenshot à ajouter : panneau de correction des chevauchements -->
 
