@@ -3053,5 +3053,62 @@ problème en test.
 
 ---
 
+## 30. Mappage des calques pour un DXF/DGN de SECTIONS : la modale existait déjà, seul le `kind` ne circulait pas
+
+**Problème métier** : pour un DXF/DGN de PARCELLES, l'utilisateur peut corriger
+le rattachement calque → classe DGID avant traitement (`LayerMappingModal`,
+utile quand un calque ne porte pas un nom reconnu par les alias de
+`cadastral-filter.ts`). Pour un DXF/DGN de SECTIONS (page `/cadastre/sections`,
+`SectionsClient.tsx`), ce même besoin existe (calques `limites_sections`/
+`numero_section` mal nommés) mais aucun mappage n'était proposé : le fichier
+partait directement en traitement (`POST /api/cadastre/sections/import`, voie
+multipart historique, sans inventaire ni mappage).
+
+**Cause technique** : TOUTE la plomberie nécessaire existait déjà et
+fonctionnait — `ImportJob.layerMapping` (stocké), `runDxfImportJob`
+(`run-job.ts`) lisait déjà `job.layerMapping` et le passait à
+`ingestDxfToParcelles(..., { layerMapping, sectionsOnly: true })` pour
+`job.kind === "sections"` — mais DEUX chaînons manquaient :
+1. `SectionsClient.tsx` envoyait directement le fichier à
+   `/api/cadastre/sections/import` (créait le job sans jamais passer par
+   `/api/import-jobs/inventory`, donc sans jamais montrer `LayerMappingModal`).
+2. Même en construisant l'appel à la main, `POST /api/import-jobs` (la route
+   qui démarre un job depuis un fichier déjà inventorié + un mappage validé)
+   ignorait purement et simplement `body.kind` pour la branche JSON DXF/DGN —
+   seule la branche shapefile (SHP) le lisait. Le job créé retombait donc
+   toujours sur le `kind` par défaut de `createImportJob` (`"parcelles"`),
+   jamais `"sections"`, même si on avait réussi à lui fournir un mappage.
+
+**Solution** :
+- `src/app/api/import-jobs/route.ts` : la branche JSON DXF/DGN lit désormais
+  `body.kind === "sections"` et le transmet à `startJob` (tout autre kind,
+  ou son absence, retombe sur le défaut historique `"parcelles"` — aucun
+  changement de comportement pour le pipeline parcelles existant).
+- `src/components/cadastre/SectionsClient.tsx` : la voie DXF/DGN/ZIP de
+  `handleUpload` appelle maintenant `/api/import-jobs/inventory` (même
+  endpoint que le pipeline parcelles) puis affiche `LayerMappingModal` si des
+  calques sont détectés — `startDxfSectionsJob` lance ensuite le job via
+  `POST /api/import-jobs` avec `kind: "sections"` + le mappage validé (repli
+  direct sans modale si aucun calque n'a pu être lu, même logique que
+  `HomeClient.tsx`).
+- `src/app/api/cadastre/sections/import/route.ts` (l'ancienne route
+  multipart sans mappage) est supprimée : son seul appelant a été récrit,
+  elle n'avait plus de raison d'exister en parallèle du nouveau parcours.
+
+**Pourquoi (pièges inclus)** : ce n'était PAS un problème de pipeline de
+traitement (celui-ci acceptait déjà `layerMapping` de bout en bout, comme le
+prouve le fait que le job shapefile de sections — `startShapefileSectionsJob`,
+qui passe bien `kind: "sections"` en JSON — fonctionnait, lui, sans souci) —
+c'est un piège d'API partiellement générique : `POST /api/import-jobs` gérait
+`kind` pour UNE branche (SHP) et l'ignorait silencieusement pour l'autre
+(DXF/DGN), sans erreur ni avertissement — un job DXF avec mappage démarrait
+« normalement » mais construisait des PARCELLES au lieu de SECTIONS,
+silencieusement. Une route qui accepte un paramètre sur un chemin de code et
+l'ignore sur un autre chemin du MÊME endpoint est un piège classique à
+vérifier explicitement (grep du paramètre sur CHAQUE branche, pas seulement
+celle qu'on vient de tester) plutôt qu'à supposer symétrique.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

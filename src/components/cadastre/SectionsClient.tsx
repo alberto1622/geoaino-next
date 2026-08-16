@@ -37,6 +37,7 @@ import {
   DropdownMenuCheckboxItem,
 } from "@/components/ui/dropdown-menu";
 import FieldMappingModal from "@/components/FieldMappingModal";
+import LayerMappingModal, { type LayerInventoryEntry } from "@/components/LayerMappingModal";
 import type { TargetFieldDef } from "@/lib/import/field-mapping";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -180,6 +181,13 @@ export default function SectionsClient() {
     fields: { name: string; sampleValues: string[] }[];
     targetFields: TargetFieldDef[];
     proposedMapping: Record<string, string>;
+  } | null>(null);
+  // Inventaire des calques DXF/DGN (mappage avant traitement, cf. LayerMappingModal).
+  const [pendingLayerInventory, setPendingLayerInventory] = useState<{
+    fileKey: string;
+    fileName: string;
+    sourceType: "DXF" | "DGN";
+    layers: LayerInventoryEntry[];
   } | null>(null);
   // Lots sélectionnés dans le filtre "Lot stocké" — tableau vide = tous les lots.
   const [selectedSources, setSelectedSources] = useState<string[]>([]);
@@ -425,6 +433,41 @@ export default function SectionsClient() {
     [fetchData, loadBatches],
   );
 
+  // Lance le job DXF/DGN "sections" depuis un fichier déjà téléversé
+  // (inventaire des calques) + mappage validé (ou `undefined` si aucun calque
+  // n'a pu être lu — repli direct, symétrique de `startMappedImport` dans
+  // HomeClient.tsx pour le pipeline parcelles).
+  const startDxfSectionsJob = useCallback(
+    async (
+      inv: { fileKey: string; fileName: string; sourceType: "DXF" | "DGN" },
+      layerMapping: Record<string, string> | undefined,
+    ) => {
+      setPendingLayerInventory(null);
+      setUploading(true);
+      try {
+        const res = await fetch("/api/import-jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileKey: inv.fileKey,
+            fileName: inv.fileName,
+            sourceType: inv.sourceType,
+            kind: "sections",
+            layerMapping,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Import échoué");
+        setSelectedSources([inv.fileName]);
+        setJob({ id: data.jobId, status: data.status, phase: "read", progress: 0 });
+      } catch (err) {
+        toast.error(String(err));
+        setUploading(false);
+      }
+    },
+    [],
+  );
+
   // ── Upload + lancement du job (DXF/DGN/ZIP) ou construction directe (shapefile) ─
   const handleUpload = useCallback(async () => {
     if (files.length === 0) {
@@ -463,24 +506,27 @@ export default function SectionsClient() {
         return;
       }
 
-      const res = await fetch("/api/cadastre/sections/import", {
+      // DXF/DGN/ZIP : inventaire des calques (mappage avant traitement, comme
+      // pour le pipeline parcelles) puis job asynchrone (kind "sections") une
+      // fois le mappage validé — ou lancé directement si aucun calque n'a pu
+      // être lu (repli robuste, même logique que HomeClient.tsx).
+      const invRes = await fetch("/api/import-jobs/inventory", {
         method: "POST",
         body: fd,
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Import échoué");
-      setSelectedSources([data.sourceFichier]);
-      setJob({
-        id: data.jobId,
-        status: data.status,
-        phase: "read",
-        progress: 0,
-      });
+      const inv = await invRes.json();
+      if (!invRes.ok) throw new Error(inv.error || "Inventaire échoué");
+      if (!inv.layers?.length) {
+        await startDxfSectionsJob(inv, undefined);
+        return;
+      }
+      setUploading(false);
+      setPendingLayerInventory(inv);
     } catch (err) {
       toast.error(String(err));
       setUploading(false);
     }
-  }, [files]);
+  }, [files, startDxfSectionsJob]);
 
   const startShapefileSectionsJob = useCallback(
     async (mapping: Record<string, string>) => {
@@ -2421,6 +2467,15 @@ export default function SectionsClient() {
           proposedMapping={pendingShapefileInventory.proposedMapping}
           onCancel={() => setPendingShapefileInventory(null)}
           onConfirm={(mapping) => void startShapefileSectionsJob(mapping)}
+        />
+      )}
+
+      {pendingLayerInventory && (
+        <LayerMappingModal
+          fileName={pendingLayerInventory.fileName}
+          layers={pendingLayerInventory.layers}
+          onCancel={() => setPendingLayerInventory(null)}
+          onConfirm={(mapping) => void startDxfSectionsJob(pendingLayerInventory, mapping)}
         />
       )}
     </div>
