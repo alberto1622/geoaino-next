@@ -2857,5 +2857,71 @@ justification résiduel/erroné) — sans cette garde, `pt` deviendrait
 
 ---
 
+## 28. Zone entière sans AUCUN numéro récupéré (commune dense) : la perte de tuile de polygonisation était silencieuse
+
+**Problème métier** : sur `PLAN CADASTRAL PIKINE.dxf`, les communes GUINAW RAIL
+NORD, GUINAW RAIL SUD et THIAROYE GARE ressortaient avec ZÉRO numéro de
+parcelle récupéré — pas « quelques débordements mal rattachés » comme les
+§ 23/§ 26/§ 27, mais une absence totale, alors que le calque « Numéro
+Parcelle » de ces communes contient bien des milliers d'étiquettes,
+correctement nommées et justifiées EXACTEMENT comme celles de THIAROYE SUR
+MER (commune qui, elle, fonctionne) — inspection directe du DXF confirmant
+`hjustify=1`/`vjustify=2` identiques partout, et le calque de limites
+(`limites_parcelles`) présent avec des milliers de segments dans ces
+communes aussi. Le problème n'était donc PAS le rattachement numéro↔parcelle
+(§ 23/§ 26/§ 27/§ 27 bis) : ces communes n'avaient tout simplement AUCUNE
+parcelle du tout après polygonisation, donc rien à quoi rattacher un numéro.
+
+**Cause technique** : `buildParcellesFromFc32628` fusionne le calque
+`limites_parcelles` de TOUT le fichier (toutes communes confondues) en un
+SEUL réseau de segments, nodé/polygonisé en une fois (`polygonizeBoundaries`
+→ `polygonizeLines`). Pour un fichier départemental de cette taille,
+`polygonizeLines` bascule sur `polygonizeTiled` (§ commentaire historique
+« tuile perdue → tout le centre-ville disparaît », déjà anticipé dans le code
+mais jamais complètement vérifié) : une tuile localement trop dense (cœur
+urbain informel, parcelles minuscules et nombreuses) est subdivisée
+récursivement jusqu'à `DXF_POLYGONIZE_TILE_MIN_SIZE_M` (500 m) ou
+`DXF_POLYGONIZE_TILE_MAX_DEPTH` (8) ; si le noding échoue MÊME à cette
+échelle minimale (auto-intersections non résorbables par le snap-round), la
+région est abandonnée — `droppedTiles`/`droppedSegments` étaient bien
+comptés dans `polygonizeTiled`, mais UNIQUEMENT journalisés via
+`console.warn` (terminal serveur, jamais vu par l'utilisateur) : ni retournés
+à l'appelant, ni ajoutés aux `warnings` de `DxfIngestionReport`. Une commune
+entière pouvait donc disparaître sans qu'aucun signal ne remonte jusqu'à la
+carte ou aux toasts d'import.
+
+**Solution** (`polygonize.ts`, `parcelle-ingestion.ts`) :
+- `HealStats.droppedRegions` — tableau `{x0,y0,x1,y1,segments}` alimenté à
+  chaque abandon de région dans `polygonizeTiled` (en plus du
+  `console.warn` existant, conservé).
+- `PolygonizeOptions.droppedRegions` — tableau optionnel fourni par
+  l'appelant ; `polygonizeLines` l'utilise comme `stats.droppedRegions` au
+  lieu d'un tableau local perdu à la fin de l'appel.
+- `polygonizeBoundaries` passe le MÊME tableau aux 3 réseaux (parcelles,
+  sections, piscines) pour cumuler les pertes, et le retourne à l'appelant.
+- `DxfIngestionReport.nbZonesPolygonisationEchouee` (nouveau champ) + un
+  avertissement dans `warnings` listant les zones perdues (bbox + nombre de
+  segments, 5 premières) dès que ce compte est > 0 — visible dans les toasts
+  d'import comme n'importe quel autre avertissement (cf. § 24, correctif de
+  troncature des toasts).
+
+**Pourquoi (pièges inclus)** : ce correctif est un correctif de VISIBILITÉ,
+pas un correctif qui empêche la perte elle-même — si une zone est
+réellement non-nodable (topologie source invalide au-delà de ce que le
+snap-round à 25 cm peut réparer), elle reste perdue ; l'objectif est de
+transformer un échec SILENCIEUX en échec DIAGNOSTICABLE (bbox exacte +
+nombre de segments → on peut aller regarder cette zone précise dans le DXF
+source plutôt que deviner). Piège : ce compteur ne dit RIEN sur les zones qui
+polygonisent « avec succès » mais produisent un résultat topologiquement
+faux (parcelles fusionnées par undershoot, § « Parcelles fusionnées »,
+limites mitoyennes absentes, § THIARE) — une commune peut très bien avoir
+`nbZonesPolygonisationEchouee = 0` et souffrir d'un tout autre défaut de
+numéro. Il faut donc lire ce nouveau compteur EN PREMIER (élimine la cause
+« zone entière absente ») avant de retomber sur les diagnostics § 23/§ 26/
+§ 27/§ 27 bis (rattachement numéro↔parcelle au sein d'une zone qui, elle,
+a bien été polygonisée).
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

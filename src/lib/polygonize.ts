@@ -65,6 +65,13 @@ export interface PolygonizeOptions {
    * micro-trous. 0 = désactivé.
    */
   snapToleranceM?: number;
+  /**
+   * Rempli (si fourni) par les régions abandonnées faute de noding possible
+   * même après subdivision maximale — TOUTES les parcelles qu'elles
+   * dessinaient sont alors perdues. Sans ce tableau, seul un `console.warn`
+   * (serveur) signalait la perte : invisible depuis le navigateur (§ 28).
+   */
+  droppedRegions?: Array<{ x0: number; y0: number; x1: number; y1: number; segments: number }>;
 }
 
 const TILE_THRESHOLD = Number(process.env.DXF_POLYGONIZE_TILE_THRESHOLD || 20000);
@@ -152,6 +159,14 @@ interface HealStats {
   endpointsClustered: number;
   /** Extrémités raccrochées à un segment/sommet voisin (undershoot en T). */
   endpointsSnapped: number;
+  /**
+   * Régions abandonnées faute de noding possible, même après subdivision
+   * maximale (cf. `polygonizeTiled`) — TOUS les segments de la région sont
+   * alors perdus, avec toutes les parcelles qu'ils dessinaient. Auparavant
+   * seulement `console.warn` (invisible du navigateur) : exposé ici pour
+   * remonter jusqu'aux avertissements d'ingestion (§ 28).
+   */
+  droppedRegions: Array<{ x0: number; y0: number; x1: number; y1: number; segments: number }>;
 }
 
 /**
@@ -544,6 +559,7 @@ function polygonizeTiled(
       } else {
         droppedTiles++;
         droppedSegments += coords.length;
+        stats?.droppedRegions.push({ x0: rx0, y0: ry0, x1: rx1, y1: ry1, segments: coords.length });
         console.warn(
           `[polygonize] région ${rx0.toFixed(0)},${ry0.toFixed(0)}–${rx1.toFixed(0)},${ry1.toFixed(0)} ignorée (${coords.length} segments, profondeur ${depth}) : ${
             err instanceof Error ? err.message : err
@@ -657,7 +673,11 @@ export function polygonizeLines(
   }
   if (usable.length === 0) return [];
 
-  const stats: HealStats = { endpointsClustered: 0, endpointsSnapped: 0 };
+  const stats: HealStats = {
+    endpointsClustered: 0,
+    endpointsSnapped: 0,
+    droppedRegions: options.droppedRegions ?? [],
+  };
   const result =
     usable.length <= tileThreshold
       ? polygonizeChunk(usable, minArea, maxArea, undefined, snapTol, stats)
