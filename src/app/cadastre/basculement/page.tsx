@@ -53,7 +53,10 @@ export default function BasculementPage() {
           toast.error(res.error ?? "Identification échouée.");
           return;
         }
-        if (res.proposition) setSyscolNouveau(res.proposition.syscolNouveau);
+        if (res.proposition) {
+          setSyscolNouveau(res.proposition.syscolNouveau);
+          setSectionNouvelle(res.proposition.sectionNouvelle ?? "");
+        }
         if (res.clean) toast.success("Correspondance 2026 identifiée sans différence.");
         else if (res.flags.length > 0) toast.warning(`${res.flags.length} différence(s) à vérifier.`);
       } catch {
@@ -205,6 +208,11 @@ export default function BasculementPage() {
             <div>
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
                 Nouvelle section (cas complexe, optionnel)
+                {identification?.success && identification.proposition?.sectionNouvelle && (
+                  <span className="ml-1 font-normal text-primary">
+                    (identifiée par recouvrement spatial)
+                  </span>
+                )}
               </label>
               <Input
                 value={sectionNouvelle}

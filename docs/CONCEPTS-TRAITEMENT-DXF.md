@@ -3141,35 +3141,49 @@ consulter `cad_correspondance_2013_2026` — la correspondance existait en base
 (alimentée par `recalculerCorrespondancesSpatiales`, page `/cadastre/correspondance`
 séparée) mais n'était jamais lue par le PARCOURS de basculement lui-même.
 
-**Solution** (`_actions/nicad.ts`, `basculement/page.tsx`) :
-- Nouvelle action `identifierBasculement({ nicadAncien })` : extrait le Syscol
-  2013 du NICAD, lit `getCorrespondanceBySyscol2013` + `getCommune2013BySyscol`
-  + `getCommune2026BySyscol`, et vérifie via `getSectionByKey(syscol2026,
-  section, "2026")` que la section du NICAD existe TELLE QUELLE dans la
-  commune 2026 identifiée. Construit une liste `flags` (une entrée par
-  différence détectée : correspondance provisoire/sans correspondance,
-  `typeChangement` ≠ « inchangé » — avec le détail des communes cibles pour un
-  découpage — section absente en 2026) et un booléen `clean` (aucun flag,
-  correspondance confirmée + inchangée + section retrouvée).
-- Page : un bouton « Identifier » (avant « Basculer ») appelle cette action,
-  affiche un encart diagnostic (vert si `clean`, ambre + liste des `flags`
-  sinon) et PRÉ-REMPLIT la commune 2026 cible si une correspondance a été
-  trouvée — jamais la nouvelle section (si l'ancienne n'existe pas en 2026,
-  c'est à l'utilisateur de choisir, cas complexe). Les champs restent
-  éditables : « Identifier » propose, ne décide pas — le clic sur « Basculer »
-  (action existante, inchangée) reste l'étape de confirmation explicite.
+**Solution** (`data.ts`, `_actions/nicad.ts`, `basculement/page.tsx`) :
+- `findSectionSpatialMatches(syscol2013, numSection2013, syscol2026)`
+  (`data.ts`) : `cad_sections` porte les DEUX versions dans la même table
+  (`version` = "2013"/"2026"), donc la correspondance de section se calcule
+  EXACTEMENT comme celle des communes (`recalculerCorrespondancesSpatiales`) —
+  intersection géométrique de la section 2013 avec toutes les sections 2026
+  de la commune identifiée, recouvrement = aire d'intersection / aire de la
+  section 2013 (calculé en UTM 32628), triée par recouvrement décroissant.
+  Distingue explicitement « section 2013 sans géométrie enregistrée »
+  (`source2013GeomFound: false`, jointure impossible) d'un « recouvrement nul »
+  (jointure possible mais aucun candidat retenu, seuil 10 %).
+- `identifierBasculement({ nicadAncien })` (`_actions/nicad.ts`) : utilise ce
+  résultat au lieu d'une simple égalité de numéro (`getSectionByKey`,
+  conservée UNIQUEMENT en repli si la section 2013 n'a pas de géométrie).
+  Trois cas selon le meilleur candidat spatial : même numéro + recouvrement
+  ≥ 50 % → RAS ; même numéro mais recouvrement plus faible → flag « à
+  vérifier » ; numéro DIFFÉRENT avec bon recouvrement → flag explicite
+  (« correspond à la section n° X, pas à Y ») ET `sectionNouvelleProposee`
+  alimente `proposition.sectionNouvelle` (cas complexe, pré-rempli). Un
+  second candidat significatif (≥ 15 %) ajoute un flag de découpage de
+  section, sur le même principe que le découpage de commune.
+- Page : le champ « Nouvelle section » affiche désormais « (identifiée par
+  recouvrement spatial) » quand ce cas se produit — reste éditable, comme la
+  commune cible.
 
-**Pourquoi (pièges inclus)** : la donnée nécessaire à l'automatisation
-existait déjà de bout en bout (table de correspondance + statut/typeChangement
-qualifiés par recouvrement spatial) mais dans une page SÉPARÉE
-(`/cadastre/correspondance`) sans aucun pont vers le parcours de basculement
-lui-même — deux fonctionnalités du même domaine qui ne se parlaient pas.
-Piège à ne pas reproduire : ne jamais AUTO-remplir la section cible en cas de
-découpage/section absente — contrairement à la commune (correspondance fiable
-à 1 pour 1 dans le cas confirmé), la bonne section 2026 pour une parcelle
-donnée requiert un jugement humain (quelle section héberge désormais cette
-parcelle), qu'aucune heuristique de ce projet ne peut fournir sans risque de
-mauvaise attribution silencieuse.
+**Pourquoi (pièges inclus)** : la version précédente de ce correctif
+(commit `e706487`) contrôlait la section par ÉGALITÉ DE NUMÉRO
+(`getSectionByKey`) et documentait explicitement « ne jamais auto-remplir la
+section cible, ça demande un jugement humain qu'aucune heuristique ne peut
+fournir » — ce raisonnement était juste pour un contrôle PAR ATTRIBUT (un
+numéro ne dit rien sur la zone réelle) mais devient FAUX dès qu'on dispose
+d'une vraie mesure géométrique : un même numéro de section peut ne plus
+recouvrir la même zone après redécoupage (faux positif du contrôle par
+numéro), et une zone parfaitement inchangée peut avoir été renumérotée (faux
+négatif) — dans les deux cas, la jointure spatiale donne une réponse plus
+fiable qu'une comparaison de chaînes. Piège à ne pas reproduire : la
+correspondance des SECTIONS a été traitée par attribut alors que celle des
+COMMUNES (§ 12 du support de cours) était DÉJÀ spatiale dans ce même projet —
+un précédent existant (même méthode, même code UTM 32628, mêmes seuils) aurait
+dû être repéré et réutilisé directement au lieu de re-dériver un contrôle plus
+faible par symétrie de code avec `basculerNicadAction` (qui, lui, utilisait
+`getSectionByKey` pour une tout autre raison : vérifier qu'une section CIBLE
+choisie manuellement existe bel et bien, pas pour établir une correspondance).
 
 ---
 
