@@ -2804,5 +2804,61 @@ résultat final coïncide avec le point.
 
 ---
 
+## 27. Débordement d'UN SEUL caractère : le décompte centré sur-comptait la parcelle voisine (justification DXF ignorée)
+
+**Problème métier** : `PLAN CADASTRAL PIKINE.dxf`, commune THIAROYE SUR MER,
+section 006 — la parcelle 00056 était signalée `MULTI_NUMERO` (« 00056 » ET
+« 00057 » tous deux attribués), et sa voisine 00057 ressortait « sans
+numéro », alors que SEUL le premier caractère (« 0 ») du numéro « 00057 »
+débordait visuellement sur 00056 — le reste du texte (« 0057 ») restait bien
+sur sa propre parcelle. Le décompte de caractères du § 26 était censé
+justement corriger ce genre de cas, mais faisait pire que le simple point de
+contenance ici : il transférait la MAJORITÉ des caractères, pas juste le
+premier, vers la mauvaise parcelle.
+
+**Cause technique** : `labelCharacterPoints` (§ 26) plaçait TOUJOURS les
+points-caractères CENTRÉS sur le point d'insertion, quelle que soit la
+justification réelle du texte. Or le point d'insertion DXF d'un texte
+Left-justifié (justification par DÉFAUT — code groupe 72 absent ou à 0, le
+cas le plus courant en pratique) est le DÉBUT du texte, pas son centre : le
+texte s'étend ENTIÈREMENT vers la droite depuis ce point. En le traitant
+comme un centre, la moitié des points-caractères générés (artificiellement)
+tombait dans la parcelle VOISINE à gauche — un texte de 5 caractères dont
+seul le premier déborde réellement se voyait donc crédité de 2 à 3
+« débordements » fictifs, suffisant pour faire basculer le vote vers la
+mauvaise parcelle.
+
+**Solution** :
+- `dxf-native.ts` capture désormais la justification horizontale DXF (code
+  groupe 72, `RawEntity.textHJustify` — 0=Left par défaut si le code est
+  absent, conforme à la norme DXF) pour TEXT/MTEXT/ATTRIB, reportée sur la
+  Feature Point émise (propriété `HJustify`).
+- `parcelle-ingestion.ts · RawLabel.hJustify` porte cette valeur (repli à `0`
+  — Left — si absente, ex. repli ogr2ogr).
+- `labelCharacterPoints` positionne désormais la ligne de base selon
+  `hJustify` : **Left (0, défaut)** → le texte COMMENCE au point d'insertion,
+  s'étend vers la droite ; **Right (2)** → le texte SE TERMINE au point ;
+  tout autre mode (Center/Middle/Aligned/Fit, moins courants pour des
+  numéros de parcelle) → centré sur le point, repli inchangé du § 26.
+- `labelWidthM` (`labelFootprintHalfWidthM` renommée) renvoie désormais la
+  largeur COMPLÈTE, pas la moitié — le seuil « assez loin du bord pour
+  ignorer tout voisin » (`resolveNumeroLabelPolygon`) doit couvrir toute
+  l'étendue possible du débordement, qui s'étend sur UNE SEULE direction
+  depuis le point pour un texte Left/Right-justifié (pas symétriquement).
+
+**Pourquoi (pièges inclus)** : la justification DXF réelle utilise en toute
+rigueur un SECOND point d'ancrage (codes groupe 11/21) dès que `hJustify`/la
+justification verticale (code 73) sortent du cas Left/Baseline par défaut —
+non capturé ici, délibérément : le code 72 seul suffit à distinguer Left
+(le cas dominant et celui du bug rapporté) de Right et « autre », sans la
+complexité du double point d'ancrage, pour un gain marginal sur les modes de
+justification plus rares en pratique pour des numéros de parcelle. Piège à ne
+pas réintroduire : ne jamais recentrer par défaut sur le point d'insertion
+sans vérifier la justification — c'est précisément l'hypothèse implicite qui
+a causé cette régression, alors même que le § 26 visait à corriger un
+débordement, pas à en créer un nouveau plus grand.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

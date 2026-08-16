@@ -876,6 +876,10 @@ interface RawLabel {
   /** Hauteur de texte DXF (mètres, déjà en UTM28N) — `null` si absente du
    *  dessin. Sert à estimer l'emprise occupée par l'étiquette (§ 26). */
   height: number | null;
+  /** Justification horizontale DXF (code groupe 72 — 0=Left [défaut], 1=Center,
+   *  2=Right, …) — détermine si `point` est le DÉBUT, le CENTRE ou la FIN du
+   *  texte (§ 27). */
+  hJustify: number;
 }
 
 /** Texte d'un point géolocalisé (libellé de numéro de section à rattacher aux sections). */
@@ -993,10 +997,13 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
       const cls = layerClass === FALLBACK_CLASS ? null : classifyLabelLayer(layerClass);
       const points: number[][] =
         geom.type === "Point" ? [geom.coordinates as number[]] : (geom.coordinates as number[][]);
-      // Hauteur de texte (posée par dxf-native.ts · emitText) — absente du
-      // repli ogr2ogr (driver DXF n'expose pas systématiquement cet attribut).
+      // Hauteur/justification de texte (posées par dxf-native.ts · emitText) —
+      // absentes du repli ogr2ogr (driver DXF n'expose pas systématiquement
+      // ces attributs) : hauteur → repli § 26, justification → Left (§ 27).
       const rawHeight = props.Height ?? props.height;
       const height = typeof rawHeight === "number" && Number.isFinite(rawHeight) && rawHeight > 0 ? rawHeight : null;
+      const rawHJustify = props.HJustify ?? props.hjustify;
+      const hJustify = typeof rawHJustify === "number" && Number.isFinite(rawHJustify) ? rawHJustify : 0;
       // Étape 5 : une même annotation peut regrouper plusieurs lignes
       // (ex. numéro + titre) — on les éclate avant classification.
       for (const text of splitTextLines(rawText)) {
@@ -1004,7 +1011,7 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
           if (pt.length < 2) continue;
           const point: [number, number] = [pt[0], pt[1]];
           if (isSectionLabel) sectionLabels.push({ point, text });
-          else labels.push({ point, text, cls, height });
+          else labels.push({ point, text, cls, height, hJustify });
         }
       }
     }
@@ -1340,30 +1347,43 @@ function pointToPolygonBoundaryDistanceM(point: [number, number], geom: PolygonG
   return min;
 }
 
-/** Demi-largeur estimée (m) de l'emprise occupée par un texte — approximation
- *  grossière (pas de rendu de police réel), cf. § 26. Sert à la fois de
- *  dimension du rectangle d'emprise (`labelFootprint`) et de seuil « assez
- *  loin du bord pour ignorer tout voisin » (`resolveNumeroLabelPolygon`). */
-function labelFootprintHalfWidthM(text: string, height: number | null): number {
+/** Largeur totale estimée (m) de l'emprise occupée par un texte —
+ *  approximation grossière (pas de rendu de police réel), cf. § 26. Sert de
+ *  dimension à `labelCharacterPoints` et de seuil « assez loin du bord pour
+ *  ignorer tout voisin » (`resolveNumeroLabelPolygon`) — la largeur COMPLÈTE,
+ *  pas la moitié : pour un texte Left/Right-justifié (§ 27), le débordement
+ *  possible s'étend sur TOUTE la largeur dans une seule direction depuis le
+ *  point d'insertion, pas symétriquement de part et d'autre. */
+function labelWidthM(text: string, height: number | null): number {
   const h = height ?? DEFAULT_TEXT_HEIGHT_M;
-  return Math.max(h, h * text.length * TEXT_CHAR_WIDTH_RATIO) / 2;
+  return Math.max(h, h * text.length * TEXT_CHAR_WIDTH_RATIO);
 }
 
 /**
  * Points d'échantillonnage, un par caractère, le long de la ligne de base
- * ESTIMÉE du texte — centrée sur le point d'insertion, horizontale (la
- * rotation DXF réelle n'est pas capturée, même simplification qu'ailleurs en
- * § 26). Chaque point est le centre estimé d'UN caractère.
+ * ESTIMÉE du texte — horizontale (la rotation DXF réelle, code groupe 50,
+ * n'est pas capturée). Position par rapport au point d'insertion déterminée
+ * par `hJustify` (§ 27, code groupe 72) : Left (0, défaut DXF) → le texte
+ * COMMENCE au point et s'étend vers la droite ; Right (2) → le texte SE
+ * TERMINE au point ; tout autre cas (Center/Middle/Aligned/Fit) → centré sur
+ * le point (repli raisonnable en l'absence de calcul dédié pour ces modes
+ * moins courants). Chaque point est le centre estimé d'UN caractère.
  */
 function labelCharacterPoints(
   point: [number, number],
   text: string,
-  height: number | null
+  height: number | null,
+  hJustify: number
 ): [number, number][] {
   const h = height ?? DEFAULT_TEXT_HEIGHT_M;
   const charWidth = h * TEXT_CHAR_WIDTH_RATIO;
   const n = Math.max(1, text.length);
-  const startX = point[0] - (n * charWidth) / 2;
+  const startX =
+    hJustify === 2
+      ? point[0] - n * charWidth // Right : le texte se termine au point.
+      : hJustify === 0
+        ? point[0] // Left (défaut) : le texte commence au point.
+        : point[0] - (n * charWidth) / 2; // Center/autre : centré.
   const points: [number, number][] = [];
   for (let i = 0; i < n; i++) points.push([startX + (i + 0.5) * charWidth, point[1]]);
   return points;
@@ -1381,13 +1401,14 @@ function findPolygonByLabelCharacterCount(
   point: [number, number],
   text: string,
   height: number | null,
+  hJustify: number,
   polygons: ValidPolygon[],
   index: BBoxGridIndex,
   toleranceM: number
 ): number {
-  const charPoints = labelCharacterPoints(point, text, height);
-  const halfWidth = labelFootprintHalfWidthM(text, height);
-  const radius = Math.max(toleranceM, halfWidth * 1.5);
+  const charPoints = labelCharacterPoints(point, text, height, hJustify);
+  const width = labelWidthM(text, height);
+  const radius = Math.max(toleranceM, width * 1.2);
   const searchBbox: BBox = [point[0] - radius, point[1] - radius, point[0] + radius, point[1] + radius];
   let best = -1;
   let bestCount = 0;
@@ -1406,20 +1427,21 @@ function findPolygonByLabelCharacterCount(
 }
 
 /**
- * Résout la parcelle d'un LIBELLÉ NUMÉRO (§ 26) : contenance stricte du point
- * d'insertion d'abord (cas dominant sur un DXF de 100k+ parcelles — chemin
- * bon marché à préserver, cf. § 23). Si le point tombe hors de toute
+ * Résout la parcelle d'un LIBELLÉ NUMÉRO (§ 26/§ 27) : contenance stricte du
+ * point d'insertion d'abord (cas dominant sur un DXF de 100k+ parcelles —
+ * chemin bon marché à préserver, cf. § 23). Si le point tombe hors de toute
  * parcelle, OU s'il est contenu mais TROP PRÈS du bord pour exclure qu'un
  * voisin contienne davantage de caractères du texte (distance au bord <
- * demi-largeur estimée de l'emprise), compare le nombre de caractères tombant
- * sur chaque parcelle à portée (`findPolygonByLabelCharacterCount`) et
- * retient celle qui en contient le plus — au lieu du simple point de
- * contenance/proximité.
+ * largeur totale estimée de l'emprise — pas la moitié, cf. § 27), compare le
+ * nombre de caractères tombant sur chaque parcelle à portée
+ * (`findPolygonByLabelCharacterCount`) et retient celle qui en contient le
+ * plus — au lieu du simple point de contenance/proximité.
  */
 function resolveNumeroLabelPolygon(
   point: [number, number],
   text: string,
   height: number | null,
+  hJustify: number,
   polygons: ValidPolygon[],
   index: BBoxGridIndex,
   toleranceM: number
@@ -1427,9 +1449,9 @@ function resolveNumeroLabelPolygon(
   const contained = findSmallestContainingPolygon(point, polygons, index);
   if (contained >= 0) {
     const distanceToEdge = pointToPolygonBoundaryDistanceM(point, polygons[contained].geom);
-    if (distanceToEdge >= labelFootprintHalfWidthM(text, height)) return { idx: contained, viaFootprint: false };
+    if (distanceToEdge >= labelWidthM(text, height)) return { idx: contained, viaFootprint: false };
   }
-  const byCharCount = findPolygonByLabelCharacterCount(point, text, height, polygons, index, toleranceM);
+  const byCharCount = findPolygonByLabelCharacterCount(point, text, height, hJustify, polygons, index, toleranceM);
   if (byCharCount >= 0) return { idx: byCharCount, viaFootprint: byCharCount !== contained };
   return { idx: contained, viaFootprint: false };
 }
@@ -1603,6 +1625,7 @@ export function buildParcellesFromFc32628(
       lbl.point,
       lbl.text,
       lbl.height,
+      lbl.hJustify,
       validPolygonsPreDedup,
       preIndex,
       NUMERO_LABEL_OVERFLOW_TOLERANCE_M
@@ -1634,6 +1657,7 @@ export function buildParcellesFromFc32628(
       lbl.point,
       lbl.text,
       lbl.height,
+      lbl.hJustify,
       dedupedPolygons,
       dedupIndex,
       NUMERO_LABEL_OVERFLOW_TOLERANCE_M
@@ -1703,6 +1727,7 @@ export function buildParcellesFromFc32628(
         label.point,
         label.text,
         label.height,
+        label.hJustify,
         validPolygons,
         index,
         NUMERO_LABEL_OVERFLOW_TOLERANCE_M
