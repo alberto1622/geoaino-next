@@ -3064,5 +3064,59 @@ téléporté hors du Sénégal.
 
 ---
 
+## 29. Clic sur une parcelle SANS NICAD (`MISSING_NICAD`) : le pont carte → panneau de correction ne matchait jamais
+
+**Problème métier** : le panneau de correction (bouton « Assigner » un NICAD)
+existait déjà côté serveur (`correct/route.ts`, action `assign_nicad`) et côté
+UI (`MapAnalysisClient.tsx`, bloc conditionné sur
+`selectedError.errorType === "MISSING_NICAD"`), mais cliquer sur une parcelle
+SANS NICAD directement sur la carte n'ouvrait jamais ce panneau — `selectedError`
+restait à sa valeur précédente.
+
+**Cause technique** : `handleFeatureClick` retrouve l'erreur correspondant à
+la parcelle cliquée en comparant le NICAD de la parcelle à `error.nicad1`/
+`error.nicad2` (`e.nicad1 === nicad || e.nicad2 === nicad`). Pour une erreur
+`MISSING_NICAD`, `geo-engine.ts` fixe `nicad1: null, nicad2: null` — il n'y a,
+PAR DÉFINITION, aucune valeur de NICAD à comparer pour une parcelle qui n'en a
+justement pas. Pire : la comparaison n'était même pas tentée, puisque `nicad`
+(extrait des propriétés de la parcelle cliquée) est une chaîne vide — donc
+« falsy » — pour ce cas précis, court-circuitant tout le bloc de pont
+carte → erreur.
+
+**Solution** (`MapAnalysisClient.tsx`, nouvelle route
+`api/analyses/[id]/errors/at-point`) :
+- Repli GÉOMÉTRIQUE côté client quand le NICAD cliqué est vide : le point de
+  clic carte (garanti intérieur à la parcelle par MapLibre, cf. commentaire
+  `handleClick` dans `MapLibreMap.tsx`) est testé en point-en-polygone
+  (ray casting pair/impair, `findErrorContainingPoint`) contre la géométrie
+  de chaque erreur SANS nicad1/nicad2 (donc `MISSING_NICAD`) encore non
+  corrigée et déjà embarquée dans `analysis.errors`.
+- Repli SERVEUR (`ST_Contains` PostGIS) quand `analysis.errorsTruncated` est
+  vrai : les erreurs embarquées à la page sont plafonnées
+  (`ERROR_RENDER_LIMIT`, cf. § « repères de perf »), et un DXF départemental
+  peut porter 100k+ NICAD manquants — largement au-delà de ce plafond. Sans
+  ce repli, cliquer une parcelle non embarquée ne trouvait jamais son erreur.
+  `geometry` étant une simple colonne `Json` (pas de type PostGIS dédié), le
+  test est calculé à la volée (`ST_GeomFromGeoJSON(geometry::text)`) — borné à
+  UN clic isolé, jamais à un usage en boucle/liste.
+- Garde de course (`featureClickTokenRef`) : si l'utilisateur re-clique une
+  autre parcelle avant la résolution du repli serveur, le résultat périmé est
+  ignoré (sinon un double-clic rapide pouvait rouvrir le panneau de la
+  MAUVAISE parcelle).
+
+**Pourquoi (pièges inclus)** : ce bug illustre une confusion fréquente entre
+« pas de valeur trouvée » et « pas de valeur à chercher » — le pont carte
+supposait implicitement qu'une erreur a TOUJOURS un NICAD identifiant
+(vrai pour OVERLAP/GAP/SLIVER/DUPLICATE…), alors que `MISSING_NICAD` est
+justement le cas où cette hypothèse est fausse PAR CONSTRUCTION. Piège :
+le repli géométrique local ne suffit pas seul sur ce projet — les fichiers
+traités ici dépassent régulièrement 100k parcelles (cf. Kaolack, Keur Massar,
+Pikine), et le plafond d'embarquement de la page existe PRÉCISÉMENT pour ces
+cas, donc toute nouvelle fonctionnalité pilotée par clic doit prévoir dès le
+départ le repli serveur, pas seulement le cas « petit fichier » qui masque le
+problème en test.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*
