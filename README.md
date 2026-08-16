@@ -122,8 +122,8 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 
 ## 3. Vérification du NICAD
 
-- → Ajouter de quel syscol il s'agit : 2013 / 2026
-- → Basculement :
+- → ✅Ajouter de quel syscol il s'agit : 2013 / 2026
+- → ✅Basculement :
   - Niveau : 2013 syscol
   - syscol 2026
   - Niveau section
@@ -133,8 +133,9 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 ## 4. Points du 11/08/2026
 
 - → Gérer les contraintes sur le n° section (3 caractères)
-- → Loading lors des modifications
+- → ✅Loading lors des modifications
 - → Identifier et exporter les sections ayant des anomalies
+<<<<<<< HEAD
 - → Sélection suivant les fichiers
 - → ✅Corriger l'affichage (Mark)
 - → Chevauchement / Intersection
@@ -146,3 +147,10 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 ## 1. intersections des sections entre deux fichiers charger
 
 A véfifier
+=======
+- → ✅Sélection suivant les fichiers
+- → Corriger l'affichage (Mark)
+- → ✅Chevauchement / Intersection
+- → ✅Différencier les gaps et les chevauchements
+- → ✅Effectuer le mappage des champs avant le traitement
+>>>>>>> worktree-shapefile-parcelles-section-coherence
