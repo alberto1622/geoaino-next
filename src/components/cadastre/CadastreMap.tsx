@@ -2,7 +2,12 @@
 
 import "leaflet/dist/leaflet.css";
 import { useEffect, useRef, useState } from "react";
-import { listCommunes2026WithGeom, listCommunes2013 } from "@/app/cadastre/_actions/communes";
+import {
+  listCommunes2026WithGeom,
+  listCommunes2013ByRegion,
+  listRegions2026,
+  listRegions2013,
+} from "@/app/cadastre/_actions/communes";
 import { listChangementMaps } from "@/app/cadastre/_actions/correspondance";
 import { parcellesBySyscol, parcelleByCoords } from "@/app/cadastre/_actions/carte";
 import { NicadDisplay } from "@/components/cadastre/NicadDisplay";
@@ -84,6 +89,10 @@ const selectCls =
   "h-9 w-full rounded-lg border border-border bg-background text-foreground px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&>option]:bg-background [&>option]:text-foreground";
 const optionCls = "bg-background text-foreground";
 
+// Région présélectionnée à l'ouverture de la carte (valeur telle que stockée
+// en base, ex. "DAKAR" — comparaison insensible à la casse à la résolution).
+const DEFAULT_REGION = "DAKAR";
+
 export default function CadastreMap() {
   const mapEl = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -96,6 +105,9 @@ export default function CadastreMap() {
   const LRef = useRef<any>(null);
 
   const [version, setVersion] = useState<Version>("2013");
+  const [regions, setRegions] = useState<string[]>([]);
+  // null = région par défaut pas encore résolue (en attente de la liste des régions)
+  const [region, setRegion] = useState<string | null>(null);
   const [communes, setCommunes] = useState<Commune[]>([]);
   // Cartes type de changement (par syscol 2013 et 2026) — pour le code couleur
   const [parSyscol2013, setParSyscol2013] = useState<Record<string, ChangementInfo>>({});
