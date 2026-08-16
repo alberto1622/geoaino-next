@@ -113,12 +113,12 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 
 ## 2. Parcelle / Titre foncier — Plan cadastral / Plan foncier
 
-- → Signaler l'erreur suivant: limites parcelles avec 2 numéros de parcelles et permettre à l'utilisateur de choisir un numéro
-- → Il y a des numeros parcelles qui commence ou déborde un peu dans une autre parcelle, récupérer les même dans la parcelle où il occupe plus de place
+- → ✅Signaler l'erreur suivant: limites parcelles avec 2 numéros de parcelles et permettre à l'utilisateur de choisir un numéro
+- → ✅Il y a des numeros parcelles qui commence ou déborde un peu dans une autre parcelle, récupérer les même dans la parcelle où il occupe plus de place
 - → Désactiver les limites sections
 - → ✅Récupérer les sections depuis la base de données des sections
 
----
+## RECHARGER LE FICHIER PLAN CADASTRAL PIKINE.DXF CAR IL Y A CERTAINS NICAD N'ONT RECUPERER
 
 ## 3. Vérification du NICAD
 
