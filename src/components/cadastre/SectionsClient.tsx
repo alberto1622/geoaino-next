@@ -2476,6 +2476,7 @@ export default function SectionsClient() {
           layers={pendingLayerInventory.layers}
           onCancel={() => setPendingLayerInventory(null)}
           onConfirm={(mapping) => void startDxfSectionsJob(pendingLayerInventory, mapping)}
+          allowedClasses={["limites_sections", "numero_section"]}
         />
       )}
     </div>
