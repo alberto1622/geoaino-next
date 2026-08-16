@@ -125,6 +125,54 @@ function isNicadProblematic(nicad: string): boolean {
   return nicad.trim().length < 8;
 }
 
+// Point-en-polygone (ray casting, règle pair/impair) sur un anneau [[lng,lat],…].
+// Sommer les franchissements de TOUS les anneaux (extérieur + trous) donne
+// directement le résultat correct pour un polygone à trous, sans traitement
+// séparé des trous.
+function ringCrossings(point: [number, number], ring: number[][]): number {
+  const [px, py] = point;
+  let crossings = 0;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    const intersects =
+      yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi;
+    if (intersects) crossings++;
+  }
+  return crossings;
+}
+
+// Pont carte → erreur MISSING_NICAD : cette erreur n'a ni nicad1 ni nicad2
+// (aucune valeur à afficher pour une parcelle SANS NICAD), donc le pont par
+// égalité de NICAD (`handleFeatureClick`) ne peut jamais la retrouver. Seule
+// sa géométrie (stockée sur l'erreur) permet de savoir quelle erreur
+// correspond à la parcelle cliquée : test point-en-polygone du point de clic.
+function findErrorContainingPoint(
+  errors: GeoError[],
+  point: [number, number],
+): GeoError | null {
+  for (const err of errors) {
+    const geom = err.geometry as
+      | { type?: string; coordinates?: unknown }
+      | null
+      | undefined;
+    if (!geom || !geom.coordinates) continue;
+    const polys =
+      geom.type === "MultiPolygon"
+        ? (geom.coordinates as number[][][][])
+        : geom.type === "Polygon"
+          ? [geom.coordinates as number[][][]]
+          : null;
+    if (!polys) continue;
+    for (const rings of polys) {
+      let crossings = 0;
+      for (const ring of rings) crossings += ringCrossings(point, ring);
+      if (crossings % 2 === 1) return err;
+    }
+  }
+  return null;
+}
+
 type BBox = [number, number, number, number];
 
 // ── Historique annuler/rétablir (page /map) ─────────────────────────────────
@@ -443,6 +491,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     string,
     unknown
   > | null>(null);
+  // Incrémenté à chaque clic carte : ignore la résolution d'un repli serveur
+  // (`/errors/at-point`) devenu périmé si l'utilisateur a re-cliqué entre-temps.
+  const featureClickTokenRef = useRef(0);
   const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set());
   const [chatMessages, setChatMessages] = useState<
     Array<{ role: "user" | "assistant"; content: string }>
@@ -864,6 +915,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
 
   const handleFeatureClick = useCallback(
     (props: Record<string, unknown>, point?: { lng: number; lat: number }) => {
+      const clickToken = ++featureClickTokenRef.current;
       setSelectedParcel(props);
       setSearchedNicad(null);
       const clean = Object.fromEntries(
@@ -905,6 +957,39 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
           });
           return;
         }
+      } else if (point) {
+        // Parcelle SANS NICAD : aucune valeur à comparer (nicad1/nicad2 valent
+        // null sur l'erreur MISSING_NICAD elle-même), donc le pont par égalité
+        // ci-dessus ne peut jamais matcher. Seule la géométrie le permet.
+        const match = findErrorContainingPoint(
+          analysis.errors.filter(
+            (e) =>
+              !e.corrected &&
+              !correctedErrorIds.has(e.id) &&
+              e.nicad1 == null &&
+              e.nicad2 == null,
+          ),
+          [point.lng, point.lat],
+        );
+        if (match) {
+          setSelectedError(match);
+        } else if (analysis.errorsTruncated) {
+          // L'erreur n'est pas dans les `analysis.errors` embarqués à la page
+          // (plafonnés, cf. ERROR_RENDER_LIMIT) — repli serveur par géométrie
+          // (ST_Contains), nécessaire dès qu'un DXF porte plus de NICAD
+          // manquants que ce plafond (fréquent sur les gros fichiers).
+          const clickPoint = point;
+          void fetch(
+            `/api/analyses/${analysis.id}/errors/at-point?lng=${clickPoint.lng}&lat=${clickPoint.lat}`,
+          )
+            .then((res) => (res.ok ? res.json() : null))
+            .then((data: { match?: GeoError } | null) => {
+              if (data?.match && featureClickTokenRef.current === clickToken) {
+                setSelectedError(data.match);
+              }
+            })
+            .catch(() => {});
+        }
       }
 
       clearDuplicateFocus();
@@ -924,7 +1009,9 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       setTableOpen(true);
     },
     [
+      analysis.id,
       analysis.errors,
+      analysis.errorsTruncated,
       correctedErrorIds,
       duplicateNicadSet,
       fetchNicadGroup,
