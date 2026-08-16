@@ -30,7 +30,18 @@ import {
   insertParcelle,
   updateParcelleNicad,
   getCorrespondanceBySyscol2013,
+  findSectionSpatialMatches,
 } from "@/lib/cadastre/data";
+
+// Recouvrement mini (part de la section 2013) pour considérer une section
+// 2026 comme correspondance fiable — même seuil que `SEUIL_SECTION_PROVISOIRE`
+// (data.ts) : un candidat déjà filtré à ce seuil peut donc être "confirmé" ou
+// "provisoire" selon qu'il dépasse ou non ce second palier, sur le même
+// principe que `recalculerCorrespondancesSpatiales` au niveau commune.
+const SEUIL_SECTION_CONFIRME = 0.5;
+// Un deuxième candidat au-delà de ce seuil signale un découpage de la section
+// 2013 entre plusieurs sections 2026 (pas juste du bruit de bord).
+const SEUIL_SECTION_DECOUPE = 0.15;
 
 // Libellé lisible du type de changement de correspondance (cf.
 // `recalculerCorrespondancesSpatiales` — data.ts) pour affichage utilisateur.
@@ -267,12 +278,15 @@ export async function genererNicad(input: z.infer<typeof genererSchema>) {
 // Principe : l'utilisateur ne renseigne QUE le NICAD 2013. On identifie le
 // Syscol 2013 (extrait du NICAD), on retrouve sa correspondance 2026 (table
 // `cad_correspondance_2013_2026`, calculée par recouvrement spatial — cf.
-// `recalculerCorrespondancesSpatiales`), puis on vérifie que la SECTION du
-// NICAD existe bien telle quelle dans la commune 2026 identifiée. Toute
-// différence (correspondance provisoire/absente, découpage, fusion,
-// rattachement de département, section absente en 2026) est remontée dans
-// `flags` plutôt que masquée ; le basculement n'est PROPOSÉ (`proposition`)
-// que si la correspondance est confirmée, inchangée et la section retrouvée.
+// `recalculerCorrespondancesSpatiales`), puis on retrouve la section 2026
+// correspondante par JOINTURE SPATIALE (`findSectionSpatialMatches` —
+// recouvrement géométrique section 2013 ↔ sections 2026, PAS une simple
+// égalité de numéro : un même numéro peut ne plus recouvrir la même zone
+// après redécoupage, une zone inchangée peut avoir été renumérotée). Toute
+// différence (correspondance provisoire/absente, découpage/fusion/renommage
+// de commune, section renumérotée/découpée/introuvable) est remontée dans
+// `flags` plutôt que masquée ; le basculement n'est PROPOSÉ proprement
+// (`clean`) que si tout correspond sans aucun flag.
 const identifierSchema = z.object({ nicadAncien: z.string().length(16) });
 
 export async function identifierBasculement(input: z.infer<typeof identifierSchema>) {
@@ -298,6 +312,10 @@ export async function identifierBasculement(input: z.infer<typeof identifierSche
   const syscol2026 = correspondance?.syscol2026 ?? null;
   let commune2026: Awaited<ReturnType<typeof getCommune2026BySyscol>> = null;
   let sectionExisteEn2026: boolean | null = null;
+  // Numéro de section 2026 identifié par recouvrement géométrique quand il
+  // diffère du numéro 2013 (section renumérotée) — proposé pour un
+  // basculement complexe, jamais deviné sans vérification spatiale.
+  let sectionNouvelleProposee: string | null = null;
 
   if (!correspondance || !syscol2026) {
     flags.push(
@@ -321,22 +339,61 @@ export async function identifierBasculement(input: z.infer<typeof identifierSche
       );
     }
 
-    const sectionCible = await getSectionByKey(syscol2026, section, "2026");
-    sectionExisteEn2026 = !!sectionCible;
-    if (!sectionCible) {
+    // Correspondance de section par jointure SPATIALE (pas par égalité de
+    // numéro) : un même numéro peut ne plus recouvrir la même zone après
+    // redécoupage, et une zone inchangée peut avoir été renumérotée.
+    const spatial = await findSectionSpatialMatches(syscol2013, section, syscol2026);
+    if (!spatial.source2013GeomFound) {
       flags.push(
-        `Section ${section} introuvable dans la commune 2026 identifiée (${commune2026?.nomCommune ?? syscol2026}) ` +
-          "— un nouveau numéro de section devra être choisi (cas complexe).",
+        `Géométrie de la section 2013 ${section} introuvable — vérification spatiale impossible, ` +
+          "contrôle limité au numéro de section.",
       );
+      const sectionCible = await getSectionByKey(syscol2026, section, "2026");
+      sectionExisteEn2026 = !!sectionCible;
+      if (!sectionCible) {
+        flags.push(
+          `Aucune section ${section} trouvée dans la commune 2026 identifiée (${commune2026?.nomCommune ?? syscol2026}) ` +
+            "— un nouveau numéro de section devra être choisi (cas complexe).",
+        );
+      }
+    } else {
+      const best = spatial.matches[0] ?? null;
+      if (!best) {
+        sectionExisteEn2026 = false;
+        flags.push(
+          `Aucune section 2026 ne recouvre significativement la section 2013 ${section} ` +
+            `dans la commune identifiée (${commune2026?.nomCommune ?? syscol2026}) — nouvelle section à choisir (cas complexe).`,
+        );
+      } else if (best.numSection === section) {
+        sectionExisteEn2026 = true;
+        if (best.recouvr < SEUIL_SECTION_CONFIRME) {
+          flags.push(
+            `Recouvrement partiel (${Math.round(best.recouvr * 100)}%) entre la section 2013 ${section} et la ` +
+              "section 2026 de même numéro — à vérifier avant basculement.",
+          );
+        }
+      } else {
+        // Zone géométriquement la même section, mais RENUMÉROTÉE en 2026.
+        sectionExisteEn2026 = true;
+        sectionNouvelleProposee = best.numSection;
+        flags.push(
+          `La section 2013 ${section} correspond spatialement à la section 2026 n° ${best.numSection}` +
+            (best.nomSection ? ` (${best.nomSection})` : "") +
+            ` (recouvrement ${Math.round(best.recouvr * 100)}%), PAS au numéro ${section} — ` +
+            `basculement complexe requis avec ce nouveau numéro de section.`,
+        );
+      }
+      if (spatial.matches.length > 1 && spatial.matches[1].recouvr >= SEUIL_SECTION_DECOUPE) {
+        flags.push(
+          `La section 2013 ${section} semble découpée entre plusieurs sections 2026 (` +
+            spatial.matches.map((m) => `${m.numSection} : ${Math.round(m.recouvr * 100)}%`).join(", ") +
+            ").",
+        );
+      }
     }
   }
 
-  const clean =
-    flags.length === 0 &&
-    !!correspondance &&
-    correspondance.statut === "confirme" &&
-    (correspondance.typeChangement === "inchange" || !correspondance.typeChangement) &&
-    sectionExisteEn2026 === true;
+  const clean = flags.length === 0 && !!correspondance && sectionExisteEn2026 === true;
 
   return {
     success: true as const,
@@ -357,11 +414,15 @@ export async function identifierBasculement(input: z.infer<typeof identifierSche
     sectionExisteEn2026,
     flags,
     clean,
-    // Pré-remplissage proposé du formulaire (syscol cible identifié — jamais de
-    // section : si l'ancienne section n'existe pas en 2026, c'est à l'utilisateur
-    // de choisir la section cible, cf. flag ci-dessus). L'utilisateur reste libre
+    // Pré-remplissage proposé du formulaire : syscol cible identifié, et
+    // numéro de section UNIQUEMENT quand la jointure spatiale a confirmé une
+    // renumérotation (jamais deviné sans cette vérification géométrique — si
+    // aucune section 2026 ne recouvre significativement l'ancienne, c'est à
+    // l'utilisateur de choisir, cf. flag ci-dessus). L'utilisateur reste libre
     // de tout corriger avant de confirmer le basculement (bouton "Basculer" séparé).
-    proposition: syscol2026 ? { syscolNouveau: syscol2026 } : null,
+    proposition: syscol2026
+      ? { syscolNouveau: syscol2026, sectionNouvelle: sectionNouvelleProposee ?? undefined }
+      : null,
   };
 }
 

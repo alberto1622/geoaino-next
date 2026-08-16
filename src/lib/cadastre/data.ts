@@ -408,6 +408,76 @@ export async function countSections() {
   return prisma.cadSection.count();
 }
 
+// Seuils de recouvrement pour la correspondance SPATIALE section 2013 → 2026
+// (même logique que `recalculerCorrespondancesSpatiales` au niveau commune,
+// cf. § 31 CONCEPTS-TRAITEMENT-DXF.md) : un même numéro de section ne garantit
+// PAS qu'elle occupe la même zone après redécoupage (faux positif d'un
+// contrôle par attribut), et un numéro différent peut très bien être la même
+// zone renumérotée (faux négatif) — seule la géométrie fait foi.
+const SEUIL_SECTION_PROVISOIRE = 0.1;
+
+export interface SectionSpatialMatch {
+  numSection: string;
+  nomSection: string | null;
+  /** Part de la surface de la section 2013 couverte par cette section 2026 (0–1). */
+  recouvr: number;
+}
+
+/**
+ * Retrouve, par recouvrement GÉOMÉTRIQUE (pas par égalité de numéro), la ou
+ * les sections 2026 correspondant à une section 2013 — `cad_sections` porte
+ * les deux versions dans la même table (`version` = "2013"/"2026"), donc la
+ * jointure spatiale se fait directement entre ses propres géométries.
+ * Retourne les candidats triés par recouvrement décroissant (le premier =
+ * meilleure correspondance) ; `source2013GeomFound: false` si la section 2013
+ * elle-même n'a pas de géométrie enregistrée (jointure impossible — à
+ * distinguer d'un recouvrement nul).
+ */
+export async function findSectionSpatialMatches(
+  syscol2013: string,
+  numSection2013: string,
+  syscol2026: string,
+): Promise<{ source2013GeomFound: boolean; matches: SectionSpatialMatch[] }> {
+  const s13 = syscol2013.padStart(8, "0");
+  const sec13 = numSection2013.padStart(3, "0");
+  const s26 = syscol2026.padStart(8, "0");
+
+  const geomCheck = await prisma.$queryRaw<Array<{ found: boolean }>>`
+    SELECT geom IS NOT NULL AS found
+    FROM "cad_sections"
+    WHERE "syscolCommune" = ${s13} AND "numSection" = ${sec13} AND version = '2013'
+    LIMIT 1
+  `;
+  if (geomCheck[0]?.found !== true) {
+    return { source2013GeomFound: false, matches: [] };
+  }
+
+  const rows = await prisma.$queryRaw<Array<{ numSection: string; nomSection: string | null; recouvr: number }>>`
+    WITH a AS (
+      SELECT ST_MakeValid(geom) AS geom
+      FROM "cad_sections"
+      WHERE "syscolCommune" = ${s13} AND "numSection" = ${sec13} AND version = '2013' AND geom IS NOT NULL
+      LIMIT 1
+    )
+    SELECT
+      b."numSection" AS "numSection",
+      b."nomSection" AS "nomSection",
+      ST_Area(ST_Transform(ST_Intersection(a.geom, ST_MakeValid(b.geom)), 32628))
+        / NULLIF(ST_Area(ST_Transform(a.geom, 32628)), 0) AS recouvr
+    FROM a, "cad_sections" b
+    WHERE b."syscolCommune" = ${s26} AND b.version = '2026' AND b.geom IS NOT NULL
+      AND a.geom && b.geom AND ST_Intersects(a.geom, b.geom)
+    ORDER BY recouvr DESC
+  `;
+
+  return {
+    source2013GeomFound: true,
+    matches: rows
+      .map((r) => ({ numSection: r.numSection, nomSection: r.nomSection, recouvr: Number(r.recouvr) || 0 }))
+      .filter((r) => r.recouvr >= SEUIL_SECTION_PROVISOIRE),
+  };
+}
+
 // ─── Parcelles cadastrales ────────────────────────────────────────────────────
 export async function insertParcelle(data: Prisma.CadParcelleCreateInput) {
   return prisma.cadParcelle.create({ data });
