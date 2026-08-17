@@ -2,6 +2,7 @@ import * as turf from "@turf/turf";
 import type { Feature, FeatureCollection, Polygon, MultiPolygon } from "geojson";
 import { BBoxGridIndex, bboxIntersects, type BBox } from "./parcelle-ingestion";
 import { codeSectionsMatch, digitsOnly } from "./nicad";
+import { getSyscols2026ForPoints } from "./cadastre/data";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -139,6 +140,27 @@ export function extractNicad(props: Record<string, unknown> | undefined | null):
   return String(value).trim();
 }
 
+/**
+ * Point représentatif d'une feature en EPSG:4326 (lng, lat), quelle que soit
+ * la projection source. Sert à la jointure spatiale contre `cad_communes_2026`
+ * (limites administratives) — cette table est en 4326, contrairement aux
+ * fichiers cadastraux souvent livrés en UTM 28N. Reprojection à la volée via
+ * proj4, même convention que le bloc chevauchements plus bas dans ce fichier.
+ */
+function representativePointLngLat(feature: GeoFeature): [number, number] | null {
+  try {
+    const pt = turf.pointOnFeature(feature as unknown as Feature).geometry.coordinates as [number, number];
+    if (Math.abs(pt[0]) <= 180 && Math.abs(pt[1]) <= 90) return pt;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const proj4 = require("proj4") as typeof import("proj4");
+    const UTM28N = "+proj=utm +zone=28 +datum=WGS84 +units=m +no_defs";
+    const WGS84 = "+proj=longlat +datum=WGS84 +no_defs";
+    return proj4(UTM28N, WGS84, pt) as [number, number];
+  } catch {
+    return null;
+  }
+}
+
 function isMissingNicadValue(nicad: unknown): boolean {
   const value = String(nicad ?? "").trim().toLowerCase();
   return (
@@ -150,10 +172,10 @@ function isMissingNicadValue(nicad: unknown): boolean {
 
 // ── Main Analysis Engine ───────────────────────────────────────────────────────
 
-export function analyzeGeoJSON(
+export async function analyzeGeoJSON(
   geojson: GeoFeatureCollection,
   adminBoundary?: GeoFeatureCollection
-): AnalysisResult {
+): Promise<AnalysisResult> {
   const features = geojson.features || [];
   const errors: AnalysisResult["errors"] = [];
 
@@ -290,28 +312,74 @@ export function analyzeGeoJSON(
   });
 
   // 2. Duplicate NiCAD — one error per occurrence, nicad2 = OBJECTID of this feature
+  const duplicateGroups: Array<{ nicad: string; indices: number[] }> = [];
   nicadMap.forEach((indices, nicad) => {
-    if (indices.length > 1) {
-      // Collect all OBJECTIDs for this NICAD group
-      const allObjectIds = indices.map((idx) =>
-        extractObjectId(features[idx]?.properties ?? {}, idx)
-      );
-      indices.forEach((featureIndex, pos) => {
-        nonConformeIdx.add(featureIndex);
-        const duplicateFeature = features[featureIndex];
-        const thisObjectId = allObjectIds[pos];
-        const otherObjectIds = allObjectIds.filter((_, i) => i !== pos).join(", ");
-        errors.push({
-          type: "duplicate",
-          severity: "critical",
-          nicad1: nicad,
-          nicad2: thisObjectId,
-          description: `NICAD dupliqué "${nicad}" — ${indices.length} occurrences. OBJECTID: ${thisObjectId} (autres: ${otherObjectIds})`,
-          confidence: 1.0,
-          geometry: duplicateFeature?.geometry,
-        });
-      });
+    if (indices.length > 1) duplicateGroups.push({ nicad, indices });
+  });
+
+  // Jointure spatiale (cad_communes_2026, « limites administratives ») sur
+  // les points représentatifs des SEULES features en doublon (pas la totalité
+  // du lot — perf sur un gros DXF) : un même NICAD porté par deux communes
+  // différentes n'est probablement pas un vrai doublon mais deux parcelles
+  // distinctes mal codifiées (cf. exemple terrain : un NICAD Yeumbeul Nord /
+  // Keur Massar Nord — communes limitrophes de Pikine/Keur Massar).
+  const duplicatePointIdx: number[] = [];
+  const duplicatePoints: { lng: number; lat: number }[] = [];
+  duplicateGroups.forEach(({ indices }) => {
+    indices.forEach((idx) => {
+      const pt = representativePointLngLat(features[idx]);
+      if (pt) {
+        duplicatePointIdx.push(idx);
+        duplicatePoints.push({ lng: pt[0], lat: pt[1] });
+      }
+    });
+  });
+  const duplicateCommunes = new Map<number, string | null>();
+  if (duplicatePoints.length > 0) {
+    try {
+      const resolved = await getSyscols2026ForPoints(duplicatePoints);
+      resolved.forEach((r, k) => duplicateCommunes.set(duplicatePointIdx[k], r.nomCommune));
+    } catch {
+      // Jointure indisponible (DB injoignable, lot hors Sénégal…) : on
+      // dégrade en silence, la description reste celle sans info commune.
     }
+  }
+
+  duplicateGroups.forEach(({ nicad, indices }) => {
+    // Collect all OBJECTIDs for this NICAD group
+    const allObjectIds = indices.map((idx) =>
+      extractObjectId(features[idx]?.properties ?? {}, idx)
+    );
+    const communesInGroup = new Set(
+      indices.map((idx) => duplicateCommunes.get(idx)).filter((c): c is string => !!c)
+    );
+    const communeDiff = communesInGroup.size > 1;
+
+    indices.forEach((featureIndex, pos) => {
+      nonConformeIdx.add(featureIndex);
+      const duplicateFeature = features[featureIndex];
+      const thisObjectId = allObjectIds[pos];
+      const otherObjectIds = allObjectIds.filter((_, i) => i !== pos).join(", ");
+
+      let description = `NICAD dupliqué "${nicad}" — ${indices.length} occurrences. OBJECTID: ${thisObjectId} (autres: ${otherObjectIds})`;
+      if (communeDiff) {
+        const thisCommune = duplicateCommunes.get(featureIndex);
+        const otherCommunes = Array.from(communesInGroup).filter((c) => c !== thisCommune);
+        description += thisCommune
+          ? ` — ATTENTION : commune différente entre occurrences d'après les limites administratives (${thisCommune} vs ${otherCommunes.join(", ")}), probablement deux parcelles distinctes mal codifiées plutôt qu'un vrai doublon.`
+          : ` — ATTENTION : les autres occurrences de ce NICAD sont dans une commune différente (${otherCommunes.join(", ")}) d'après les limites administratives ; commune non résolue pour celle-ci.`;
+      }
+
+      errors.push({
+        type: "duplicate",
+        severity: "critical",
+        nicad1: nicad,
+        nicad2: thisObjectId,
+        description,
+        confidence: 1.0,
+        geometry: duplicateFeature?.geometry,
+      });
+    });
   });
 
   // 3. Overlaps with Turf.js — la totalité des features est vérifiée (plus de

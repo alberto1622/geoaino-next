@@ -171,7 +171,7 @@ export async function finishParcellesJob(
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const result = analyzeGeoJSON(filteredGeoJson as any);
+  const result = await analyzeGeoJSON(filteredGeoJson as any);
 
   await prisma.importJob.updateMany({
     where: { id: jobId, status: { not: "cancelled" } },

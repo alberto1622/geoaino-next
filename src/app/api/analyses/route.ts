@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = analyzeGeoJSON(filteredGeoJson as any, adminBoundary as any);
+    const result = await analyzeGeoJSON(filteredGeoJson as any, adminBoundary as any);
     const aiReport = await generateAIReport(result, fileName);
 
     if (result.errors.length > 0) {

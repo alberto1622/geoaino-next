@@ -25,7 +25,7 @@ export async function POST(_req: NextRequest, { params }: { params: Params }) {
   let parsed;
   try { parsed = JSON.parse(rawGeoJson); } catch { return NextResponse.json({ error: "GeoJSON invalide" }, { status: 400 }); }
 
-  const result = analyzeGeoJSON(parsed);
+  const result = await analyzeGeoJSON(parsed);
   const aiReport = await generateAIReport(result, analysis.fileName);
 
   // Met aussi à jour summaryStats (conformeCount, etc.) en conservant les champs

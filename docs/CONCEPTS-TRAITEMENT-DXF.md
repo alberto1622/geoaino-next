@@ -3243,5 +3243,59 @@ projet jeune avec peu de données ne le voit jamais).
 
 ---
 
+## 33. Erreur `DUPLICATE` (même NICAD) : distinguer un vrai doublon d'une collision entre deux parcelles de communes différentes
+
+**Problème métier** : la détection de doublons (`analyzeGeoJSON`) signale
+deux occurrences comme « NICAD dupliqué » dès qu'elles partagent le même
+NICAD, sans dire si c'est un VRAI doublon (même parcelle saisie deux fois)
+ou deux parcelles DISTINCTES qui se sont vu attribuer le même NICAD par
+erreur. Cas terrain : un même NICAD `0152020100701524` porté par une
+parcelle à Yeumbeul Nord et une autre à Keur Massar Nord (communes
+limitrophes du département de Pikine/Keur Massar) — deux parcelles réelles,
+pas un doublon de saisie, mais un conflit de codification qu'il faut
+distinguer d'un doublon franc pour ne pas orienter la correction (fusion,
+suppression d'une occurrence) vers la mauvaise action.
+
+**Cause technique** : le NICAD encode en théorie le Syscol (commune) dans
+son préfixe, mais rien ne garantit que le NICAD SAISI dans le fichier source
+correspond à la commune RÉELLE de la parcelle (erreur de frappe, copier-
+coller depuis une parcelle voisine, référentiel Syscol obsolète…) — la
+détection de doublon (`geo-engine.ts`, bloc 2) ne comparait jusqu'ici que la
+chaîne NICAD, jamais la position géographique des occurrences.
+
+**Solution** (`src/lib/geo-engine.ts · analyzeGeoJSON`) : pour chaque groupe
+de NICAD dupliqué, résoudre la commune 2026 RÉELLE de chaque occurrence par
+jointure spatiale (`getSyscols2026ForPoints`, `src/lib/cadastre/data.ts` —
+même fonction que celle qui attribue le Syscol aux parcelles DXF sans NICAD,
+§ « limites administratives » = `cad_communes_2026`), à partir du point
+représentatif de chaque géométrie (reprojeté UTM 28N → 4326 au besoin, même
+logique que le bloc chevauchements plus bas dans le fichier). Si les
+communes résolues diffèrent au sein d'un même groupe de doublons, la
+description de l'erreur le signale explicitement (« commune différente entre
+occurrences… probablement deux parcelles distinctes mal codifiées plutôt
+qu'un vrai doublon »). `analyzeGeoJSON` est donc devenu **asynchrone**
+(un seul `await` ajouté à chacun de ses 3 appelants — tous déjà dans des
+fonctions `async` : `POST /api/analyses`, `POST .../regenerate-report`,
+`finishParcellesJob`). La résolution ne porte QUE sur les points des
+features effectivement en doublon (pas la totalité du lot) pour rester
+négligeable même sur un DXF à 100k+ parcelles.
+
+**Pourquoi (pièges inclus)** : la sévérité de l'erreur reste `critical` dans
+les deux cas (un NICAD dupliqué reste un problème d'intégrité de données
+quelle qu'en soit la cause) — seule la DESCRIPTION change, volontairement,
+pour guider l'utilisateur vers la bonne correction (renseigner le bon NICAD
+sur chacune plutôt que fusionner/supprimer une occurrence). Piège à éviter :
+ne pas confondre cette commune GÉOLOCALISÉE (limites administratives,
+`cad_communes_2026`) avec le champ `commune` DÉCLARÉ dans le fichier source
+(alimenté par le mappage de champs, `field-mapping.ts`) — ce dernier peut
+être absent ou faux, exactement le genre d'attribut que la jointure spatiale
+sert à vérifier (même principe que `section_mismatch`, § champ
+`sectionGeolocalisee` de `assign-section-nicad.ts` : déclaré vs géolocalisé).
+Si la jointure DB échoue (base injoignable, lot hors Sénégal) la fonction
+dégrade en silence — la description reste celle sans info commune plutôt que
+de faire échouer toute l'analyse pour un enrichissement optionnel.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*
