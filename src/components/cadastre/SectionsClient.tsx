@@ -125,6 +125,13 @@ const ADMIN_MISMATCH_LEVEL_LABELS: Record<string, string> = {
   region: "région",
 };
 
+// Clignotement de l'erreur (chevauchement ou débordement administratif)
+// sélectionnée dans le panneau — alterne ces deux `fillOpacity` toutes les
+// BLINK_INTERVAL_MS, cf. les effets « Mise en évidence… (clignotement) ».
+const BLINK_INTERVAL_MS = 450;
+const BLINK_HIGH_OPACITY = 0.85;
+const BLINK_LOW_OPACITY = 0.2;
+
 // ── Limites administratives (régions / départements / communes) ──────────────
 // Contours + noms servis par /api/cadastre/admin-boundaries (dérivés de
 // cad_communes_2026). `minLabelZoom` évite le nuage d'étiquettes en vue large.
@@ -1214,21 +1221,40 @@ export default function SectionsClient() {
     mapReady,
   ]);
 
-  // ── Mise en évidence du chevauchement sélectionné (restylage seul) ─────────
+  // ── Mise en évidence du chevauchement sélectionné (clignotement) ───────────
   // Dépend aussi de sections/overlaps pour rejouer après chaque reconstruction
-  // des couches (qui repart en style « non sélectionné »).
+  // des couches (qui repart en style « non sélectionné »). Le chevauchement
+  // sélectionné CLIGNOTE (alterne opacité haute/basse toutes les
+  // BLINK_INTERVAL_MS) plutôt qu'un simple style figé — plus visible sur une
+  // carte chargée où l'intersection peut être un sliver de quelques pixels.
   useEffect(() => {
     for (const [id, layer] of overlapLayersRef.current) {
-      const isSel = id === selectedOverlapId;
+      if (id === selectedOverlapId) continue;
       try {
-        layer.setStyle({
-          weight: isSel ? 3 : 1.5,
-          fillOpacity: isSel ? 0.7 : 0.45,
-        });
+        layer.setStyle({ weight: 1.5, fillOpacity: 0.45 });
       } catch {
         /* ignore */
       }
     }
+    if (selectedOverlapId == null) return;
+    const layer = overlapLayersRef.current.get(selectedOverlapId);
+    if (!layer) return;
+    let on = true;
+    const tick = () => {
+      try {
+        layer.setStyle(
+          on
+            ? { weight: 3, fillOpacity: BLINK_HIGH_OPACITY }
+            : { weight: 3, fillOpacity: BLINK_LOW_OPACITY },
+        );
+      } catch {
+        /* ignore */
+      }
+      on = !on;
+    };
+    tick();
+    const intervalId = setInterval(tick, BLINK_INTERVAL_MS);
+    return () => clearInterval(intervalId);
   }, [selectedOverlapId, sections, overlaps, mapReady]);
 
   // ── Zoom sur le chevauchement sélectionné dans la table ────────────────────
@@ -1276,19 +1302,36 @@ export default function SectionsClient() {
       ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [selectedOverlapId, panelOpen]);
 
-  // ── Mise en évidence du débordement administratif sélectionné (restylage seul) ──
+  // ── Mise en évidence du débordement administratif sélectionné (clignotement) ──
+  // Même mécanisme que le clignotement des chevauchements ci-dessus.
   useEffect(() => {
     for (const [id, layer] of adminMismatchLayersRef.current) {
-      const isSel = id === selectedMismatchId;
+      if (id === selectedMismatchId) continue;
       try {
-        layer.setStyle({
-          weight: isSel ? 3 : 1.5,
-          fillOpacity: isSel ? 0.7 : 0.45,
-        });
+        layer.setStyle({ weight: 1.5, fillOpacity: 0.45 });
       } catch {
         /* ignore */
       }
     }
+    if (selectedMismatchId == null) return;
+    const layer = adminMismatchLayersRef.current.get(selectedMismatchId);
+    if (!layer) return;
+    let on = true;
+    const tick = () => {
+      try {
+        layer.setStyle(
+          on
+            ? { weight: 3, fillOpacity: BLINK_HIGH_OPACITY }
+            : { weight: 3, fillOpacity: BLINK_LOW_OPACITY },
+        );
+      } catch {
+        /* ignore */
+      }
+      on = !on;
+    };
+    tick();
+    const intervalId = setInterval(tick, BLINK_INTERVAL_MS);
+    return () => clearInterval(intervalId);
   }, [selectedMismatchId, sections, adminMismatches, mapReady]);
 
   // ── Zoom sur le débordement administratif sélectionné dans la table ────────
