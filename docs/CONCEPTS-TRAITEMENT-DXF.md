@@ -3451,5 +3451,48 @@ est exactement ce qui avait produit les faux positifs du § 33.
 
 ---
 
+## 35. Une commune « Inchangée » 2013→2026 peut quand même avoir changé de Syscol : `typeChangement` ne regarde jamais le code lui-même
+
+**Problème métier** : sur `/cadastre/correspondances`, une commune dont le
+nom ET la géométrie n'ont pas bougé (ex. Golf Sud) est classée
+`typeChangement = "inchange"` — mais son code Syscol 8 chiffres peut malgré
+tout avoir été RECODIFIÉ lors de la refonte 2013→2026 (ex. Golf Sud :
+`01430111` en 2013 → `01430121` en 2026). Rien ne le signalait : les deux
+colonnes Syscol 2013/2026 étaient affichées côte à côte, mais sans indication
+qu'elles diffèrent — un changement de code réel, invisible derrière une
+étiquette « Inchangé » qui ne parle que du nom/de la géométrie.
+
+**Cause technique** : `recalculerCorrespondancesSpatiales` (`data.ts`)
+détermine `typeChangement` uniquement à partir du recouvrement spatial, de
+l'identité du nom et du département — jamais de l'égalité des deux codes
+Syscol (`syscol2013`/`syscol2026`). C'est volontaire pour CE classement (une
+commune peut changer de code sans changer de périmètre), mais laisse un
+angle mort : aucune vue de l'application n'isolait spécifiquement les
+recodifications pures.
+
+**Solution** (`src/app/cadastre/correspondances/page.tsx`) : un signal
+INDÉPENDANT de `typeChangement` — `syscolChanged(c) = c.syscol2026 &&
+c.syscol2026 !== c.syscol2013` — calculé côté client sur les lignes déjà
+chargées (pas de nouveau paramètre serveur, `listCorrespondances` renvoie
+déjà les deux codes). Deux affichages : la cellule Syscol 2026 est mise en
+évidence (fond bleu + info-bulle « Syscol changé : X (2013) → Y (2026) »)
+dès que les codes diffèrent, quel que soit `typeChangement` ; et une case
+« Syscol changé » dans la barre d'outils filtre la liste à CES seules lignes
+(avec un compteur), pour l'audit ciblé plutôt que de scruter deux colonnes
+sur des centaines de lignes.
+
+**Pourquoi (pièges inclus)** : ne pas confondre ce signal avec
+`typeChangement` ni tenter de le fusionner dedans — une commune « renommée »
+ou « fusionnée » a de toute façon presque toujours un nouveau Syscol (attendu,
+déjà visible via son badge de type), alors que le cas intéressant ici est
+PRÉCISÉMENT celui où tout le reste semble inchangé. Piège à éviter : ne pas
+appliquer ce même raisonnement au parcours de basculement NICAD (§31) —
+là, le Syscol change TOUJOURS par construction (c'est l'objet même du
+basculement, 2013 → 2026), signaler systématiquement l'écart y serait du
+bruit ; ce signal n'a de sens que sur une vue de RÉFÉRENTIEL (comparer deux
+états), pas sur une action qui migre délibérément d'un état à l'autre.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*
