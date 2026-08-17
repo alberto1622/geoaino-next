@@ -5,11 +5,12 @@ import { toast } from "sonner";
 import {
   Upload, MapPin, Brain, Shield, FileText, Activity,
   Layers, CheckCircle, Globe, Database,
-  ArrowRight, BarChart2, History, ChevronRight, Cpu,
+  ArrowRight, BarChart2, History, ChevronRight,
   TrendingUp, Wrench
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { NavBar } from "@/components/NavBar";
+import DxfPipelineSection from "@/components/home/DxfPipelineSection";
 import LayerMappingModal, { type LayerInventoryEntry } from "@/components/LayerMappingModal";
 import FieldMappingModal from "@/components/FieldMappingModal";
 import type { TargetFieldDef } from "@/lib/import/field-mapping";
@@ -48,13 +49,6 @@ const ERROR_TYPES = [
   { label: "Doublons NICAD", sublabel: "Duplicates", color: "#3b82f6" },
   { label: "Géom. invalides", sublabel: "Invalid Geom.", color: "#ec4899" },
   { label: "Croisements limites", sublabel: "Boundary Cross", color: "#06b6d4" },
-];
-
-const WORKFLOW_STEPS = [
-  { step: "01", title: "Chargez votre fichier", desc: "SHP, GeoJSON, DGN, DXF, KML ou CSV — le système détecte automatiquement le format", icon: Upload },
-  { step: "02", title: "Analyse IA automatique", desc: "Le moteur topologique analyse chaque parcelle et détecte toutes les anomalies", icon: Cpu },
-  { step: "03", title: "Visualisation sur carte", desc: "Chaque erreur est localisée sur la carte avec code couleur et description", icon: MapPin },
-  { step: "04", title: "Rapport d'expert", desc: "L'agent IA génère un rapport professionnel avec recommandations correctives", icon: FileText },
 ];
 
 interface Props {
@@ -741,27 +735,8 @@ export default function HomeClient({ user, stats }: Props) {
         </div>
       </section>
 
-      {/* Workflow */}
-      <section className="max-w-7xl mx-auto px-6 py-16">
-        <div className="text-center mb-12">
-          <h2 className="text-3xl font-bold mb-3">Comment ça fonctionne ?</h2>
-          <p className="text-muted-foreground">4 étapes automatisées pour fiabiliser vos données cadastrales</p>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {WORKFLOW_STEPS.map((step) => (
-            <div key={step.step} className="rounded-xl border border-border bg-card p-6 hover:border-primary/30 transition-all hover:shadow-lg">
-              <div className="flex items-center gap-3 mb-4">
-                <span className="text-3xl font-bold text-primary/20 font-mono">{step.step}</span>
-                <div className="w-9 h-9 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
-                  <step.icon className="w-4 h-4 text-primary" />
-                </div>
-              </div>
-              <h3 className="font-semibold mb-2 text-sm">{step.title}</h3>
-              <p className="text-xs text-muted-foreground leading-relaxed">{step.desc}</p>
-            </div>
-          ))}
-        </div>
-      </section>
+      {/* Workflow — pipeline DXF réel (lecture → mappage → polygonisation → jointure) */}
+      <DxfPipelineSection />
 
       {/* Features */}
       <section className="max-w-7xl mx-auto px-6 py-16">
