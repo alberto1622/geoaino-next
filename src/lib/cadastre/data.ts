@@ -980,6 +980,11 @@ export type ChangementInfo = {
   nomCommune2026: string | null;
   cibles2026: string | null;
   nbCibles2026: number;
+  // Codes Syscol des deux côtés — permet de signaler une recodification
+  // MÊME quand `type` vaut "inchange" (nom/emprise identiques mais code
+  // recodifié lors de la refonte 2013→2026, cf. § 35 CONCEPTS-TRAITEMENT-DXF.md).
+  syscol2013: string;
+  syscol2026: string | null;
 };
 
 export async function getChangementMaps(): Promise<{
@@ -1010,6 +1015,8 @@ export async function getChangementMaps(): Promise<{
       nomCommune2026: r.nomCommune2026,
       cibles2026: r.cibles2026,
       nbCibles2026: r.nbCibles2026,
+      syscol2013: r.syscol2013,
+      syscol2026: r.syscol2026,
     };
     parSyscol2013[r.syscol2013] = info;
     if (r.syscol2026) parSyscol2026[r.syscol2026] = info;

@@ -3470,16 +3470,26 @@ commune peut changer de code sans changer de périmètre), mais laisse un
 angle mort : aucune vue de l'application n'isolait spécifiquement les
 recodifications pures.
 
-**Solution** (`src/app/cadastre/correspondances/page.tsx`) : un signal
-INDÉPENDANT de `typeChangement` — `syscolChanged(c) = c.syscol2026 &&
-c.syscol2026 !== c.syscol2013` — calculé côté client sur les lignes déjà
-chargées (pas de nouveau paramètre serveur, `listCorrespondances` renvoie
-déjà les deux codes). Deux affichages : la cellule Syscol 2026 est mise en
-évidence (fond bleu + info-bulle « Syscol changé : X (2013) → Y (2026) »)
-dès que les codes diffèrent, quel que soit `typeChangement` ; et une case
-« Syscol changé » dans la barre d'outils filtre la liste à CES seules lignes
-(avec un compteur), pour l'audit ciblé plutôt que de scruter deux colonnes
-sur des centaines de lignes.
+**Solution** — un signal INDÉPENDANT de `typeChangement` —
+`syscolChanged = info.syscol2026 && info.syscol2026 !== info.syscol2013` —
+décliné sur DEUX vues :
+- `src/app/cadastre/correspondances/page.tsx` (tableau) : calculé côté
+  client sur les lignes déjà chargées (pas de nouveau paramètre serveur,
+  `listCorrespondances` renvoie déjà les deux codes). Cellule Syscol 2026
+  mise en évidence (fond bleu + info-bulle « Syscol changé : X (2013) →
+  Y (2026) ») dès que les codes diffèrent, quel que soit `typeChangement` ;
+  case « Syscol changé » dans la barre d'outils pour filtrer la liste à CES
+  seules lignes (avec un compteur).
+- `src/components/cadastre/CadastreMap.tsx` (`/cadastre/carte`) : même
+  signal, cette fois sur `ChangementInfo` (`getChangementMaps`, `data.ts`,
+  étendu avec `syscol2013`/`syscol2026` — déjà sélectionnés en SQL, juste
+  jamais renvoyés au client avant). Un liseré bleu POINTILLÉ, dessiné
+  PAR-DESSUS le remplissage habituel (une seconde couche `L.geoJSON` sans
+  fill, `interactive: false` pour ne pas intercepter le clic), signale la
+  recodification indépendamment de la couleur de type — visible même sur
+  une commune « inchangée » (grise, peu opaque) où le changement serait
+  sinon invisible ; tooltip et panneau « Commune sélectionnée » complétés
+  en conséquence, légende mise à jour.
 
 **Pourquoi (pièges inclus)** : ne pas confondre ce signal avec
 `typeChangement` ni tenter de le fusionner dedans — une commune « renommée »

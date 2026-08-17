@@ -78,7 +78,19 @@ type ChangementInfo = {
   nomCommune2026: string | null;
   cibles2026: string | null;
   nbCibles2026: number;
+  syscol2013: string;
+  syscol2026: string | null;
 };
+
+// Couleur du liseré signalant une recodification Syscol (indépendante du
+// type de changement — cf. § 35 CONCEPTS-TRAITEMENT-DXF.md : une commune
+// classée "inchange" peut quand même avoir changé de code, ex. Golf Sud
+// 01430111 → 01430121, invisible sans ce signal dédié).
+const SYSCOL_CHANGE_OUTLINE_COLOR = "#3b82f6";
+
+function syscolChanged(info: ChangementInfo | null): boolean {
+  return !!info?.syscol2026 && info.syscol2026 !== info.syscol2013;
+}
 
 const selectCls =
   "h-9 w-full rounded-lg border border-border bg-background text-foreground px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&>option]:bg-background [&>option]:text-foreground";
@@ -206,8 +218,11 @@ export default function CadastreMap() {
       const type = typeOf(c.syscolPadded);
       const notable = TYPE_NOTABLE.has(type);
       const color = TYPE_STYLE[type] ?? OTHER_COMMUNE_COLOR;
+      const info = changeInfoOf(c.syscolPadded);
+      const scChanged = syscolChanged(info);
       try {
-        const gj = L.geoJSON(JSON.parse(c.geojson), {
+        const geom = JSON.parse(c.geojson);
+        const gj = L.geoJSON(geom, {
           style: isSelected
             ? { color, weight: 3, fillColor: color, fillOpacity: 0.55 }
             : {
@@ -217,13 +232,15 @@ export default function CadastreMap() {
                 fillOpacity: notable ? 0.45 : 0.12,
               },
         });
-        const info = changeInfoOf(c.syscolPadded);
         const deptLine =
           info && info.departement2026 && info.departement2026 !== info.departement
             ? `<br/>${info.departement ?? "?"} → <b>${info.departement2026}</b>`
             : "";
+        const syscolLine = scChanged
+          ? `<br/>Syscol changé : ${info!.syscol2013} → <b>${info!.syscol2026}</b>`
+          : "";
         gj.bindTooltip(
-          `<b>${c.nomCommune}</b> (${c.syscolPadded})<br/>${TYPE_LABEL[type] ?? type}` + deptLine,
+          `<b>${c.nomCommune}</b> (${c.syscolPadded})<br/>${TYPE_LABEL[type] ?? type}` + deptLine + syscolLine,
           { sticky: true },
         );
         // Sélectionne la commune sans déclencher l'identification au clic (map click)
@@ -233,6 +250,25 @@ export default function CadastreMap() {
         });
         gj.addTo(group);
         if (isSelected) selectedLayer = gj;
+
+        // Recodification Syscol : liseré pointillé bleu par-dessus, INDÉPENDANT
+        // de la couleur de type — visible même sur une commune "inchangée"
+        // (grise, peu opaque) où le changement serait sinon invisible.
+        if (scChanged) {
+          try {
+            L.geoJSON(geom, {
+              style: {
+                color: SYSCOL_CHANGE_OUTLINE_COLOR,
+                weight: 2,
+                dashArray: "5 4",
+                fill: false,
+                interactive: false,
+              },
+            }).addTo(group);
+          } catch {
+            /* ignore */
+          }
+        }
       } catch {
         /* ignore */
       }
@@ -355,6 +391,13 @@ export default function CadastreMap() {
               {TYPE_LABEL[t]}
             </span>
           ))}
+          <span className="flex items-center gap-1.5">
+            <span
+              className="h-2.5 w-2.5 rounded-sm border-2 border-dashed"
+              style={{ borderColor: SYSCOL_CHANGE_OUTLINE_COLOR }}
+            />
+            Syscol changé (même si « Inchangé »)
+          </span>
         </div>
         <div className="relative">
           <div ref={mapEl} className="h-[600px] w-full rounded-xl border border-border/60" />
@@ -419,6 +462,18 @@ export default function CadastreMap() {
                       </span>
                     </div>
                   )}
+                {syscolChanged(selectedInfo) && (
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <span
+                      className="h-2.5 w-2.5 rounded-sm border-2 border-dashed"
+                      style={{ borderColor: SYSCOL_CHANGE_OUTLINE_COLOR }}
+                    />
+                    Syscol changé : {selectedInfo!.syscol2013} →{" "}
+                    <span className="font-medium text-foreground">
+                      {selectedInfo!.syscol2026}
+                    </span>
+                  </div>
+                )}
                 {selectedType === "decoupe" && selectedInfo?.cibles2026 && (
                   <div className="text-xs text-muted-foreground">
                     <span className="font-medium text-foreground">
