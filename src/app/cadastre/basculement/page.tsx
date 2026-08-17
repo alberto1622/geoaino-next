@@ -3,7 +3,7 @@ import { PageTitle } from "@/components/PageTitle";
 
 import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
-import { GitBranch, ArrowRight, Search, CheckCircle2, AlertTriangle } from "lucide-react";
+import { GitBranch, ArrowRight, Search, CheckCircle2, AlertTriangle, Info } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,6 +53,10 @@ export default function BasculementPage() {
           toast.error(res.error ?? "Identification échouée.");
           return;
         }
+        if (res.dejaAJour) {
+          toast.success("Ce NICAD est déjà 2026 — aucun basculement nécessaire.");
+          return;
+        }
         if (res.proposition) {
           setSyscolNouveau(res.proposition.syscolNouveau);
           setSectionNouvelle(res.proposition.sectionNouvelle ?? "");
@@ -89,6 +93,10 @@ export default function BasculementPage() {
       }
     });
   }
+
+  // Un NICAD déjà 2026 n'a rien à basculer — masque le formulaire cible/section
+  // plutôt que de laisser l'utilisateur "basculer" un NICAD qui l'est déjà.
+  const dejaAJour = !!(identification?.success && identification.dejaAJour);
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -144,7 +152,26 @@ export default function BasculementPage() {
             </p>
           </div>
 
-          {identification && identification.success && (
+          {identification && identification.success && identification.dejaAJour && (
+            <div className="space-y-2 rounded-lg border border-blue-500/40 bg-blue-500/5 p-3 text-sm">
+              <div className="flex items-center gap-2 font-medium">
+                <Info className="h-4 w-4 shrink-0 text-blue-500" />
+                {identification.commune2026?.nomCommune ?? "Commune 2026"}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Ce Syscol correspond déjà à une commune 2026 — ce NICAD est
+                à jour, aucun basculement n&apos;est nécessaire.
+              </p>
+              {identification.flags.length > 0 && (
+                <ul className="list-inside list-disc space-y-1 text-xs text-muted-foreground">
+                  {identification.flags.map((f, i) => (
+                    <li key={i}>{f}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          {identification && identification.success && !identification.dejaAJour && (
             <div
               className={`space-y-2 rounded-lg border p-3 text-sm ${
                 identification.clean
@@ -184,48 +211,52 @@ export default function BasculementPage() {
             <p className="text-xs text-rose-500">{identification.error}</p>
           )}
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-                Commune 2026 cible
-                {identification?.success && identification.proposition && (
-                  <span className="ml-1 font-normal text-primary">(pré-remplie)</span>
-                )}
-              </label>
-              <select
-                className={selectCls}
-                value={syscolNouveau}
-                onChange={(e) => setSyscolNouveau(e.target.value)}
-              >
-                <option value="">— Sélectionner —</option>
-                {communes.map((c) => (
-                  <option key={c.id} value={c.syscolPadded}>
-                    {c.nomCommune} ({c.syscolPadded})
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
-                Nouvelle section (cas complexe, optionnel)
-                {identification?.success && identification.proposition?.sectionNouvelle && (
-                  <span className="ml-1 font-normal text-primary">
-                    (identifiée par recouvrement spatial)
-                  </span>
-                )}
-              </label>
-              <Input
-                value={sectionNouvelle}
-                onChange={(e) => setSectionNouvelle(e.target.value)}
-                placeholder="ex. 002"
-                className="font-mono"
-              />
-            </div>
-          </div>
-          <Button onClick={handleBascule} disabled={pending} className="gap-2">
-            <GitBranch className="h-4 w-4" />
-            {pending ? "Basculement…" : "Basculer le NICAD"}
-          </Button>
+          {!dejaAJour && (
+            <>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
+                    Commune 2026 cible
+                    {identification?.success && identification.proposition && (
+                      <span className="ml-1 font-normal text-primary">(pré-remplie)</span>
+                    )}
+                  </label>
+                  <select
+                    className={selectCls}
+                    value={syscolNouveau}
+                    onChange={(e) => setSyscolNouveau(e.target.value)}
+                  >
+                    <option value="">— Sélectionner —</option>
+                    {communes.map((c) => (
+                      <option key={c.id} value={c.syscolPadded}>
+                        {c.nomCommune} ({c.syscolPadded})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
+                    Nouvelle section (cas complexe, optionnel)
+                    {identification?.success && identification.proposition?.sectionNouvelle && (
+                      <span className="ml-1 font-normal text-primary">
+                        (identifiée par recouvrement spatial)
+                      </span>
+                    )}
+                  </label>
+                  <Input
+                    value={sectionNouvelle}
+                    onChange={(e) => setSectionNouvelle(e.target.value)}
+                    placeholder="ex. 002"
+                    className="font-mono"
+                  />
+                </div>
+              </div>
+              <Button onClick={handleBascule} disabled={pending} className="gap-2">
+                <GitBranch className="h-4 w-4" />
+                {pending ? "Basculement…" : "Basculer le NICAD"}
+              </Button>
+            </>
+          )}
         </CardContent>
       </Card>
 

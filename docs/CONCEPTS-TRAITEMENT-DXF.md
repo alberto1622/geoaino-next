@@ -3504,40 +3504,55 @@ bruit ; ce signal n'a de sens que sur une vue de RÉFÉRENTIEL (comparer deux
 
 ---
 
-## 36. Basculement : Syscol introuvable en 2013 — vérifier s'il existe déjà en 2026 avant d'abandonner
+## 36. Basculement : identifier D'ABORD le référentiel du Syscol (2026 = à jour, 2013 = à basculer), pas seulement rattraper un « introuvable »
 
-**Problème métier** : `identifierBasculement` (§31) se contentait de
-signaler « Commune 2013 introuvable » quand le Syscol extrait du NICAD saisi
-n'a aucune correspondance dans `cad_communes_2013`, sans autre piste pour
-l'utilisateur — alors que deux causes fréquentes restent silencieuses : (1)
-le NICAD saisi est en réalité déjà un NICAD **2026** (aucun basculement à
-faire), ou (2) l'utilisateur a confondu les deux référentiels en saisissant
-un Syscol 2026 par erreur.
+**Problème métier** : `identifierBasculement` (§31) traitait TOUJOURS le
+Syscol du NICAD saisi comme un Syscol 2013 par construction — il cherchait
+sa correspondance 2026, et ne se souciait du référentiel 2026 qu'en repli
+quand la commune 2013 était introuvable (version précédente de cette
+section, cf. historique). L'utilisateur a reformulé le principe attendu,
+plus simple et plus juste : identifier D'ABORD à quel référentiel appartient
+le Syscol — s'il est 2026, le NICAD est déjà à jour (rien à faire) ; s'il
+est 2013, proposer le basculement (comportement déjà existant). Cette
+vérification doit passer AVANT toute autre logique, pas seulement en repli
+d'un échec.
 
 **Cause technique** : les deux référentiels (`cad_communes_2013`,
 `cad_communes_2026`) sont des tables DISTINCTES avec des espaces de codes
-Syscol indépendants — un code à 8 chiffres absent de l'un peut très bien
-exister dans l'autre. Rien ne le vérifiait avant d'abandonner sur un simple
-« introuvable ».
+Syscol indépendants. Rien n'empêchait un utilisateur de coller un NICAD déjà
+2026 dans le champ « NICAD d'origine (2013) » — l'ancienne version aurait
+alors cherché sa correspondance 2013→2026 pour un Syscol qui n'a JAMAIS
+existé en 2013 (puisqu'il EST le 2026), traitant un cas « rien à faire »
+comme un cas d'erreur avec flags.
 
 **Solution** (`src/app/cadastre/_actions/nicad.ts · identifierBasculement`) :
-quand `getCommune2013BySyscol(syscol2013)` ne renvoie rien, un second appel
-`getCommune2026BySyscol(syscol2013)` (même Syscol, référentiel 2026) est
-tenté avant d'abandonner. S'il aboutit, un second flag explicite le signale :
-« Le Syscol X n'existe pas dans le référentiel 2013, mais correspond à la
-commune 2026 « Nom » — ce NICAD est peut-être déjà un NICAD 2026 (aucun
-basculement nécessaire), ou le Syscol saisi provient du mauvais
-référentiel. » Aucun changement d'UI requis : `/cadastre/basculement`
-affiche déjà `identification.flags` en liste.
+les deux référentiels sont interrogés EN PARALLÈLE dès l'entrée
+(`getCommune2026BySyscol`/`getCommune2013BySyscol` sur le même Syscol
+extrait du NICAD). Si le Syscol matche 2026, retour immédiat
+`{ dejaAJour: true, commune2026, flags: [...] }` — AUCUNE des étapes
+suivantes (correspondance, jointure spatiale de section) n'est exécutée,
+inutile pour un NICAD déjà à jour. Une coïncidence avec 2013 (même code
+existant aussi dans l'autre référentiel indépendant, improbable mais
+possible) reste signalée en `flags`, jamais traitée comme une raison de
+proposer un basculement : 2026 fait autorité dès qu'il matche. Sinon, la
+logique existante (§31) s'applique inchangée, avec un message d'échec ajusté
+si le Syscol n'est trouvé dans AUCUN des deux référentiels. Côté UI
+(`/cadastre/basculement/page.tsx`) : un troisième état visuel (bandeau bleu,
+icône `Info`) distinct du vert « clean »/ambre « flags » existants, et le
+formulaire commune cible/section/bouton « Basculer » est entièrement MASQUÉ
+quand `dejaAJour` — rien à basculer, l'afficher inviterait à une action sans
+objet.
 
-**Pourquoi (pièges inclus)** : rester purement INFORMATIF — ce flag ne
-déclenche aucune action automatique (pas de pré-remplissage, la proposition
-reste `null` comme avant) : trouver le Syscol dans le référentiel 2026 ne
-prouve PAS que le NICAD saisi en est un (une coïncidence de code à 8
-chiffres entre deux référentiels indépendants reste possible, quoique rare) —
-à l'utilisateur de vérifier et de décider, même logique de prudence que le
-reste de `identifierBasculement` (§31 : ne jamais imposer, toujours
-proposer/signaler).
+**Pourquoi (pièges inclus)** : l'ORDRE compte — vérifier 2026 avant 2013
+(pas l'inverse, pas en parallèle sans priorité) reflète directement la
+consigne utilisateur et évite un flou en cas de coïncidence des deux codes :
+2026 gagne toujours. Piège à éviter, hérité de la version précédente de
+cette section : ne pas laisser le formulaire de basculement actif quand
+`dejaAJour` est vrai — un utilisateur qui cliquerait quand même
+« Basculer » sur un NICAD déjà 2026 obtiendrait un NICAD 2026 recréé à
+partir d'un Syscol 2026 traité comme un Syscol source, un résultat
+incohérent que `basculerNicadAction` ne détecte pas lui-même (il ne valide
+pas que le NICAD d'entrée est réellement 2013).
 
 ---
 

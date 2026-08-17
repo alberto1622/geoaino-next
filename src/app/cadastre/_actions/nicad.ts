@@ -275,18 +275,24 @@ export async function genererNicad(input: z.infer<typeof genererSchema>) {
 }
 
 // ─── Identification automatique de la cible 2026 avant basculement ───────────
-// Principe : l'utilisateur ne renseigne QUE le NICAD 2013. On identifie le
-// Syscol 2013 (extrait du NICAD), on retrouve sa correspondance 2026 (table
-// `cad_correspondance_2013_2026`, calculée par recouvrement spatial — cf.
-// `recalculerCorrespondancesSpatiales`), puis on retrouve la section 2026
-// correspondante par JOINTURE SPATIALE (`findSectionSpatialMatches` —
-// recouvrement géométrique section 2013 ↔ sections 2026, PAS une simple
-// égalité de numéro : un même numéro peut ne plus recouvrir la même zone
-// après redécoupage, une zone inchangée peut avoir été renumérotée). Toute
-// différence (correspondance provisoire/absente, découpage/fusion/renommage
-// de commune, section renumérotée/découpée/introuvable) est remontée dans
-// `flags` plutôt que masquée ; le basculement n'est PROPOSÉ proprement
-// (`clean`) que si tout correspond sans aucun flag.
+// Principe (dans cet ordre) : à partir du seul NICAD saisi, identifier
+// D'ABORD à quel référentiel appartient son Syscol.
+//  - Trouvé dans `cad_communes_2026` → le NICAD est DÉJÀ 2026, à jour, rien à
+//    basculer (`dejaAJour: true`) — vérifié en PREMIER, avant même de tenter
+//    2013, cf. demande explicite : « si c'est de 2026 alors c'est à jour ».
+//  - Sinon, trouvé dans `cad_communes_2013` → c'est un NICAD 2013 : on
+//    retrouve sa correspondance 2026 (table `cad_correspondance_2013_2026`,
+//    calculée par recouvrement spatial — cf. `recalculerCorrespondancesSpatiales`),
+//    puis la section 2026 correspondante par JOINTURE SPATIALE
+//    (`findSectionSpatialMatches` — recouvrement géométrique section 2013 ↔
+//    sections 2026, PAS une simple égalité de numéro : un même numéro peut ne
+//    plus recouvrir la même zone après redécoupage, une zone inchangée peut
+//    avoir été renumérotée). Toute différence (correspondance provisoire/
+//    absente, découpage/fusion/renommage de commune, section renumérotée/
+//    découpée/introuvable) est remontée dans `flags` plutôt que masquée ; le
+//    basculement n'est PROPOSÉ proprement (`clean`) que si tout correspond
+//    sans aucun flag.
+//  - Trouvé dans AUCUN des deux référentiels → NICAD invalide/saisie erronée.
 const identifierSchema = z.object({ nicadAncien: z.string().length(16) });
 
 export async function identifierBasculement(input: z.infer<typeof identifierSchema>) {
@@ -297,30 +303,50 @@ export async function identifierBasculement(input: z.infer<typeof identifierSche
   if (!formatResult.valid || !formatResult.parts) {
     return { success: false as const, error: `NICAD invalide : ${formatResult.errors.join(", ")}` };
   }
-  const { syscol: syscol2013, section, numParcelle } = formatResult.parts;
+  const { syscol, section, numParcelle } = formatResult.parts;
 
-  const [commune2013, correspondance] = await Promise.all([
-    getCommune2013BySyscol(syscol2013),
-    getCorrespondanceBySyscol2013(syscol2013),
+  const [commune2026Direct, commune2013] = await Promise.all([
+    getCommune2026BySyscol(syscol),
+    getCommune2013BySyscol(syscol),
   ]);
+
+  if (commune2026Direct) {
+    // Le Syscol saisi est DÉJÀ un code 2026 : rien à basculer. Un
+    // chevauchement avec 2013 (le même code à 8 chiffres existerait aussi
+    // dans l'autre référentiel indépendant) reste possible mais improbable —
+    // signalé, jamais traité comme une raison de proposer un basculement :
+    // 2026 fait autorité dès qu'il matche.
+    return {
+      success: true as const,
+      dejaAJour: true as const,
+      nicad: { syscol, section, numParcelle, full: data.nicadAncien },
+      commune2013: null,
+      correspondance: null,
+      commune2026: {
+        nomCommune: commune2026Direct.nomCommune,
+        region: commune2026Direct.region,
+        departement: commune2026Direct.departement,
+      },
+      sectionExisteEn2026: null,
+      flags: commune2013
+        ? [
+            `Ce Syscol existe aussi dans le référentiel 2013 (commune « ${commune2013.nomCommune} ») — ` +
+              "coïncidence de code entre les deux référentiels indépendants, sans effet : ce NICAD est déjà 2026.",
+          ]
+        : [],
+      clean: false,
+      proposition: null,
+    };
+  }
+
+  const syscol2013 = syscol;
+  const correspondance = await getCorrespondanceBySyscol2013(syscol2013);
 
   const flags: string[] = [];
   if (!commune2013) {
-    flags.push(`Commune 2013 introuvable pour le Syscol ${syscol2013} — vérifiez le NICAD saisi.`);
-    // Le Syscol saisi n'existe dans AUCUNE commune 2013, mais peut très bien
-    // exister comme code 2026 (référentiels distincts, la même valeur à 8
-    // chiffres n'appartient pas forcément aux deux) — signal utile pour
-    // repérer un NICAD déjà en 2026 (pas de basculement à faire) ou une
-    // saisie qui a confondu les deux référentiels, plutôt que de laisser
-    // l'utilisateur sans piste face à un simple "introuvable".
-    const commune2026PourSyscolSaisi = await getCommune2026BySyscol(syscol2013);
-    if (commune2026PourSyscolSaisi) {
-      flags.push(
-        `Le Syscol ${syscol2013} n'existe pas dans le référentiel 2013, mais correspond à la commune ` +
-          `2026 « ${commune2026PourSyscolSaisi.nomCommune} » — ce NICAD est peut-être déjà un NICAD 2026 ` +
-          "(aucun basculement nécessaire), ou le Syscol saisi provient du mauvais référentiel.",
-      );
-    }
+    flags.push(
+      `Syscol ${syscol2013} introuvable dans les référentiels 2013 ET 2026 — vérifiez le NICAD saisi.`,
+    );
   }
 
   const syscol2026 = correspondance?.syscol2026 ?? null;
@@ -411,9 +437,13 @@ export async function identifierBasculement(input: z.infer<typeof identifierSche
 
   return {
     success: true as const,
+    dejaAJour: false as const,
     nicad: { syscol: syscol2013, section, numParcelle, full: data.nicadAncien },
     commune2013: commune2013
       ? { nomCommune: commune2013.nomCommune, region: commune2013.region, departement: commune2013.departement }
+      : null,
+    commune2026: commune2026
+      ? { nomCommune: commune2026.nomCommune, region: commune2026.region, departement: commune2026.departement }
       : null,
     correspondance: correspondance
       ? {
