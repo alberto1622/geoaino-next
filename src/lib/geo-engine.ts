@@ -317,16 +317,34 @@ export async function analyzeGeoJSON(
     if (indices.length > 1) duplicateGroups.push({ nicad, indices });
   });
 
-  // Jointure spatiale (cad_communes_2026, « limites administratives ») sur
-  // les points représentatifs des SEULES features en doublon (pas la totalité
-  // du lot — perf sur un gros DXF) : un même NICAD porté par deux communes
-  // différentes n'est probablement pas un vrai doublon mais deux parcelles
-  // distinctes mal codifiées (cf. exemple terrain : un NICAD Yeumbeul Nord /
+  // Commune 2026 de chaque feature en doublon, pour distinguer un vrai
+  // doublon d'une collision de NICAD entre deux parcelles réellement dans
+  // des communes différentes (cf. exemple terrain : NICAD Yeumbeul Nord /
   // Keur Massar Nord — communes limitrophes de Pikine/Keur Massar).
+  //
+  // PRIORITÉ à `commune_2026`, déjà posée sur chaque feature du pipeline DXF
+  // par la jointure spatiale FAITE À L'INGESTION (`parcelle-ingestion.ts` ·
+  // `parcellesToFeatureCollection`) — jamais une seconde jointure indépendante
+  // ici. Une parcelle proche d'une frontière communale peut avoir son point
+  // représentatif à quelques mètres de part et d'autre de la limite ; refaire
+  // la jointure avec un point représentatif DIFFÉRENT (`turf.pointOnFeature`
+  // vs le point intérieur choisi à l'ingestion) pouvait renvoyer une commune
+  // différente pour la MÊME parcelle selon l'endroit du code qui la calculait
+  // — 4 faux positifs observés sur KEUR MASSAR.dxf, où `commune_2026` valait
+  // pourtant uniformément "Keur Massar Nord" pour toutes les occurrences.
+  // La jointure spatiale ci-dessous ne sert plus qu'en REPLI, pour les
+  // features qui n'ont jamais été résolues à l'ingestion (pipeline shapefile
+  // « parcelles-home », qui ne pose pas `commune_2026`).
+  const duplicateCommunes = new Map<number, string | null>();
   const duplicatePointIdx: number[] = [];
   const duplicatePoints: { lng: number; lat: number }[] = [];
   duplicateGroups.forEach(({ indices }) => {
     indices.forEach((idx) => {
+      const precomputed = features[idx]?.properties?.commune_2026;
+      if (typeof precomputed === "string" && precomputed.trim()) {
+        duplicateCommunes.set(idx, precomputed.trim());
+        return;
+      }
       const pt = representativePointLngLat(features[idx]);
       if (pt) {
         duplicatePointIdx.push(idx);
@@ -334,7 +352,6 @@ export async function analyzeGeoJSON(
       }
     });
   });
-  const duplicateCommunes = new Map<number, string | null>();
   if (duplicatePoints.length > 0) {
     try {
       const resolved = await getSyscols2026ForPoints(duplicatePoints);

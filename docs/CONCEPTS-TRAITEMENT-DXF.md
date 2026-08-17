@@ -3280,6 +3280,22 @@ fonctions `async` : `POST /api/analyses`, `POST .../regenerate-report`,
 features effectivement en doublon (pas la totalité du lot) pour rester
 négligeable même sur un DXF à 100k+ parcelles.
 
+**Correctif (faux positifs sur KEUR MASSAR.dxf)** : la toute première version
+refaisait TOUJOURS une jointure spatiale fraîche ici, même pour les parcelles
+issues du pipeline DXF, qui ont pourtant déjà une commune 2026 résolue à
+l'ingestion (`commune_2026`, posée par `parcellesToFeatureCollection` dans
+`parcelle-ingestion.ts`). Une parcelle proche d'une frontière communale peut
+avoir son point représentatif à quelques mètres de part et d'autre de la
+limite ; recalculer ce point ICI (`turf.pointOnFeature`) au lieu de réutiliser
+celui déjà choisi à l'ingestion pouvait renvoyer une commune DIFFÉRENTE pour
+la même parcelle — 4 occurrences signalées « commune différente » sur
+KEUR MASSAR.dxf alors que `commune_2026` valait uniformément « Keur Massar
+Nord » pour toutes. Corrigé : le bloc lit d'abord `properties.commune_2026`
+quand il est déjà posé (cas DXF, l'écrasante majorité des imports concernés)
+et ne retombe sur une jointure spatiale fraîche que pour les features qui
+n'en ont jamais eu (pipeline shapefile « parcelles-home », qui ne pose pas ce
+champ) — plus jamais deux résolutions indépendantes pour la même parcelle.
+
 **Pourquoi (pièges inclus)** : la sévérité de l'erreur reste `critical` dans
 les deux cas (un NICAD dupliqué reste un problème d'intégrité de données
 quelle qu'en soit la cause) — seule la DESCRIPTION change, volontairement,
@@ -3293,7 +3309,13 @@ sert à vérifier (même principe que `section_mismatch`, § champ
 `sectionGeolocalisee` de `assign-section-nicad.ts` : déclaré vs géolocalisé).
 Si la jointure DB échoue (base injoignable, lot hors Sénégal) la fonction
 dégrade en silence — la description reste celle sans info commune plutôt que
-de faire échouer toute l'analyse pour un enrichissement optionnel.
+de faire échouer toute l'analyse pour un enrichissement optionnel. Second
+piège (celui du correctif ci-dessus, plus général) : un même fait spatial
+(« quelle commune contient ce point ? ») ne doit être résolu qu'UNE seule
+fois et sa valeur réutilisée partout — le recalculer à un autre endroit du
+pipeline, même avec la même table de référence, introduit un point
+représentatif différent et donc un risque de désaccord silencieux près d'une
+frontière, sans qu'aucune des deux résolutions ne soit « fausse » en soi.
 
 ---
 
