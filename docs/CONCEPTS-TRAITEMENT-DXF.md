@@ -3621,5 +3621,48 @@ pas que le NICAD d'entrée est réellement 2013).
 
 ---
 
+## 37. Basculement d'un NICAD 2013 jamais suivi par l'appli : `updateNicadStatut` plantait avec P2025 (« Record to update not found »)
+
+**Problème métier** : basculer un NICAD 2013 réel (saisi tel quel, jamais
+généré via `/cadastre/nicad`) plantait en base avec `P2025` sur
+`prisma.cadNicad.update(...)`, alors que le NICAD 2026 cible avait déjà été
+inséré correctement — le basculement échouait donc APRÈS avoir déjà créé la
+moitié de son résultat, sans historique écrit (`CadNicadHistorique`, qui
+vient après dans le flux), un état incohérent silencieux si l'erreur passait
+inaperçue.
+
+**Cause technique** : `cad_nicads` (`CadNicad`) ne suit QUE les NICAD ayant
+transité par cette application (générés via `genererNicad`, ou déjà
+basculés une première fois) — ce n'est PAS un registre exhaustif de tous les
+NICAD 2013 réellement attribués sur le terrain. `updateNicadStatut`
+(`data.ts`) faisait un simple `prisma.cadNicad.update({ where: { nicad },
+... })`, qui échoue avec `P2025` si la ligne n'existe pas — le cas normal
+pour un PREMIER basculement d'un NICAD 2013 authentique jamais vu par
+l'appli auparavant (vérifié en direct : `0143011102500024` absent de
+`cad_nicads` avant le correctif).
+
+**Solution** (`src/lib/cadastre/data.ts · updateNicadStatut`) : `update` →
+`upsert`. La branche `create` reconstruit la ligne manquante à partir du
+NICAD lui-même — Syscol/section/numéro dérivés par découpage des 16
+chiffres (`NICAD_PREFIX_LENGTH`/`NICAD_SECTION_LENGTH`, `@/lib/nicad`),
+`version: "2013"` fixé en dur (les deux seuls appelants,
+`basculerNicadAction`/`basculerBatch`, ne ciblent jamais que le NICAD
+ANCIEN — donc toujours 2013 — d'un basculement, jamais un NICAD 2026).
+
+**Pourquoi (pièges inclus)** : ne pas supposer qu'une table de suivi interne
+(`cad_nicads`) contient TOUT le référentiel réel — elle ne contient que ce
+que l'application elle-même a créé ou déjà traité, un sous-ensemble. Toute
+action qui référence un NICAD "externe" (saisi par l'utilisateur, jamais
+généré ici) doit `upsert`, pas `update` seul, sous peine de traiter un cas
+normal (premier contact avec ce NICAD) comme une erreur. Piège à ne pas
+reproduire : ce correctif dérive Syscol/section/numéro du NICAD par simple
+découpage de chaîne plutôt que de les faire remonter en paramètres depuis
+les appelants — un choix délibéré pour ne PAS changer la signature de
+`updateNicadStatut` (donc ne rien casser ailleurs), rendu sûr par le fait
+qu'un NICAD à ce stade a déjà été validé 16 chiffres par
+`validateNicadFormat` en amont.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

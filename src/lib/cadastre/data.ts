@@ -8,6 +8,7 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { plain } from "./serialize";
+import { NICAD_PREFIX_LENGTH, NICAD_SECTION_LENGTH } from "@/lib/nicad";
 
 type Version = "2013" | "2026";
 
@@ -301,14 +302,37 @@ export async function getNicadsBySyscol(syscol: string) {
   );
 }
 
+/**
+ * Marque un NICAD comme basculé (ou invalide) — `upsert`, PAS `update` seul :
+ * `cad_nicads` ne suit que les NICAD passés par CETTE application (générés
+ * via `genererNicad`, ou déjà basculés). Un NICAD 2013 réel, saisi tel quel
+ * sur `/cadastre/basculement` pour un premier basculement, n'y a souvent
+ * AUCUNE ligne — `update` échouait alors avec P2025 (« Record to update not
+ * found »), faisant échouer tout le basculement alors que la migration
+ * elle-même (NICAD 2026 inséré, historique écrit) avait déjà réussi. La
+ * ligne manquante est créée à la volée : Syscol/section/numéro dérivés du
+ * NICAD lui-même (16 chiffres = 8+3+5, cf. `NICAD_PREFIX_LENGTH` etc.),
+ * `version: "2013"` — les deux appelants (`basculerNicadAction`,
+ * `basculerBatch`) ne ciblent jamais que le NICAD ANCIEN (source) d'un
+ * basculement, toujours 2013 dans ce flux.
+ */
 export async function updateNicadStatut(
   nicad: string,
   statut: "actif" | "bascule" | "invalide",
   nicadNouveau?: string,
 ) {
-  return prisma.cadNicad.update({
+  return prisma.cadNicad.upsert({
     where: { nicad },
-    data: { statut, ...(nicadNouveau ? { nicadNouveau } : {}) },
+    update: { statut, ...(nicadNouveau ? { nicadNouveau } : {}) },
+    create: {
+      nicad,
+      syscol: nicad.slice(0, NICAD_PREFIX_LENGTH),
+      section: nicad.slice(NICAD_PREFIX_LENGTH, NICAD_PREFIX_LENGTH + NICAD_SECTION_LENGTH),
+      numParcelle: nicad.slice(NICAD_PREFIX_LENGTH + NICAD_SECTION_LENGTH),
+      version: "2013",
+      statut,
+      ...(nicadNouveau ? { nicadNouveau } : {}),
+    },
   });
 }
 
