@@ -3382,6 +3382,36 @@ pipeline, même avec la même table de référence, introduit un point
 représentatif différent et donc un risque de désaccord silencieux près d'une
 frontière, sans qu'aucune des deux résolutions ne soit « fausse » en soi.
 
+**Correctif 2 (le vrai fond du problème, toujours reproduit après le
+correctif 1)** : `commune_2026` lui-même n'était PAS une source fiable
+unique — `assignNicad2026FromCommunes` (`assign-nicad-2026.ts`) le renseigne
+via `p.nomCommune2026 = sm.commune ?? communeMatches[i]?.nomCommune ?? null`,
+où `sm.commune` est un texte STOCKÉ sur la ligne `limite_section` appariée
+(écrit au moment de la construction de la section, `build-sections.ts`),
+utilisé en PRIORITÉ sur `communeMatches[i]?.nomCommune` — la vraie jointure
+spatiale directe contre `cad_communes_2026`, déjà calculée juste au-dessus
+dans la même fonction (`getSyscols2026ForPoints(points)`, un seul appel
+batché pour toutes les parcelles). Deux parcelles partageant le MÊME NICAD
+partagent nécessairement le même `syscolCommune` (il en est le préfixe), mais
+PAS forcément le même `sm.commune` : `limite_section` peut porter plusieurs
+lignes/fragments pour un même (syscol, numSection) pas parfaitement dissous
+(cf. § « sections fusionnées/disparues », doc mémoire), chacun avec son
+propre texte `commune` — l'un renseigné, l'autre non (repli vers
+`communeMatches`, potentiellement différent près d'une frontière). Résultat :
+mêmes faux positifs que le correctif 1 était censé éliminer, cette fois-ci
+en AMONT de `geo-engine.ts` — `commune_2026` lui-même incohérent d'une
+occurrence à l'autre du même NICAD, sur KEUR MASSAR.dxf notamment. Corrigé en
+inversant la priorité : `communeMatches[i]?.nomCommune ?? sm.commune ?? null`
+— la jointure spatiale directe (déjà calculée, aucun coût supplémentaire)
+fait désormais TOUJOURS autorité en premier, `sm.commune` ne sert plus qu'en
+dernier repli (parcelle hors contenance stricte ET hors tolérance 50 m de
+`cad_communes_2026`, mais couverte par `limite_section`). Troisième piège,
+qui généralise encore le second : quand une valeur peut être obtenue par
+PLUSIEURS chemins de repli (`a ?? b ?? c`), la robustesse ne suffit pas —
+il faut aussi que TOUS les appelants finissent, pour un même NICAD/une même
+parcelle, par converger vers le MÊME chemin ; sinon le `??` masque
+silencieusement une incohérence entre deux sources au lieu de la révéler.
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait

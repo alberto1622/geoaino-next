@@ -120,9 +120,7 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 - Pour les erreurs de duplication, ajouter la différence de commune des limites administratives
   Exemple: Voici deux parcelles de même nicad mais de commune différent
   - nicand 1: 0152020100701524, Yeumbeul Nord
-  - nicand 1: 0152020100701524, Keur Massar Nord
-
-## RECHARGER LE FICHIER PLAN CADASTRAL PIKINE.DXF CAR IL Y A CERTAINS NICAD N'ONT RECUPERER
+  - nicand 2: 0152020100701524, Keur Massar Nord
 
 ## 3. Vérification du NICAD
 
