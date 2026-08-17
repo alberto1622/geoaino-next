@@ -3599,5 +3599,51 @@ qu'un NICAD à ce stade a déjà été validé 16 chiffres par
 
 ---
 
+## 38. Exporter en shapefile plusieurs fichiers hétérogènes combinés : décomposer le NICAD plutôt que deviner les colonnes source
+
+**Problème métier** : `/cadastre/parcelles` (nouvelle page de visualisation
+multi-fichiers, lecture seule) doit pouvoir exporter en shapefile la
+sélection COURANTE — potentiellement plusieurs `Analysis` d'origines
+différentes (un DXF ayant posé `commune_2026`/`nicad` via le pipeline
+CAO, un shapefile dont les colonnes dépendent du mappage de champs choisi
+par l'utilisateur à l'import). Un export shapefile a besoin d'un schéma DBF
+UNIQUE (mêmes colonnes pour toutes les lignes) — impossible à garantir en
+lisant directement les propriétés brutes de chaque fichier, qui varient.
+
+**Cause technique** : contrairement à `buildShapefileZip`/
+`buildShapefileMultiZip` (référentiel persistant `cad_parcelles`, colonnes
+typées en base, cf. § export existant), la source ici est le GeoJSON BRUT de
+chaque `Analysis` (`geoJsonData`/`geojsonKey`) — jamais réimporté dans une
+table structurée, donc sans schéma de propriétés garanti d'un fichier à
+l'autre.
+
+**Solution** (`buildAnalysesShapefileZip`, `src/lib/cadastre/
+export-shapefile.ts`) : ne PAS lire les propriétés spécifiques au pipeline
+d'origine — extraire le NICAD via `extractNicad` (`geo-engine.ts`, mêmes
+alias déjà couverts : `nicad`/`NICAD`/`NIC`/`NUM_NICAD`/…) puis le
+DÉCOMPOSER par simple découpage des 16 chiffres en Syscol(8)/section(3)/
+numéro(5) — cf. même technique déjà appliquée pour `updateNicadStatut` (§37).
+Un seul jeu de colonnes DBF (`NICAD`/`SYSCOL`/`SECTION`/`NUMERO`/`COMMUNE`/
+`FICHIER`) s'applique alors UNIFORMÉMENT, quel que soit le pipeline
+d'origine de chaque ligne — `FICHIER` (nom de l'`Analysis`) reste la seule
+donnée réellement propre à la source, conservée pour distinguer la
+provenance une fois les fichiers combinés dans un même export.
+
+**Pourquoi (pièges inclus)** : le NICAD, en tant que code déjà structuré et
+normalisé (16 chiffres, format vérifié en amont par le pipeline
+d'ingestion), est une source d'attributs plus fiable que les propriétés
+brutes du fichier source — un principe généralisable au-delà de cet export
+précis, chaque fois qu'il faut combiner des données de provenances
+hétérogènes sous un schéma commun. Piège à éviter : ne pas confondre cette
+page de VISUALISATION en lecture seule (erreurs affichées avec la même
+palette `errorTypeColor`/légende que `/map/[analysisId]`, mais aucune action
+de correction) avec le flux `/map/[analysisId]` lui-même — les deux lisent
+les mêmes `TopologicalError`, mais seule la page carte expose les routes de
+correction (`/api/analyses/[id]/errors/[errorId]/correct`) ; la nouvelle
+page se contente d'un filtre d'affichage par type (masquer/afficher), qui ne
+modifie jamais `corrected` en base.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

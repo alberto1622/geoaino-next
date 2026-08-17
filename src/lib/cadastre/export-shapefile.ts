@@ -10,6 +10,9 @@
 import { type Archiver, ZipArchive } from "archiver";
 import { getParcellesForExport, getParcellesMultiSyscols } from "./data";
 import { listSections } from "./sections-data";
+import { prisma } from "@/lib/prisma";
+import { loadGeoJsonFromKey } from "@/lib/geo-storage";
+import { extractNicad } from "@/lib/geo-engine";
 
 const PRJ_WGS84 = `GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]`;
 
@@ -324,6 +327,89 @@ export async function buildShapefileMultiZip(syscols: string[]): Promise<ZipResu
   });
 
   return { filename: `PARCELLES_MULTI_${dateStr}.zip`, buffer };
+}
+
+// ─── Visualisation des parcelles (/cadastre/parcelles) ────────────────────────
+
+const ANALYSE_FIELDS: DbfField[] = [
+  { name: "NICAD", type: "C", length: 16 },
+  { name: "SYSCOL", type: "C", length: 8 },
+  { name: "SECTION", type: "C", length: 3 },
+  { name: "NUMERO", type: "C", length: 5 },
+  { name: "COMMUNE", type: "C", length: 50 },
+  { name: "FICHIER", type: "C", length: 60 },
+];
+
+/**
+ * Construit le shapefile ZIP des parcelles de N `Analysis` combinées (page
+ * `/cadastre/parcelles`, sélection multi-fichiers). Contrairement à
+ * `buildShapefileZip`/`buildShapefileMultiZip` (référentiel persistant
+ * `cad_parcelles`, colonnes typées), la source ici est le GeoJSON BRUT de
+ * chaque analyse — les propriétés varient donc selon le pipeline d'origine
+ * (DXF : `commune_2026`/`nicad` déjà posés ; shapefile : dépend du mappage de
+ * champs utilisateur). Le NICAD est extrait via `extractNicad` (mêmes alias
+ * que `geo-engine.ts`) puis DÉCOMPOSÉ en Syscol/section/numéro par découpage
+ * des 16 chiffres — plus fiable que de deviner les noms de colonnes
+ * source, et cohérent avec un seul jeu de colonnes DBF quel que soit le
+ * fichier d'origine. `FICHIER` (nom de l'analyse) distingue la provenance
+ * d'une ligne une fois plusieurs fichiers combinés dans un même export.
+ */
+export async function buildAnalysesShapefileZip(analysisIds: number[]): Promise<ZipResult | null> {
+  if (analysisIds.length === 0) return null;
+
+  const analyses = await prisma.analysis.findMany({
+    where: { id: { in: analysisIds } },
+    select: { id: true, fileName: true, geojsonKey: true, geoJsonData: true },
+  });
+  if (analyses.length === 0) return null;
+
+  const dbfRows: Record<string, string>[] = [];
+  const geometries: Ring[][] = [];
+
+  for (const a of analyses) {
+    const raw = (await loadGeoJsonFromKey(a.geojsonKey)) ?? a.geoJsonData;
+    if (!raw) continue;
+    let fc: { features?: Array<{ geometry?: unknown; properties?: Record<string, unknown> | null }> };
+    try {
+      fc = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    for (const f of fc.features ?? []) {
+      const props = f.properties ?? {};
+      const nicad = extractNicad(props);
+      const valid16 = /^\d{16}$/.test(nicad);
+      dbfRows.push({
+        NICAD: nicad,
+        SYSCOL: valid16 ? nicad.slice(0, 8) : "",
+        SECTION: valid16 ? nicad.slice(8, 11) : "",
+        NUMERO: valid16 ? nicad.slice(11, 16) : "",
+        COMMUNE: String(props.commune_2026 ?? props.commune ?? ""),
+        FICHIER: a.fileName,
+      });
+      geometries.push(parseGeojsonRings(f.geometry as object));
+    }
+  }
+  if (dbfRows.length === 0) return null;
+
+  const dbfBuf = buildDbf(ANALYSE_FIELDS, dbfRows);
+  const { shp, shx } = buildShpShx(geometries);
+  const prjBuf = Buffer.from(PRJ_WGS84, "ascii");
+
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const baseName =
+    analyses.length === 1
+      ? `PARCELLES_${sanitizeName(analyses[0].fileName)}_${dateStr}`
+      : `PARCELLES_SELECTION_${analyses.length}FICHIERS_${dateStr}`;
+
+  const buffer = await archiveToBuffer((archive) => {
+    archive.append(shp, { name: `${baseName}.shp` });
+    archive.append(shx, { name: `${baseName}.shx` });
+    archive.append(dbfBuf, { name: `${baseName}.dbf` });
+    archive.append(prjBuf, { name: `${baseName}.prj` });
+  });
+
+  return { filename: `${baseName}.zip`, buffer };
 }
 
 // ─── Limites de sections ─────────────────────────────────────────────────────
