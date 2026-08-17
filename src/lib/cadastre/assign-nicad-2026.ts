@@ -61,7 +61,22 @@ export async function assignNicad2026FromCommunes(
       // toujours `null` à ce stade, cf. `parcelle-ingestion.ts`).
       if (report.nbSansSection > 0) report.nbSansSection--;
       p.syscolCommune2026 = sm.syscolCommune;
-      p.nomCommune2026 = sm.commune ?? communeMatches[i]?.nomCommune ?? null;
+      // Priorité à la jointure spatiale DIRECTE (`communeMatches`, sur
+      // `cad_communes_2026`) plutôt qu'au texte `commune` stocké sur la ligne
+      // `limite_section` appariée : ce texte est écrit au moment de la
+      // construction de la section (`build-sections.ts`) et peut différer
+      // d'un fragment de section à l'autre pour un même (syscol, numSection)
+      // non parfaitement dissous — deux parcelles partageant le MÊME NICAD
+      // (donc le même syscolCommune) pouvaient hériter d'un `sm.commune`
+      // différent selon le fragment matché, ou l'une retombait sur
+      // `communeMatches` (repli) et l'autre non → faux positifs "commune
+      // différente" en aval (détection de doublons, geo-engine.ts). La
+      // jointure spatiale (`communeMatches`, un seul appel batché pour TOUTES
+      // les parcelles ici) est la seule source garantie cohérente d'une
+      // parcelle à l'autre ; `sm.commune` ne sert plus qu'en dernier repli
+      // (parcelle hors contenance stricte ET hors tolérance de proximité de
+      // `cad_communes_2026`, mais couverte par `limite_section`).
+      p.nomCommune2026 = communeMatches[i]?.nomCommune ?? sm.commune ?? null;
       p.numeroSection = sm.numSection;
       p.nicad = buildNicad(sm.syscolCommune, p.numeroSection, p.numeroParcelle5);
       nbSectionDepuisTableSections++;
