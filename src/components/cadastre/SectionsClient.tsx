@@ -1284,7 +1284,6 @@ export default function SectionsClient() {
     mapReady,
   ]);
 
-<<<<<<< HEAD
   // ── Icône « suppression en cours » sur la carte (feedback visuel pendant la
   // requête) — ajoutée directement à `map`, indépendante du cycle de vie de
   // `secGroup` (détruit/reconstruit par l'effet de rendu principal, qui ne
@@ -1320,10 +1319,7 @@ export default function SectionsClient() {
     };
   }, [deletingSectionId, mapReady]);
 
-  // ── Mise en évidence du chevauchement sélectionné (restylage seul) ─────────
-=======
   // ── Mise en évidence du chevauchement sélectionné (clignotement) ───────────
->>>>>>> worktree-shapefile-parcelles-section-coherence
   // Dépend aussi de sections/overlaps pour rejouer après chaque reconstruction
   // des couches (qui repart en style « non sélectionné »). Le chevauchement
   // sélectionné CLIGNOTE (alterne opacité haute/basse toutes les
