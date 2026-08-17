@@ -3569,5 +3569,42 @@ bruit ; ce signal n'a de sens que sur une vue de RÉFÉRENTIEL (comparer deux
 
 ---
 
+## 36. Basculement : Syscol introuvable en 2013 — vérifier s'il existe déjà en 2026 avant d'abandonner
+
+**Problème métier** : `identifierBasculement` (§31) se contentait de
+signaler « Commune 2013 introuvable » quand le Syscol extrait du NICAD saisi
+n'a aucune correspondance dans `cad_communes_2013`, sans autre piste pour
+l'utilisateur — alors que deux causes fréquentes restent silencieuses : (1)
+le NICAD saisi est en réalité déjà un NICAD **2026** (aucun basculement à
+faire), ou (2) l'utilisateur a confondu les deux référentiels en saisissant
+un Syscol 2026 par erreur.
+
+**Cause technique** : les deux référentiels (`cad_communes_2013`,
+`cad_communes_2026`) sont des tables DISTINCTES avec des espaces de codes
+Syscol indépendants — un code à 8 chiffres absent de l'un peut très bien
+exister dans l'autre. Rien ne le vérifiait avant d'abandonner sur un simple
+« introuvable ».
+
+**Solution** (`src/app/cadastre/_actions/nicad.ts · identifierBasculement`) :
+quand `getCommune2013BySyscol(syscol2013)` ne renvoie rien, un second appel
+`getCommune2026BySyscol(syscol2013)` (même Syscol, référentiel 2026) est
+tenté avant d'abandonner. S'il aboutit, un second flag explicite le signale :
+« Le Syscol X n'existe pas dans le référentiel 2013, mais correspond à la
+commune 2026 « Nom » — ce NICAD est peut-être déjà un NICAD 2026 (aucun
+basculement nécessaire), ou le Syscol saisi provient du mauvais
+référentiel. » Aucun changement d'UI requis : `/cadastre/basculement`
+affiche déjà `identification.flags` en liste.
+
+**Pourquoi (pièges inclus)** : rester purement INFORMATIF — ce flag ne
+déclenche aucune action automatique (pas de pré-remplissage, la proposition
+reste `null` comme avant) : trouver le Syscol dans le référentiel 2026 ne
+prouve PAS que le NICAD saisi en est un (une coïncidence de code à 8
+chiffres entre deux référentiels indépendants reste possible, quoique rare) —
+à l'utilisateur de vérifier et de décider, même logique de prudence que le
+reste de `identifierBasculement` (§31 : ne jamais imposer, toujours
+proposer/signaler).
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

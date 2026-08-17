@@ -307,6 +307,20 @@ export async function identifierBasculement(input: z.infer<typeof identifierSche
   const flags: string[] = [];
   if (!commune2013) {
     flags.push(`Commune 2013 introuvable pour le Syscol ${syscol2013} — vérifiez le NICAD saisi.`);
+    // Le Syscol saisi n'existe dans AUCUNE commune 2013, mais peut très bien
+    // exister comme code 2026 (référentiels distincts, la même valeur à 8
+    // chiffres n'appartient pas forcément aux deux) — signal utile pour
+    // repérer un NICAD déjà en 2026 (pas de basculement à faire) ou une
+    // saisie qui a confondu les deux référentiels, plutôt que de laisser
+    // l'utilisateur sans piste face à un simple "introuvable".
+    const commune2026PourSyscolSaisi = await getCommune2026BySyscol(syscol2013);
+    if (commune2026PourSyscolSaisi) {
+      flags.push(
+        `Le Syscol ${syscol2013} n'existe pas dans le référentiel 2013, mais correspond à la commune ` +
+          `2026 « ${commune2026PourSyscolSaisi.nomCommune} » — ce NICAD est peut-être déjà un NICAD 2026 ` +
+          "(aucun basculement nécessaire), ou le Syscol saisi provient du mauvais référentiel.",
+      );
+    }
   }
 
   const syscol2026 = correspondance?.syscol2026 ?? null;
