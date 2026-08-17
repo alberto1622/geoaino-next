@@ -6,6 +6,7 @@ import {
   type OverlapAction,
 } from "@/lib/cadastre/overlap-correction";
 import { refreshOverlaps } from "@/lib/cadastre/sections-data";
+import { refreshAdminMismatches } from "@/lib/cadastre/admin-mismatch-data";
 
 export const runtime = "nodejs";
 
@@ -59,7 +60,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     const lots = await applyOverlapCorrectionWithHistory(overlapId, action, createdBy, "correct");
     if (action !== "ignore") {
-      for (const src of lots) await refreshOverlaps(src);
+      for (const src of lots) {
+        await refreshOverlaps(src);
+        await refreshAdminMismatches(src);
+      }
     }
     return NextResponse.json({ success: true });
   } catch (err) {

@@ -17,6 +17,7 @@ import {
   refreshOverlaps,
   type SectionInsert,
 } from "./sections-data";
+import { refreshAdminMismatches } from "./admin-mismatch-data";
 
 type PolyGeom = GeoJSON.Polygon | GeoJSON.MultiPolygon;
 
@@ -34,6 +35,8 @@ export interface BuildSectionsResult {
   nbSections: number;
   nbSansCommune: number;
   nbOverlaps: number;
+  /** Débordements section↔limite administrative (commune/département/région) détectés. */
+  nbAdminMismatches: number;
   /** Contours d'ensemble sans numéro écartés (contenaient des sections numérotées). */
   nbEnveloppesEcartees: number;
   /** Résidus sans numéro fusionnés dans leur section hôte. */
@@ -177,7 +180,7 @@ export async function buildLimiteSections(
   const rawCandidates = result.sections;
   if (rawCandidates.length === 0) {
     await deleteSectionsBySource(sourceFichier);
-    return { sourceFichier, nbSections: 0, nbSansCommune: 0, nbOverlaps: 0, nbEnveloppesEcartees: 0, nbResidusFusionnes: 0, nbResidusEcartes: 0 };
+    return { sourceFichier, nbSections: 0, nbSansCommune: 0, nbOverlaps: 0, nbAdminMismatches: 0, nbEnveloppesEcartees: 0, nbResidusFusionnes: 0, nbResidusEcartes: 0 };
   }
 
   // Résidus non numérotés : un petit polygone SANS numéro est un artefact du
@@ -193,7 +196,7 @@ export async function buildLimiteSections(
   }
   if (allCandidates.length === 0) {
     await deleteSectionsBySource(sourceFichier);
-    return { sourceFichier, nbSections: 0, nbSansCommune: 0, nbOverlaps: 0, nbEnveloppesEcartees: 0, nbResidusFusionnes: 0, nbResidusEcartes: residus.length };
+    return { sourceFichier, nbSections: 0, nbSansCommune: 0, nbOverlaps: 0, nbAdminMismatches: 0, nbEnveloppesEcartees: 0, nbResidusFusionnes: 0, nbResidusEcartes: residus.length };
   }
 
   // Enveloppes non numérotées : un polygone de section SANS numéro contenant le
@@ -226,7 +229,7 @@ export async function buildLimiteSections(
   const nbEnveloppesEcartees = allCandidates.length - candidates.length;
   if (candidates.length === 0) {
     await deleteSectionsBySource(sourceFichier);
-    return { sourceFichier, nbSections: 0, nbSansCommune: 0, nbOverlaps: 0, nbEnveloppesEcartees, nbResidusFusionnes: 0, nbResidusEcartes: residus.length };
+    return { sourceFichier, nbSections: 0, nbSansCommune: 0, nbOverlaps: 0, nbAdminMismatches: 0, nbEnveloppesEcartees, nbResidusFusionnes: 0, nbResidusEcartes: residus.length };
   }
 
   // Commune résolue PAR FRAGMENT, AVANT dissolution : un numéro de section n'est
@@ -282,6 +285,10 @@ export async function buildLimiteSections(
   await deleteSectionsBySource(sourceFichier);
   await insertLimiteSections(sourceFichier, rows);
   const nbOverlaps = await refreshOverlaps(sourceFichier);
+  const nbAdminMismatches = await refreshAdminMismatches(sourceFichier);
 
-  return { sourceFichier, nbSections: rows.length, nbSansCommune, nbOverlaps, nbEnveloppesEcartees, nbResidusFusionnes, nbResidusEcartes };
+  return {
+    sourceFichier, nbSections: rows.length, nbSansCommune, nbOverlaps, nbAdminMismatches,
+    nbEnveloppesEcartees, nbResidusFusionnes, nbResidusEcartes,
+  };
 }

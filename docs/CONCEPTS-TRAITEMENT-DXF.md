@@ -3374,5 +3374,82 @@ outils sections/chevauchements existants, pas via la correction de doublon.
 
 ---
 
+## 34. Superposition `limite_section` ↔ limites administratives (commune/département/région) : détecter et corriger les sections qui débordent de leur commune déclarée
+
+**Problème métier** : § 33 a montré que des sections `limite_section`
+peuvent, par construction (fusion à tort par-delà une limite mitoyenne
+absente du DXF source), s'étendre géométriquement au-delà de leur commune
+déclarée — produisant des collisions de NICAD entre parcelles réelles de
+communes différentes. Jusqu'ici, rien ne détectait ni ne corrigeait la
+CAUSE (la section elle-même) : seul son SYMPTÔME (le NICAD dupliqué en aval)
+était visible, et seulement pour les parcelles déjà importées. L'utilisateur
+a demandé une « superposition » explicite section ↔ limites administratives
+(commune, département, région) pour détecter ces débordements en amont, sur
+les sections elles-mêmes, avant même qu'un import de parcelles ne les
+révèle indirectement.
+
+**Cause technique** : `limite_section` ne portait aucun contrôle contre son
+propre référentiel de communes (`cad_communes_2026`) — seul un contrôle
+section↔section existait (`limite_section_overlap`, § chevauchements). Une
+section peut déborder de sa commune sans jamais chevaucher une AUTRE
+section connue (ex. la zone débordée n'a pas encore de section importée en
+face).
+
+**Solution** : nouvelle table `limite_section_admin_mismatch` (migration
+`20260817171722_add_limite_section_admin_mismatch`), calquée sur
+`limite_section_overlap`, et un module dédié
+`src/lib/cadastre/admin-mismatch-data.ts` :
+- `refreshAdminMismatches(sourceFichier)` — trois passes indépendantes,
+  une par niveau administratif. **Commune** : jointure DIRECTE contre
+  `cad_communes_2026` (géométrie propre à chaque commune), `ST_Intersects`
+  entre la section et toute commune ≠ `syscolCommune` déclaré. **Département/
+  région** : ces niveaux n'ont pas de géométrie propre dans
+  `cad_communes_2026` (seules les communes en portent, cf.
+  `admin-boundaries.ts`) — dissolution à la volée par CTE
+  (`ST_Union(geom) GROUP BY departement/region`), recalculée à chaque appel ;
+  coût négligeable (< 1 s pour ~1000 sections sur un lot Thiès réel, testé en
+  direct). Un débordement de département/région implique TOUJOURS un
+  débordement de commune (le département/la région englobe la commune) — les
+  trois niveaux restent indépendants dans la table (un débordement vers une
+  commune du MÊME département n'écrit qu'une ligne `commune`, pas
+  `departement`), mais partagent la même correction.
+- Correction (`admin-mismatch-correction.ts`, actions `clip`/`ignore`) :
+  `clip` découpe la section à l'intersection avec la géométrie EXACTE (non
+  simplifiée, contrairement à l'affichage carte) de SA commune déclarée —
+  règle les trois niveaux en une fois, puisque département/région ⊇ commune.
+  `ignore` marque le débordement accepté. Snapshot + entrée d'historique
+  restaurable dans la même transaction, comme chaque correction de section
+  déjà existante (§ historique/restauration) — `SectionsDeleteSnapshot` a
+  gagné un champ optionnel `adminMismatches` pour couvrir aussi ce type de
+  ligne dans TOUTES les captures existantes (suppression de section/lot,
+  fusion, correction de chevauchement) sans dupliquer le mécanisme de revert.
+- Toute action qui modifie la géométrie d'une section (`correct`,
+  `correct-batch`, `merge`, et la nouvelle correction elle-même) rafraîchit
+  désormais LES DEUX contrôles (`refreshOverlaps` ET `refreshAdminMismatches`)
+  pour les lots touchés — une correction de chevauchement peut résoudre OU
+  créer un débordement administratif, et réciproquement.
+- UI (`SectionsClient.tsx`) : sous-section « Limites administratives » dans
+  le panneau existant (pas un panneau séparé — la stack Sheet/panneaux est
+  déjà chargée, cf. § z-index Historique/Chevauchements), couche carte
+  dédiée (fuchsia, distincte du rouge des chevauchements), sélection/zoom/
+  défilement calqués sur le mécanisme des chevauchements.
+
+**Pourquoi (pièges inclus)** : testé en direct contre les données réelles
+(lot Thiès, 980 sections) avant de considérer la fonctionnalité terminée —
+296 débordements de commune, 58 de département, 15 de région détectés
+INSTANTANÉMENT, confirmant que le problème diagnostiqué au § 33 est loin
+d'être un cas isolé. Piège à éviter : ne PAS réutiliser la géométrie
+SIMPLIFIÉE d'`admin-boundaries.ts` (`ST_SimplifyPreserveTopology`, pensée
+pour l'affichage carte) comme référence de découpage — une simplification,
+même fine, peut faire disparaître ou déplacer une frontière de quelques
+mètres, suffisant pour fausser un découpage cadastral qui doit rester exact ;
+`getCommuneGeom` interroge `ST_AsGeoJSON(geom)` SANS simplification.
+Deuxième piège, réappris du § 33 (correctif 2) : la commune de référence pour
+le découpage est TOUJOURS `syscolCommune` (le Syscol, code stable), jamais un
+texte `commune` recopié d'ailleurs — un texte dupliqué à plusieurs endroits
+est exactement ce qui avait produit les faux positifs du § 33.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

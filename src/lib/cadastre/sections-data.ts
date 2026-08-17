@@ -283,6 +283,10 @@ const GEOM_FROM_GEOJSON = (expr: string) =>
  * sections elles-mêmes (la sous-requête d'appartenance en dépend). */
 export async function deleteSectionsBySource(sourceFichier: string, db: Db = prisma): Promise<void> {
   await db.$executeRaw`DELETE FROM "limite_section_overlap" ${overlapMembershipFilter(sourceFichier)}`;
+  await db.$executeRaw`
+    DELETE FROM "limite_section_admin_mismatch"
+    WHERE "sectionId" IN (SELECT id FROM "limite_section" WHERE "sourceFichier" = ${sourceFichier})
+  `;
   await db.$executeRaw`DELETE FROM "limite_section" WHERE "sourceFichier" = ${sourceFichier}`;
 }
 
@@ -433,12 +437,14 @@ export async function updateSectionGeometry(
   );
 }
 
-/** Supprime une section (et ses chevauchements référencés). Accepte un client
- * de transaction pour s'exécuter atomiquement avec sa capture d'historique. */
+/** Supprime une section (et ses chevauchements/mismatchs administratifs
+ * référencés). Accepte un client de transaction pour s'exécuter atomiquement
+ * avec sa capture d'historique. */
 export async function deleteSection(id: number, db: Db = prisma): Promise<void> {
   await db.$executeRaw`
     DELETE FROM "limite_section_overlap" WHERE "sectionAId" = ${id} OR "sectionBId" = ${id}
   `;
+  await db.$executeRaw`DELETE FROM "limite_section_admin_mismatch" WHERE "sectionId" = ${id}`;
   await db.$executeRaw`DELETE FROM "limite_section" WHERE id = ${id}`;
 }
 

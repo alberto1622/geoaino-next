@@ -9,6 +9,10 @@ import {
   deleteSection,
   deleteSectionsBySource,
 } from "@/lib/cadastre/sections-data";
+import {
+  getAdminMismatchesForSection,
+  getAdminMismatchesFullBySource,
+} from "@/lib/cadastre/admin-mismatch-data";
 import { recordHistory, type SectionsDeleteSnapshot } from "@/lib/cadastre/history";
 
 export const runtime = "nodejs";
@@ -53,7 +57,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         const section = await getSectionFull(sectionId, tx);
         if (!section) return null;
         const overlaps = await getOverlapsForSection(sectionId, tx);
-        const before: SectionsDeleteSnapshot = { sections: [section], overlaps };
+        const adminMismatches = await getAdminMismatchesForSection(sectionId, tx);
+        const before: SectionsDeleteSnapshot = { sections: [section], overlaps, adminMismatches };
         await deleteSection(sectionId, tx);
         await recordHistory(tx, {
           scope: "sections",
@@ -82,7 +87,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         // vide n'offrirait qu'un bouton « Restaurer » sans effet.
         if (sections.length === 0) return null;
         const overlaps = await getOverlapsFullBySource(sourceFichier, tx);
-        const before: SectionsDeleteSnapshot = { sections, overlaps };
+        const adminMismatches = await getAdminMismatchesFullBySource(sourceFichier, tx);
+        const before: SectionsDeleteSnapshot = { sections, overlaps, adminMismatches };
         await deleteSectionsBySource(sourceFichier, tx);
         await recordHistory(tx, {
           scope: "sections",

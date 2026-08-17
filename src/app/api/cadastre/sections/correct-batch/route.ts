@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { applyOverlapCorrectionWithHistory, type OverlapAction } from "@/lib/cadastre/overlap-correction";
 import { refreshOverlaps, listSections, listOverlaps } from "@/lib/cadastre/sections-data";
+import { refreshAdminMismatches } from "@/lib/cadastre/admin-mismatch-data";
 
 export const runtime = "nodejs";
 export const maxDuration = 600;
@@ -79,6 +80,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   for (const src of touchedSources) {
     await refreshOverlaps(src);
+    await refreshAdminMismatches(src);
   }
 
   const viewSource = body.sourceFichier ?? null;

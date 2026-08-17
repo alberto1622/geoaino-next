@@ -91,6 +91,7 @@ async function runDxfImportJob(jobId: number): Promise<void> {
             nbSections: built.nbSections,
             nbSansCommune: built.nbSansCommune,
             nbOverlaps: built.nbOverlaps,
+            nbAdminMismatches: built.nbAdminMismatches,
             nbEnveloppesEcartees: built.nbEnveloppesEcartees,
             nbResidusFusionnes: built.nbResidusFusionnes,
             nbResidusEcartes: built.nbResidusEcartes,
