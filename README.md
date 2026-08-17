@@ -117,6 +117,10 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 - → ✅Il y a des numeros parcelles qui commence ou déborde un peu dans une autre parcelle, récupérer les même dans la parcelle où il occupe plus de place
 - → Désactiver les limites sections
 - → ✅Récupérer les sections depuis la base de données des sections
+- Pour les erreurs de duplication, ajouter la différence de commune des limites administratives
+  Exemple: Voici deux parcelles de même nicad mais de commune différent
+  - nicand 1: 0152020100701524, Yeumbeul Nord
+  - nicand 1: 0152020100701524, Keur Massar Nord
 
 ## RECHARGER LE FICHIER PLAN CADASTRAL PIKINE.DXF CAR IL Y A CERTAINS NICAD N'ONT RECUPERER
 

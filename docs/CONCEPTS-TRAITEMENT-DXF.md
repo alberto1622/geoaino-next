@@ -3252,5 +3252,115 @@ choisie manuellement existe bel et bien, pas pour établir une correspondance).
 
 ---
 
+## 32. `GET /api/analyses` plante avec « Failed to convert rust String into napi string » : pas des données corrompues, des blobs GeoJSON trop lourds cumulés
+
+**Problème métier** : `GET /api/analyses` (liste paginée des analyses)
+plantait systématiquement à partir d'une certaine page, avec l'erreur Prisma
+`Failed to convert rust \`String\` into napi \`string\`` sur
+`prisma.analysis.findMany(...)`. Le message évoque une conversion de chaîne
+ratée, ce qui pointe instinctivement vers des données CORROMPUES (UTF-8
+invalide) — piste naturelle vu l'historique de ce fichier cette même session
+(§ 24, encodage DXF mal deviné).
+
+**Cause technique** : PAS de corruption — chaque ligne, testée
+individuellement (`findUnique`, champ par champ, puis en select complet),
+répondait « OK ». Le vrai facteur : `Analysis.geoJsonData`,
+`.correctedData`, `.errorsData` et `.adminBoundaryData` sont des colonnes
+`@db.Text` qui embarquent le GeoJSON BRUT complet d'un import — pour un DXF
+cadastral 100k+ parcelles (Pikine, Kaolack, Thiès… tous manipulés cette
+session), chacune peut peser **50 à 100 Mo**. La route utilisait `include`
+(qui embarque TOUTES les colonnes par défaut) sans jamais exclure ces blobs.
+Bisection en reproduisant la requête exacte hors application (script Node ad
+hoc, chargement du `.env` en mémoire sans jamais l'afficher) : `take=17`
+(≈ 270 Mo cumulés sur les lignes les plus lourdes) passait, `take=18`
+échouait — la limite n'est PAS liée à une ligne précise mais au volume total
+transféré en un seul appel, qui dépasse une limite interne du pont
+Rust ↔ N-API du moteur Prisma une fois plusieurs gros imports cumulés dans
+la même page.
+
+**Solution** (`src/app/api/analyses/route.ts`) : remplacer `include: {
+_count: ... }` par un `select` explicite listant les champs scalaires
+réellement utiles à une VUE LISTE (id, nom de fichier, statut, compteurs,
+scores, dates…) et EXCLUANT les quatre blobs `@db.Text` — aucun n'est
+nécessaire pour une liste, le détail d'une analyse (carte, corrections) a
+déjà ses propres endpoints dédiés qui ne chargent PAS le GeoJSON brut dans le
+payload de la page (cf. commentaire « Tier 2 » de `map/[analysisId]/page.tsx`).
+Vérifié en rejouant la requête exacte (`take: 20, skip: 0`, même `select`)
+contre la base réelle après correctif : succès, 20 lignes récupérées sur 33.
+`src/app/history/page.tsx` (liste équivalente pour `/history`) utilisait
+DÉJÀ ce même `select` restreint — seule cette route API l'avait omis.
+
+**Pourquoi (pièges inclus)** : le message d'erreur Prisma est trompeur par
+défaut — « conversion de String ratée » évoque presque toujours des données
+invalides (encodage, caractères de contrôle), rarement un problème de VOLUME.
+Piège à éviter : ne pas se fier au message pour orienter le diagnostic sans
+vérifier — bisecter la taille du batch (`take=1,2,3…`) avant de bisecter les
+lignes une par une aurait fait gagner du temps, l'inverse (lignes d'abord)
+a fait perdre plusieurs allers-retours puisque CHAQUE ligne individuelle
+passait le test. Second piège, plus général et déjà documenté deux fois dans
+ce projet (§ 15 mappage de champs, § 29 plafond d'erreurs embarquées) : ne
+JAMAIS utiliser `include`/select-tout par défaut sur un modèle qui porte des
+colonnes `@db.Text` potentiellement énormes (GeoJSON, rapports IA…) dans une
+route de LISTE — toujours un `select` explicite dès qu'un modèle a ce genre
+de colonne, y compris dans les routes qui « marchaient très bien jusque-là »
+(le bug n'apparaît qu'une fois assez de gros imports accumulés en base — un
+projet jeune avec peu de données ne le voit jamais).
+
+---
+
+## 33. Erreur `DUPLICATE` (même NICAD) : distinguer un vrai doublon d'une collision entre deux parcelles de communes différentes
+
+**Problème métier** : la détection de doublons (`analyzeGeoJSON`) signale
+deux occurrences comme « NICAD dupliqué » dès qu'elles partagent le même
+NICAD, sans dire si c'est un VRAI doublon (même parcelle saisie deux fois)
+ou deux parcelles DISTINCTES qui se sont vu attribuer le même NICAD par
+erreur. Cas terrain : un même NICAD `0152020100701524` porté par une
+parcelle à Yeumbeul Nord et une autre à Keur Massar Nord (communes
+limitrophes du département de Pikine/Keur Massar) — deux parcelles réelles,
+pas un doublon de saisie, mais un conflit de codification qu'il faut
+distinguer d'un doublon franc pour ne pas orienter la correction (fusion,
+suppression d'une occurrence) vers la mauvaise action.
+
+**Cause technique** : le NICAD encode en théorie le Syscol (commune) dans
+son préfixe, mais rien ne garantit que le NICAD SAISI dans le fichier source
+correspond à la commune RÉELLE de la parcelle (erreur de frappe, copier-
+coller depuis une parcelle voisine, référentiel Syscol obsolète…) — la
+détection de doublon (`geo-engine.ts`, bloc 2) ne comparait jusqu'ici que la
+chaîne NICAD, jamais la position géographique des occurrences.
+
+**Solution** (`src/lib/geo-engine.ts · analyzeGeoJSON`) : pour chaque groupe
+de NICAD dupliqué, résoudre la commune 2026 RÉELLE de chaque occurrence par
+jointure spatiale (`getSyscols2026ForPoints`, `src/lib/cadastre/data.ts` —
+même fonction que celle qui attribue le Syscol aux parcelles DXF sans NICAD,
+§ « limites administratives » = `cad_communes_2026`), à partir du point
+représentatif de chaque géométrie (reprojeté UTM 28N → 4326 au besoin, même
+logique que le bloc chevauchements plus bas dans le fichier). Si les
+communes résolues diffèrent au sein d'un même groupe de doublons, la
+description de l'erreur le signale explicitement (« commune différente entre
+occurrences… probablement deux parcelles distinctes mal codifiées plutôt
+qu'un vrai doublon »). `analyzeGeoJSON` est donc devenu **asynchrone**
+(un seul `await` ajouté à chacun de ses 3 appelants — tous déjà dans des
+fonctions `async` : `POST /api/analyses`, `POST .../regenerate-report`,
+`finishParcellesJob`). La résolution ne porte QUE sur les points des
+features effectivement en doublon (pas la totalité du lot) pour rester
+négligeable même sur un DXF à 100k+ parcelles.
+
+**Pourquoi (pièges inclus)** : la sévérité de l'erreur reste `critical` dans
+les deux cas (un NICAD dupliqué reste un problème d'intégrité de données
+quelle qu'en soit la cause) — seule la DESCRIPTION change, volontairement,
+pour guider l'utilisateur vers la bonne correction (renseigner le bon NICAD
+sur chacune plutôt que fusionner/supprimer une occurrence). Piège à éviter :
+ne pas confondre cette commune GÉOLOCALISÉE (limites administratives,
+`cad_communes_2026`) avec le champ `commune` DÉCLARÉ dans le fichier source
+(alimenté par le mappage de champs, `field-mapping.ts`) — ce dernier peut
+être absent ou faux, exactement le genre d'attribut que la jointure spatiale
+sert à vérifier (même principe que `section_mismatch`, § champ
+`sectionGeolocalisee` de `assign-section-nicad.ts` : déclaré vs géolocalisé).
+Si la jointure DB échoue (base injoignable, lot hors Sénégal) la fonction
+dégrade en silence — la description reste celle sans info commune plutôt que
+de faire échouer toute l'analyse pour un enrichissement optionnel.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*
