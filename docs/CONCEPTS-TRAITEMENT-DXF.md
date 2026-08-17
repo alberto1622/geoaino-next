@@ -3347,6 +3347,31 @@ il faut aussi que TOUS les appelants finissent, pour un même NICAD/une même
 parcelle, par converger vers le MÊME chemin ; sinon le `??` masque
 silencieusement une incohérence entre deux sources au lieu de la révéler.
 
+**Correctif 3 (changement de comportement, confirmé par test terrain)** : une
+fois le correctif 2 en place, l'utilisateur a soumis un cas réel où la
+commune résolue diffère GENUINEMENT entre occurrences — 5 parcelles de
+surfaces différentes (258, 242, 231, 150, 171 m², donc 5 géométries
+distinctes), partageant pourtant le même syscol+section (`01520201`/`001`,
+donc le même NICAD `0152020100100004`), résolues chacune dans une commune
+2026 différente (Yeumbeul Sud, Yeumbeul Nord, Keur Massar Nord, Malika, Keur
+Massar Sud). Confirmation explicite : « ça on ne doit pas le considérer
+comme une duplication car il ne sont pas dans la même commune ». Cause
+racine probable : une section `limite_section` fusionnée à tort par-delà
+plusieurs communes réelles (limite mitoyenne absente du DXF source ayant
+servi à construire la section, cf. § « sections fusionnées/disparues ») —
+plusieurs parcelles réellement distinctes tombent dans le même polygone de
+section, héritent du même syscol+numSection, donc du même NICAD, sans être
+un doublon de saisie. Or `DUPLICATE` propose une action de correction
+`delete` (`correct/route.ts`) — présenter ce cas comme un doublon aurait
+exposé un risque de suppression d'une parcelle réelle. Changement : les
+groupes de NICAD dont les occurrences résolvent à PLUSIEURS communes 2026
+distinctes ne sont plus émis comme erreurs `duplicate` DU TOUT (ni comptés
+dans `duplicateCount`, ni marqués non conformes) — seul un compteur agrégé
+`crossCommuneNicadCount` (nouveau champ de `AnalysisResult.stats`) les garde
+visibles, sans déclencher l'action `delete`. Le problème sous-jacent (NICAD
+non unique par construction de section défaillante) reste à corriger via les
+outils sections/chevauchements existants, pas via la correction de doublon.
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait

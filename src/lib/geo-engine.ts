@@ -35,6 +35,10 @@ export interface AnalysisResult {
     overlapCount: number;
     sliverCount: number;
     duplicateCount: number;
+    /** NICAD partagé par des parcelles résolues dans des communes 2026 différentes —
+     *  exclu de `duplicateCount`/`errors` (pas une saisie en double, cf. bloc 2 de
+     *  `analyzeGeoJSON`), compté ici pour rester visible malgré tout. */
+    crossCommuneNicadCount: number;
     invalidCount: number;
     missingNicadCount: number;
     shortNicadErrorCount: number;
@@ -362,15 +366,29 @@ export async function analyzeGeoJSON(
     }
   }
 
+  let crossCommuneNicadCount = 0;
   duplicateGroups.forEach(({ nicad, indices }) => {
+    const communesInGroup = new Set(
+      indices.map((idx) => duplicateCommunes.get(idx)).filter((c): c is string => !!c)
+    );
+    // Communes différentes au sein du groupe : PAS un doublon (deux entrées
+    // du même parcelle) mais une collision de NICAD entre parcelles réelles
+    // distinctes — ne pas la faire remonter en `duplicate`, dont l'action de
+    // correction propose `delete` (supprimerait à tort une parcelle réelle).
+    // Cf. cas terrain confirmé : 5 occurrences d'un même NICAD, syscol/section
+    // identiques mais 5 communes 2026 différentes (Yeumbeul Nord/Sud, Keur
+    // Massar Nord/Sud, Malika) — la vraie cause est une section fusionnée à
+    // tort par-delà plusieurs communes (limite manquante dans le DXF source,
+    // cf. § « sections fusionnées/disparues »), pas une saisie en double.
+    if (communesInGroup.size > 1) {
+      crossCommuneNicadCount += indices.length;
+      return;
+    }
+
     // Collect all OBJECTIDs for this NICAD group
     const allObjectIds = indices.map((idx) =>
       extractObjectId(features[idx]?.properties ?? {}, idx)
     );
-    const communesInGroup = new Set(
-      indices.map((idx) => duplicateCommunes.get(idx)).filter((c): c is string => !!c)
-    );
-    const communeDiff = communesInGroup.size > 1;
 
     indices.forEach((featureIndex, pos) => {
       nonConformeIdx.add(featureIndex);
@@ -378,21 +396,12 @@ export async function analyzeGeoJSON(
       const thisObjectId = allObjectIds[pos];
       const otherObjectIds = allObjectIds.filter((_, i) => i !== pos).join(", ");
 
-      let description = `NICAD dupliqué "${nicad}" — ${indices.length} occurrences. OBJECTID: ${thisObjectId} (autres: ${otherObjectIds})`;
-      if (communeDiff) {
-        const thisCommune = duplicateCommunes.get(featureIndex);
-        const otherCommunes = Array.from(communesInGroup).filter((c) => c !== thisCommune);
-        description += thisCommune
-          ? ` — ATTENTION : commune différente entre occurrences d'après les limites administratives (${thisCommune} vs ${otherCommunes.join(", ")}), probablement deux parcelles distinctes mal codifiées plutôt qu'un vrai doublon.`
-          : ` — ATTENTION : les autres occurrences de ce NICAD sont dans une commune différente (${otherCommunes.join(", ")}) d'après les limites administratives ; commune non résolue pour celle-ci.`;
-      }
-
       errors.push({
         type: "duplicate",
         severity: "critical",
         nicad1: nicad,
         nicad2: thisObjectId,
-        description,
+        description: `NICAD dupliqué "${nicad}" — ${indices.length} occurrences. OBJECTID: ${thisObjectId} (autres: ${otherObjectIds})`,
         confidence: 1.0,
         geometry: duplicateFeature?.geometry,
       });
@@ -602,6 +611,7 @@ export async function analyzeGeoJSON(
       overlapCount: errors.filter((e) => e.type === "overlap").length,
       sliverCount: errors.filter((e) => e.type === "sliver").length,
       duplicateCount: errors.filter((e) => e.type === "duplicate").length,
+      crossCommuneNicadCount,
       invalidCount: errors.filter((e) => e.type === "invalid_geom").length,
       missingNicadCount: errors.filter((e) => e.type === "missing_nicad").length,
       shortNicadErrorCount: errors.filter((e) => e.type === "short_nicad").length,
