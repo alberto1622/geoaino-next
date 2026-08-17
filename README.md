@@ -109,21 +109,22 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 - ✅Dans la liste déroulante, "Lot stocké :" Ajouter la possibilité de selection/deselectionner des lots
 - ✅Vérifier les chevauchments et intersections entre les sections chargés et existant déjà
 
+- Au niveau du cadastre, ajouter une page "Visualisation des parcelles" où on va afficher les parcelles en selectionnant les fichiers chargés. Par defaut, selectionner les quelques premier fichiers. Ajouter la possibilité d'exporter en shp. Mettez les erreurs avec la légende comme dans la page map mais pas de possibilité de modifier.
+
 ## claude --resume cf625d72-d092-4437-b99f-7ae0525999ac
 
 ## 2. Parcelle / Titre foncier — Plan cadastral / Plan foncier
 
 - → ✅Signaler l'erreur suivant: limites parcelles avec 2 numéros de parcelles et permettre à l'utilisateur de choisir un numéro
 - → ✅Il y a des numeros parcelles qui commence ou déborde un peu dans une autre parcelle, récupérer les même dans la parcelle où il occupe plus de place
-- → Désactiver les limites sections
 - → ✅Récupérer les sections depuis la base de données des sections
-- Pour les erreurs de duplication, ajouter la différence de commune des limites administratives
+- ✅Pour les erreurs de duplication, ajouter la différence de commune des limites administratives
   Exemple: Voici deux parcelles de même nicad mais de commune différent
   - nicand 1: 0152020100701524, Yeumbeul Nord
   - nicand 2: 0152020100701524, Keur Massar Nord
-- Faites une superposition entre les sections et les limites adminstratives (communes, departement et region) pour detecter les chevauchements et permettre à l'utilisateur d'apporter des corrections
+- ✅Faites une superposition entre les sections et les limites adminstratives (communes, departement et region) pour detecter les chevauchements et permettre à l'utilisateur d'apporter des corrections
 
-- Proposer moi un section u niveau du home page plus moderne qui présente une animation du processus de traitement d'un fichier dxf de la lecture, du mappage, de la polygonisation (exemple de plogonisation animé), u jointure,...
+- Proposer moi un section au niveau du home page plus moderne qui présente une animation du processus de traitement d'un fichier dxf de la lecture, du mappage, de la polygonisation (exemple de plogonisation animé), u jointure,...
 
 ## 3. Vérification du NICAD
 
@@ -135,19 +136,14 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
     - S'il ya des différences, les soulever.
     - S'il elle correspond à celle de 2013, proposer un basculement vers 2026
 
-  - Niveau : 2013 syscol
-  - syscol 2026
-  - Niveau section
-
 ---
 
 ## 4. Points du 11/08/2026
 
-- → Gérer les contraintes sur le n° section (3 caractères)
+- → Gérer les contraintes sur le n° section (3 caractères) lors de saisie ou correction de section
 - → ✅Loading lors des modifications
-- → Identifier et exporter les sections ayant des anomalies
-  <<<<<<< HEAD
-- → Sélection suivant les fichiers
+- → Identifier et exporter les sections ayant des anomalies en shapefile
+- → ✅Sélection suivant les fichiers
 - → ✅Corriger l'affichage (Mark)
 - → Chevauchement / Intersection
 - → Différencier les gaps et les chevauchements
@@ -158,10 +154,3 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 ## 1. intersections des sections entre deux fichiers charger
 
 # A véfifier
-
-- → ✅Sélection suivant les fichiers
-- → Corriger l'affichage (Mark)
-- → ✅Chevauchement / Intersection
-- → ✅Différencier les gaps et les chevauchements
-- → ✅Effectuer le mappage des champs avant le traitement
-  > > > > > > > worktree-shapefile-parcelles-section-coherence
