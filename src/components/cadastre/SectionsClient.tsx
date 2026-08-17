@@ -69,6 +69,21 @@ interface OverlapItem {
   bSourceFichier: string;
 }
 
+interface AdminMismatchItem {
+  id: number;
+  sectionId: number;
+  adminLevel: string;
+  adminNom: string;
+  status: string;
+  overlapAreaM2: number | null;
+  intersectionGeoJson: GeoJSON.Geometry;
+  sectionNumSection: string | null;
+  sectionCommune: string | null;
+  sectionDepartement: string | null;
+  sectionRegion: string | null;
+  sectionSourceFichier: string;
+}
+
 type JobState = {
   id: number;
   status: string;
@@ -122,6 +137,14 @@ const OVERLAP_COLOR = "#ef4444";
 const OVERLAP_CROSS_LOT_COLOR = "#06b6d4";
 // Sections sélectionnées pour une fusion manuelle (violet).
 const MERGE_COLOR = "#8b5cf6";
+// Débordement section ↔ limite administrative (commune/département/région) —
+// fuchsia, distinct du rouge des chevauchements section↔section.
+const ADMIN_MISMATCH_COLOR = "#d946ef";
+const ADMIN_MISMATCH_LEVEL_LABELS: Record<string, string> = {
+  commune: "commune",
+  departement: "département",
+  region: "région",
+};
 
 // ── Limites administratives (régions / départements / communes) ──────────────
 // Contours + noms servis par /api/cadastre/admin-boundaries (dérivés de
@@ -209,6 +232,8 @@ export default function SectionsClient() {
   // SANS reconstruire les couches (sinon un popup ouvert serait refermé).
   const sectionLayersRef = useRef<Map<number, any>>(new Map());
   const overlapLayersRef = useRef<Map<number, any>>(new Map());
+  const adminMismatchesLayerRef = useRef<any>(null);
+  const adminMismatchLayersRef = useRef<Map<number, any>>(new Map());
 
   const [mapReady, setMapReady] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
@@ -236,6 +261,10 @@ export default function SectionsClient() {
     null,
   );
   const [correcting, setCorrecting] = useState<number | null>(null);
+  const [adminMismatches, setAdminMismatches] = useState<AdminMismatchItem[]>([]);
+  const [selectedMismatchId, setSelectedMismatchId] = useState<number | null>(null);
+  const [correctingMismatch, setCorrectingMismatch] = useState<number | null>(null);
+  const adminMismatchItemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const [loadingData, setLoadingData] = useState(false);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [deletingBatch, setDeletingBatch] = useState(false);
@@ -381,16 +410,20 @@ export default function SectionsClient() {
     }
     try {
       let url = "/api/cadastre/sections/overlaps";
+      let mismatchUrl = "/api/cadastre/sections/admin-mismatches";
       if (srcs.length > 0) {
         const params = new URLSearchParams();
         for (const s of srcs) params.append("sourceFichier", s);
         url += `?${params.toString()}`;
+        mismatchUrl += `?${params.toString()}`;
       }
-      const res = await fetch(url);
+      const [res, mismatchRes] = await Promise.all([fetch(url), fetch(mismatchUrl)]);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Chargement échoué");
       setSections(data.sections ?? []);
       setOverlaps(data.overlaps ?? []);
+      const mismatchData = await mismatchRes.json();
+      setAdminMismatches(mismatchRes.ok ? (mismatchData.mismatches ?? []) : []);
       void loadLatestHistoryEntry();
     } catch (err) {
       toast.error(String(err));
@@ -452,6 +485,7 @@ export default function SectionsClient() {
       sourceFichier: string;
       nbSections: number;
       nbOverlaps: number;
+      nbAdminMismatches?: number;
       nbResidusFusionnes?: number;
       nbResidusEcartes?: number;
       nbEnveloppesEcartees?: number;
@@ -460,8 +494,10 @@ export default function SectionsClient() {
       const fus = report.nbResidusFusionnes ?? 0;
       const res =
         (report.nbResidusEcartes ?? 0) + (report.nbEnveloppesEcartees ?? 0);
+      const am = report.nbAdminMismatches ?? 0;
       toast.success(
         `${report.nbSections} section(s) construites · ${report.nbOverlaps} chevauchement(s) détecté(s)` +
+          (am > 0 ? ` · ${am} débordement(s) administratif(s)` : "") +
           (fus > 0 ? ` · ${fus} résidu(s) fusionné(s) à leur section` : "") +
           (res > 0 ? ` · ${res} résidu(s)/enveloppe(s) écarté(s)` : "") +
           ".",
@@ -623,6 +659,7 @@ export default function SectionsClient() {
               sourceFichier: src,
               nbSections: j.report?.nbSections ?? j.totalBuilt ?? 0,
               nbOverlaps: j.report?.nbOverlaps ?? 0,
+              nbAdminMismatches: j.report?.nbAdminMismatches ?? 0,
               nbResidusFusionnes: j.report?.nbResidusFusionnes ?? 0,
               nbResidusEcartes: j.report?.nbResidusEcartes ?? 0,
               nbEnveloppesEcartees: j.report?.nbEnveloppesEcartees ?? 0,
@@ -1133,6 +1170,37 @@ export default function SectionsClient() {
     ovGroup.addTo(map);
     overlapsLayerRef.current = ovGroup;
 
+    const amGroup = L.featureGroup();
+    adminMismatchLayersRef.current.clear();
+    for (const m of adminMismatches) {
+      if (m.status !== "PENDING" || !m.intersectionGeoJson) continue;
+      try {
+        const gj = L.geoJSON(m.intersectionGeoJson as any, {
+          style: {
+            color: ADMIN_MISMATCH_COLOR,
+            weight: 1.5,
+            fillColor: ADMIN_MISMATCH_COLOR,
+            fillOpacity: 0.45,
+          },
+        });
+        gj.on("click", () => {
+          setSelectedMismatchId(m.id);
+          setPanelOpen(true);
+        });
+        gj.bindTooltip(
+          `Déborde dans la ${ADMIN_MISMATCH_LEVEL_LABELS[m.adminLevel] ?? m.adminLevel} ${m.adminNom}` +
+            (m.overlapAreaM2 != null ? ` — ${Math.round(m.overlapAreaM2)} m²` : ""),
+          { sticky: true },
+        );
+        gj.addTo(amGroup);
+        adminMismatchLayersRef.current.set(m.id, gj);
+      } catch {
+        /* ignore */
+      }
+    }
+    amGroup.addTo(map);
+    adminMismatchesLayerRef.current = amGroup;
+
     // Cadrage global uniquement si un changement de portée est en attente
     // (premier chargement, changement de lot) — les corrections, fusions et
     // suppressions redessinent SANS toucher à la vue courante.
@@ -1148,6 +1216,7 @@ export default function SectionsClient() {
   }, [
     displayedSections,
     overlaps,
+    adminMismatches,
     pendingSectionIds,
     selectedSources,
     mapReady,
@@ -1304,6 +1373,55 @@ export default function SectionsClient() {
       .get(selectedOverlapId)
       ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [selectedOverlapId, panelOpen]);
+
+  // ── Mise en évidence du débordement administratif sélectionné (restylage seul) ──
+  useEffect(() => {
+    for (const [id, layer] of adminMismatchLayersRef.current) {
+      const isSel = id === selectedMismatchId;
+      try {
+        layer.setStyle({
+          weight: isSel ? 3 : 1.5,
+          fillOpacity: isSel ? 0.7 : 0.45,
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [selectedMismatchId, sections, adminMismatches, mapReady]);
+
+  // ── Zoom sur le débordement administratif sélectionné dans la table ────────
+  useEffect(() => {
+    const L = LRef.current;
+    const map = mapRef.current;
+    if (!L || !map || !mapReady || selectedMismatchId == null) return;
+    const m = adminMismatches.find((x) => x.id === selectedMismatchId);
+    if (!m) return;
+    const geoms: GeoJSON.Geometry[] = [];
+    const s = sections.find((x) => x.id === m.sectionId);
+    if (s?.geomGeoJson) geoms.push(s.geomGeoJson);
+    if (geoms.length === 0 && m.intersectionGeoJson) geoms.push(m.intersectionGeoJson);
+    try {
+      let bounds: any = null;
+      for (const g of geoms) {
+        const gb = L.geoJSON(g as any).getBounds();
+        if (!gb.isValid()) continue;
+        bounds = bounds ? bounds.extend(gb) : gb;
+      }
+      if (bounds && bounds.isValid()) {
+        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 17, animate: true });
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [selectedMismatchId, adminMismatches, sections, mapReady]);
+
+  // ── Défilement du panneau vers le débordement administratif sélectionné ────
+  useEffect(() => {
+    if (selectedMismatchId == null || !panelOpen) return;
+    adminMismatchItemRefs.current
+      .get(selectedMismatchId)
+      ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [selectedMismatchId, panelOpen]);
 
   // ── Limites administratives : (dé)montage des couches par niveau ───────────
   useEffect(() => {
@@ -1486,6 +1604,53 @@ export default function SectionsClient() {
     [performCorrection],
   );
 
+  // ── Application d'une correction sur un débordement administratif ──────────
+  const performMismatchCorrection = useCallback(
+    async (mismatchId: number, action: "clip" | "ignore") => {
+      setCorrectingMismatch(mismatchId);
+      try {
+        const res = await fetch("/api/cadastre/sections/admin-mismatches/correct", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mismatchId, action }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Correction échouée");
+        await fetchData(selectedSources);
+        setSelectedMismatchId(null);
+        toast.success("Correction appliquée");
+      } catch (err) {
+        toast.error(String(err));
+      } finally {
+        setCorrectingMismatch(null);
+      }
+    },
+    [selectedSources, fetchData],
+  );
+
+  /** « ignore » part directement (non destructif) ; « clip » passe par confirmation. */
+  const applyMismatchCorrection = useCallback(
+    (m: AdminMismatchItem, action: "clip" | "ignore") => {
+      if (action === "ignore") {
+        void performMismatchCorrection(m.id, "ignore");
+        return;
+      }
+      const levelLabel = ADMIN_MISMATCH_LEVEL_LABELS[m.adminLevel] ?? m.adminLevel;
+      const zone = m.overlapAreaM2 != null ? ` (~${Math.round(m.overlapAreaM2)} m²)` : "";
+      setConfirmState({
+        title: `Découper la section ${m.sectionNumSection ?? "#" + m.sectionId}`,
+        description:
+          `Retirer la part${zone} qui déborde de sa commune déclarée (${m.sectionCommune ?? "?"}) ` +
+          `dans la ${levelLabel} ${m.adminNom}.\n` +
+          "La section est découpée à l'intersection avec sa commune déclarée — " +
+          "si le résultat est vide, l'opération échoue (la commune déclarée est probablement fausse, à corriger manuellement).",
+        confirmLabel: "Découper",
+        run: () => void performMismatchCorrection(m.id, "clip"),
+      });
+    },
+    [performMismatchCorrection],
+  );
+
   // ── Export shapefile des sections affichées (corrections incluses) ─────────
   // Porte sur la vue courante : les lots sélectionnés (union), ou TOUS les
   // lots si aucun n'est sélectionné.
@@ -1603,6 +1768,7 @@ export default function SectionsClient() {
   }, [selectedSources, batches, performDeleteBatch]);
 
   const pending = overlaps.filter((o) => o.status === "PENDING");
+  const pendingMismatches = adminMismatches.filter((m) => m.status === "PENDING");
   // Sélection restreinte aux chevauchements encore PENDING affichés : les ids
   // résolus (correction individuelle, changement de lot) deviennent inertes
   // sans setState d'effet — même principe que `activeMergeSelection`.
@@ -2401,6 +2567,83 @@ export default function SectionsClient() {
                     </div>
                   )}
                 </div>
+
+                {/* Débordements section ↔ limites administratives */}
+                {sections.length > 0 && (
+                  <div>
+                    <h4 className="mb-2 flex items-center gap-2 text-xs font-semibold text-muted-foreground">
+                      Limites administratives
+                      {pendingMismatches.length > 0 && (
+                        <span className="rounded bg-fuchsia-500/15 px-1.5 py-0.5 text-[10px] font-medium text-fuchsia-500">
+                          {pendingMismatches.length}
+                        </span>
+                      )}
+                    </h4>
+                    {pendingMismatches.length === 0 ? (
+                      <p className="flex items-center gap-2 text-sm text-green-500">
+                        <CheckCircle className="h-4 w-4" /> Aucune section ne
+                        déborde de sa commune, son département ou sa région.
+                      </p>
+                    ) : (
+                      <div className="max-h-70 space-y-2 overflow-y-auto pr-0.5">
+                        {pendingMismatches.map((m) => {
+                          const isSel = m.id === selectedMismatchId;
+                          const busy = correctingMismatch === m.id;
+                          const levelLabel =
+                            ADMIN_MISMATCH_LEVEL_LABELS[m.adminLevel] ?? m.adminLevel;
+                          return (
+                            <div
+                              key={m.id}
+                              ref={(el) => {
+                                if (el) adminMismatchItemRefs.current.set(m.id, el);
+                                else adminMismatchItemRefs.current.delete(m.id);
+                              }}
+                              onClick={() => setSelectedMismatchId(m.id)}
+                              className={[
+                                "cursor-pointer rounded-lg border p-2.5 transition-all",
+                                isSel
+                                  ? "border-fuchsia-400/60 bg-fuchsia-500/5 ring-1 ring-fuchsia-400/30"
+                                  : "border-border hover:border-fuchsia-400/30",
+                              ].join(" ")}
+                            >
+                              <div className="mb-1.5 flex items-center gap-2 text-xs">
+                                <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-fuchsia-500" />
+                                <span className="font-medium">
+                                  Section {m.sectionNumSection ?? "—"}
+                                </span>
+                                {m.overlapAreaM2 != null && (
+                                  <span className="ml-auto text-muted-foreground">
+                                    {Math.round(m.overlapAreaM2)} m²
+                                  </span>
+                                )}
+                              </div>
+                              <div className="mb-1.5 -mt-1 text-[10px] text-muted-foreground">
+                                Déclarée en {m.sectionCommune ?? "commune inconnue"}, déborde
+                                dans la {levelLabel} <strong>{m.adminNom}</strong>.
+                              </div>
+                              <div className="grid grid-cols-2 gap-1">
+                                <ActBtn
+                                  busy={busy}
+                                  onClick={() => applyMismatchCorrection(m, "clip")}
+                                  icon={<Scissors className="h-3 w-3" />}
+                                >
+                                  Découper à la commune
+                                </ActBtn>
+                                <ActBtn
+                                  busy={busy}
+                                  onClick={() => applyMismatchCorrection(m, "ignore")}
+                                  icon={<EyeOff className="h-3 w-3" />}
+                                >
+                                  Ignorer
+                                </ActBtn>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Table des sections */}
                 {sections.length > 0 && (

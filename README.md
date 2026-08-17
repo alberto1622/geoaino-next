@@ -121,6 +121,9 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
   Exemple: Voici deux parcelles de même nicad mais de commune différent
   - nicand 1: 0152020100701524, Yeumbeul Nord
   - nicand 2: 0152020100701524, Keur Massar Nord
+- Faites une superposition entre les sections et les limites adminstratives (communes, departement et region) pour detecter les chevauchements et permettre à l'utilisateur d'apporter des corrections
+
+- Proposer moi un section u niveau du home page plus moderne qui présente une animation du processus de traitement d'un fichier dxf de la lecture, du mappage, de la polygonisation (exemple de plogonisation animé), u jointure,...
 
 ## 3. Vérification du NICAD
 

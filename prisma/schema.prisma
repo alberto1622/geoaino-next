@@ -478,6 +478,32 @@ model LimiteSectionOverlap {
   @@map("limite_section_overlap")
 }
 
+// Chevauchements détectés entre une `limite_section` et une limite
+// ADMINISTRATIVE (commune/département/région, `cad_communes_2026`) — une
+// section est censée tenir entièrement dans SA commune déclarée
+// (`syscolCommune`/`commune`) ; si sa géométrie déborde dans une AUTRE unité
+// administrative (souvent une section fusionnée à tort par-delà une limite
+// mitoyenne absente du DXF source), la part qui déborde est enregistrée ici.
+// `adminLevel` distingue le niveau détecté (le département/la région
+// englobent la commune : un débordement de commune peut donc aussi apparaître
+// en département/région si l'unité voisine appartient à un autre département/
+// région). Calqué sur `LimiteSectionOverlap`.
+model LimiteSectionAdminMismatch {
+  id                Int      @id @default(autoincrement())
+  sourceFichier     String // lot de sectionId
+  sectionId         Int
+  adminLevel        String // "commune" | "departement" | "region"
+  adminNom          String // nom de l'unité administrative empiétée (≠ celle déclarée sur la section)
+  intersectionGeoJson Json // partie de la section hors de sa propre unité déclarée
+  overlapAreaM2     Decimal? @db.Decimal(20, 4)
+  status            String   @default("PENDING") // PENDING | RESOLVED | IGNORED
+  createdAt         DateTime @default(now())
+
+  @@index([sourceFichier, status])
+  @@index([sectionId])
+  @@map("limite_section_admin_mismatch")
+}
+
 // Historique des modifications sections/parcelles — une entrée par action
 // utilisateur (pas par ligne modifiée), avec un snapshot avant/après complet
 // pour permettre de restaurer n'importe quel point passé, pas seulement la

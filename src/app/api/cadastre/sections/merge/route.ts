@@ -9,6 +9,7 @@ import {
   deleteSection,
   refreshOverlaps,
 } from "@/lib/cadastre/sections-data";
+import { getAdminMismatchesForSections, refreshAdminMismatches } from "@/lib/cadastre/admin-mismatch-data";
 import { recordHistory, type SectionsDeleteSnapshot } from "@/lib/cadastre/history";
 
 export const runtime = "nodejs";
@@ -86,7 +87,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           return { kind: "not-found", missing: ids.filter((id) => !found.has(id)) };
         }
         const overlaps = await getOverlapsForSections(ids, tx);
-        const before: SectionsDeleteSnapshot = { sections: rows, overlaps };
+        const adminMismatches = await getAdminMismatchesForSections(ids, tx);
+        const before: SectionsDeleteSnapshot = { sections: rows, overlaps, adminMismatches };
 
         const geoms = rows.map((r) => r.geomGeoJson);
         let merged: PolyGeom;
@@ -126,7 +128,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: `Section(s) introuvable(s) : ${outcome.missing.join(", ")}` }, { status: 404 });
     }
 
-    for (const src of outcome.lots) await refreshOverlaps(src);
+    for (const src of outcome.lots) {
+      await refreshOverlaps(src);
+      await refreshAdminMismatches(src);
+    }
 
     return NextResponse.json({ success: true, keptId: outcome.keptId, deleted: ids.length - 1 });
   } catch (err) {

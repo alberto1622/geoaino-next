@@ -18,6 +18,10 @@ import {
   type LimiteSectionRow,
   type LimiteSectionOverlapRow,
 } from "@/lib/cadastre/sections-data";
+import {
+  reinsertLimiteSectionAdminMismatches,
+  type LimiteSectionAdminMismatchRow,
+} from "@/lib/cadastre/admin-mismatch-data";
 
 export type HistoryScope = "sections" | "map";
 export type HistoryAction =
@@ -26,6 +30,7 @@ export type HistoryAction =
   | "correct"
   | "correct-batch"
   | "merge"
+  | "correct-admin-mismatch"
   | "nicad-fill"
   | "map-delete"
   | "map-rename"
@@ -34,6 +39,9 @@ export type HistoryAction =
 export interface SectionsDeleteSnapshot {
   sections: LimiteSectionRow[];
   overlaps: LimiteSectionOverlapRow[];
+  /** Optionnel : absent des snapshots capturés AVANT l'ajout de ce contrôle
+   *  (rétrocompatibilité des entrées d'historique déjà en base). */
+  adminMismatches?: LimiteSectionAdminMismatchRow[];
 }
 
 export interface SectionsNumeroSnapshot {
@@ -99,6 +107,7 @@ async function revertDelete(tx: Prisma.TransactionClient, before: unknown): Prom
   }
   await reinsertLimiteSections(snapshot.sections, tx);
   await reinsertLimiteSectionOverlaps(snapshot.overlaps, tx);
+  await reinsertLimiteSectionAdminMismatches(snapshot.adminMismatches ?? [], tx);
 }
 
 /** Restaure UNIQUEMENT `numSection` (et `updatedAt`) — ne rejoue pas une
@@ -126,6 +135,7 @@ async function revertSectionsSnapshot(tx: Prisma.TransactionClient, before: unkn
   }
   await reinsertLimiteSections(snapshot.sections, tx);
   await reinsertLimiteSectionOverlaps(snapshot.overlaps, tx);
+  await reinsertLimiteSectionAdminMismatches(snapshot.adminMismatches ?? [], tx);
 }
 
 /** Revert de `nicad-fill` : réécrit `Analysis.correctedData`, les stats
@@ -252,6 +262,7 @@ const REVERT_HANDLERS: Partial<Record<string, RevertFn>> = {
   correct: (tx, before) => revertSectionsSnapshot(tx, before),
   "correct-batch": (tx, before) => revertSectionsSnapshot(tx, before),
   merge: (tx, before) => revertSectionsSnapshot(tx, before),
+  "correct-admin-mismatch": (tx, before) => revertSectionsSnapshot(tx, before),
   "nicad-fill": (tx, before) => revertNicadFill(tx, before),
   "map-delete": revertMap,
   "map-rename": revertMap,
