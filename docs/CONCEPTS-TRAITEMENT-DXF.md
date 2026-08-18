@@ -3677,6 +3677,52 @@ cache par défaut sur la route partagée elle-même (sans le flag), ce qui
 casserait silencieusement le rafraîchissement après correction sur
 `/map/[analysisId]` — le flag doit rester opt-in, jamais le défaut.
 
+## 40. `/cadastre/parcelles` trop lent : la page chargeait le GeoJSON complet côté client au lieu de réutiliser les tuiles vectorielles
+
+**Problème métier** : `/cadastre/parcelles` (§38, §39) restait très lente à
+l'ouverture malgré le cache HTTP du §39 — le cache aide les rechargements
+d'un fichier déjà vu, pas le premier chargement, et le vrai coût était
+ailleurs : les 3 fichiers sélectionnés par défaut peuvent peser 50 à 80 Mo de
+GeoJSON chacun sur les gros DXF cadastraux (KEUR MASSAR.dxf, PLAN CADASTRAL
+PIKINE.dxf réels, ~80k parcelles chacun).
+
+**Cause technique** : la première implémentation de cette page (§38) faisait
+`fetch("/api/analyses/[id]/geojson")` puis `L.geoJSON(...)` (Leaflet, une
+géométrie SVG par parcelle) pour CHAQUE fichier sélectionné — exactement le
+chemin que `MapAnalysisClient.tsx`/`MapLibreMap.tsx` (`/map/[analysisId]`)
+n'emprunte JAMAIS au-delà de `LARGE_DATASET` (> 20 000 parcelles) : ce
+composant s'appuie sur des tuiles vectorielles (MVT, `geojson-vt`/`vt-pbf`,
+`/api/analyses/[id]/tiles/[z]/[x]/[y]`) et sur `/api/analyses/[id]/map-meta`
+pour l'emprise initiale (bbox), sans jamais embarquer toute la géométrie
+d'un coup. La nouvelle page avait réinventé, sans le savoir, exactement le
+chemin lent que l'appli avait déjà mis de côté pour cette même raison.
+
+**Solution** (`ParcellesMapLibre.tsx`, nouveau ; `ParcellesVisualisationClient.tsx`
+réécrit) : remplacement de Leaflet par `react-map-gl/maplibre`, une `Source`
+`type="vector"` par fichier sélectionné pointant sur la même route de tuiles
+que `/map/[analysisId]` (`tiles/[z]/[x]/[y]`, réutilisée telle quelle —
+n'importe quel `analysisId` y est déjà accepté), et `map-meta` (déjà
+utilisé côté page carte) pour l'emprise combinée (union des bbox) sans
+jamais transporter une géométrie de parcelle vers le navigateur. Seules les
+ERREURS (petit volume, quelques dizaines à centaines par fichier, jamais
+80 Mo) restent un `fetch` GeoJSON classique posé en overlay
+(`Source type="geojson"`), filtrées côté client par type de géométrie
+(`["geometry-type"]`) pour couvrir polygones/lignes/points avec les mêmes
+trois couches (fill/line/circle) que `MapLibreMap.tsx`. Le composant est
+chargé via `next/dynamic({ ssr: false })` (maplibre-gl touche `window` au
+chargement), même contrainte que `MapLibreMap` dans `MapAnalysisClient.tsx`.
+
+**Pourquoi (pièges inclus)** : ne jamais construire une nouvelle page carte
+« depuis zéro » sans vérifier d'abord comment la page carte EXISTANTE gère
+le même volume de données — l'app a déjà résolu ce problème une fois
+(`LARGE_DATASET`, tuiles vectorielles), le réinventer coûte une régression
+de performance évitable. Piège à éviter : les popups de cette page
+interpolaient `err.description`/`nicad` en HTML brut sans échappement
+(hérité de l'ancienne implémentation Leaflet, jamais un problème remarqué
+en pratique mais un vrai risque XSS puisque ces valeurs proviennent du
+fichier importé par l'utilisateur) — corrigé au passage avec le même
+`escHtml` déjà utilisé par `MapLibreMap.tsx`.
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait

@@ -1,13 +1,18 @@
 "use client";
 
-import "leaflet/dist/leaflet.css";
-import { useCallback, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Download, Loader2, Eye, EyeOff, MapPinned } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { errorTypeColor, severityColor } from "@/lib/utils";
+import { errorTypeColor } from "@/lib/utils";
+import type { ErrorRow } from "@/components/cadastre/ParcellesMapLibre";
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+// `react-map-gl`/`maplibre-gl` touchent `window` au chargement → composant
+// client-only (mêmes raisons que `MapLibreMap` dans `MapAnalysisClient.tsx`).
+const ParcellesMapLibre = dynamic(() => import("@/components/cadastre/ParcellesMapLibre"), {
+  ssr: false,
+});
 
 export interface FileItem {
   id: number;
@@ -20,19 +25,10 @@ export interface FileItem {
   createdAt: string;
 }
 
-interface ErrorRow {
-  id: number;
-  errorType: string;
-  severity: string;
-  nicad1: string | null;
-  nicad2: string | null;
-  description: string | null;
-  geometry: unknown;
-  corrected: boolean;
-}
+type Bbox = [number, number, number, number];
 
-interface Loaded {
-  geojson: GeoJSON.FeatureCollection;
+interface Meta {
+  bbox: Bbox | null;
   errors: ErrorRow[];
 }
 
@@ -53,64 +49,25 @@ const ERROR_TYPE_LABELS: Record<string, string> = {
   multi_numero: "Plusieurs numéros",
 };
 
-const PARCEL_COLOR = "#64748b";
-
 const DEFAULT_SELECTED_COUNT = 3;
 
 export default function ParcellesVisualisationClient({ files }: { files: FileItem[] }) {
-  const mapEl = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<any>(null);
-  const LRef = useRef<any>(null);
-  const parcelsLayerRef = useRef<any>(null);
-  const errorsLayerRef = useRef<any>(null);
-  const fitPendingRef = useRef(false);
-
-  const [mapReady, setMapReady] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>(() =>
     files.slice(0, DEFAULT_SELECTED_COUNT).map((f) => f.id),
   );
-  const [loadedById, setLoadedById] = useState<Map<number, Loaded>>(new Map());
+  const [metaById, setMetaById] = useState<Map<number, Meta>>(new Map());
   const [loading, setLoading] = useState(false);
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
 
-  // ── Init Leaflet (impératif, import dynamique — même schéma que SectionsClient/CadastreMap) ──
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const L = (await import("leaflet")).default;
-      if (cancelled || !mapEl.current || mapRef.current) return;
-      LRef.current = L;
-      delete (L.Icon.Default.prototype as { _getIconUrl?: unknown })._getIconUrl;
-      L.Icon.Default.mergeOptions({
-        iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
-        iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
-        shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-      });
-      const map = L.map(mapEl.current).fitBounds([
-        [12.3, -17.6],
-        [16.7, -11.3],
-      ]);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "© OpenStreetMap",
-        maxZoom: 19,
-      }).addTo(map);
-      mapRef.current = map;
-      setMapReady(true);
-    })();
-    return () => {
-      cancelled = true;
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
-    };
-  }, []);
-
   // ── Chargement des fichiers sélectionnés (uniquement ceux pas déjà en cache) ──
+  // Rendu par tuiles vectorielles (cf. ParcellesMapLibre) : on ne récupère ICI
+  // que les erreurs (petit volume) et l'emprise (`map-meta`, sans géométrie) —
+  // jamais le GeoJSON complet d'un fichier, qui peut peser 50-80 Mo sur les
+  // gros DXF cadastraux et rendait la page inutilisable.
   useEffect(() => {
-    const missing = selectedIds.filter((id) => !loadedById.has(id));
+    const missing = selectedIds.filter((id) => !metaById.has(id));
     if (missing.length === 0) return;
     let cancelled = false;
     (async () => {
@@ -118,25 +75,21 @@ export default function ParcellesVisualisationClient({ files }: { files: FileIte
       try {
         const results = await Promise.all(
           missing.map(async (id) => {
-            // `?ro=1` : signale aux routes qu'il s'agit de la page de consultation
-            // (aucune édition possible ici) → elles renvoient un Cache-Control plus
-            // long, le navigateur peut resservir depuis son cache HTTP.
-            const [geoRes, errRes] = await Promise.all([
-              fetch(`/api/analyses/${id}/geojson?ro=1`),
+            const [metaRes, errRes] = await Promise.all([
+              fetch(`/api/analyses/${id}/map-meta`),
               fetch(`/api/analyses/${id}/errors?ro=1`),
             ]);
-            const geojson = geoRes.ok ? await geoRes.json() : { type: "FeatureCollection", features: [] };
+            const meta = metaRes.ok ? await metaRes.json() : { bbox: null };
             const errors = errRes.ok ? await errRes.json() : [];
-            return [id, { geojson, errors }] as const;
+            return [id, { bbox: meta.bbox ?? null, errors }] as const;
           }),
         );
         if (cancelled) return;
-        setLoadedById((prev) => {
+        setMetaById((prev) => {
           const next = new Map(prev);
-          for (const [id, data] of results) next.set(id, data as Loaded);
+          for (const [id, data] of results) next.set(id, data as Meta);
           return next;
         });
-        fitPendingRef.current = true;
       } catch (err) {
         if (!cancelled) toast.error(`Chargement échoué : ${String(err)}`);
       } finally {
@@ -162,79 +115,29 @@ export default function ParcellesVisualisationClient({ files }: { files: FileIte
     });
   }, []);
 
-  // ── Rendu carte : parcelles (grises) + erreurs (colorées, légende) ─────────
-  useEffect(() => {
-    const L = LRef.current;
-    const map = mapRef.current;
-    if (!L || !map || !mapReady) return;
+  const errorsById = useMemo(() => {
+    const map = new Map<number, ErrorRow[]>();
+    for (const id of selectedIds) map.set(id, metaById.get(id)?.errors ?? []);
+    return map;
+  }, [selectedIds, metaById]);
 
-    if (parcelsLayerRef.current) { map.removeLayer(parcelsLayerRef.current); parcelsLayerRef.current = null; }
-    if (errorsLayerRef.current) { map.removeLayer(errorsLayerRef.current); errorsLayerRef.current = null; }
-
-    const parcelGroup = L.featureGroup();
-    const errorGroup = L.featureGroup();
-
+  // ── Emprise combinée (union des bbox `map-meta`) pour le fit initial ──────
+  const fitBounds = useMemo<Bbox | null>(() => {
+    let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+    let found = false;
     for (const id of selectedIds) {
-      const data = loadedById.get(id);
-      if (!data) continue;
-
-      try {
-        const gj = L.geoJSON(data.geojson, {
-          style: { color: PARCEL_COLOR, weight: 1, fillColor: PARCEL_COLOR, fillOpacity: 0.08 },
-          onEachFeature: (feature: any, layer: any) => {
-            const nicad = feature?.properties?.nicad;
-            if (nicad) layer.bindTooltip(String(nicad), { sticky: true, className: "font-mono" });
-          },
-        });
-        gj.addTo(parcelGroup);
-      } catch {
-        /* ignore */
-      }
-
-      for (const err of data.errors) {
-        if (err.corrected) continue;
-        if (hiddenTypes.has(err.errorType.toLowerCase())) continue;
-        if (!err.geometry) continue;
-        try {
-          const color = errorTypeColor(err.errorType);
-          const gj = L.geoJSON(err.geometry as any, {
-            style: { color, weight: 1.5, fillColor: color, fillOpacity: 0.45 },
-            pointToLayer: (_f: any, latlng: any) => L.circleMarker(latlng, { radius: 5, color, fillColor: color, fillOpacity: 0.7 }),
-          });
-          const label = ERROR_TYPE_LABELS[err.errorType.toLowerCase()] ?? err.errorType;
-          gj.bindPopup(
-            `<b>${label}</b> <span class="${severityColor(err.severity)}">(${err.severity.toLowerCase()})</span><br/>${err.description ?? ""}` +
-              (err.nicad1 ? `<br/><span class="font-mono">${err.nicad1}${err.nicad2 ? ` / ${err.nicad2}` : ""}</span>` : ""),
-          );
-          gj.addTo(errorGroup);
-        } catch {
-          /* ignore */
-        }
-      }
+      const b = metaById.get(id)?.bbox;
+      if (!b) continue;
+      found = true;
+      w = Math.min(w, b[0]); s = Math.min(s, b[1]); e = Math.max(e, b[2]); n = Math.max(n, b[3]);
     }
-
-    parcelGroup.addTo(map);
-    errorGroup.addTo(map);
-    parcelsLayerRef.current = parcelGroup;
-    errorsLayerRef.current = errorGroup;
-
-    if (fitPendingRef.current) {
-      fitPendingRef.current = false;
-      try {
-        const b = parcelGroup.getBounds();
-        if (b.isValid()) map.fitBounds(b, { padding: [24, 24] });
-      } catch {
-        /* ignore */
-      }
-    }
-  }, [selectedIds, loadedById, hiddenTypes, mapReady]);
+    return found ? [w, s, e, n] : null;
+  }, [selectedIds, metaById]);
 
   // ── Légende : types d'erreur présents dans la sélection courante, avec compteur ──
   const errorTypeCounts = new Map<string, number>();
   for (const id of selectedIds) {
-    const data = loadedById.get(id);
-    if (!data) continue;
-    for (const err of data.errors) {
+    for (const err of metaById.get(id)?.errors ?? []) {
       if (err.corrected) continue;
       const key = err.errorType.toLowerCase();
       errorTypeCounts.set(key, (errorTypeCounts.get(key) ?? 0) + 1);
@@ -278,7 +181,7 @@ export default function ParcellesVisualisationClient({ files }: { files: FileIte
 
   return (
     <div className="relative h-[calc(100vh-180px)] min-h-[500px] overflow-hidden rounded-xl border border-border/60">
-      <div ref={mapEl} className="h-full w-full" />
+      <ParcellesMapLibre selectedIds={selectedIds} errorsById={errorsById} hiddenTypes={hiddenTypes} fitBounds={fitBounds} />
 
       {loading && (
         <div className="absolute left-3 top-3 z-1000 flex items-center gap-2 rounded-lg bg-background/95 px-3 py-1.5 text-xs shadow backdrop-blur">
