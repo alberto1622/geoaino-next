@@ -3723,6 +3723,44 @@ en pratique mais un vrai risque XSS puisque ces valeurs proviennent du
 fichier importé par l'utilisateur) — corrigé au passage avec le même
 `escHtml` déjà utilisé par `MapLibreMap.tsx`.
 
+## 41. Erreur `BOUNDARY_CROSS` : « dépasse les limites administratives » ne disait ni quelle commune, ni de combien
+
+**Problème métier** : l'erreur d'analyse `boundary_cross` (parcelle dont la
+bbox déborde de la limite administrative attachée au fichier importé)
+affichait un message générique — `Parcelle "X" dépasse les limites
+administratives` — sans nommer la commune concernée ni quantifier le
+débordement. Impossible de juger d'un coup d'œil si c'est un vrai problème
+de géoréférencement (des dizaines de mètres, plusieurs côtés) ou un artefact
+de tolérance (quelques centimètres sur un seul côté).
+
+**Cause technique** (`analyzeGeoJSON`, `src/lib/geo-engine.ts`, §4 « Admin
+boundary check ») : la vérification comparait déjà les bbox parcelle vs
+admin sur les 4 axes (`bbox[0] < adminBbox[0]`, etc.) pour DÉCIDER de lever
+l'erreur, mais jetait cette information avant de rédiger la description —
+et le nom de la commune (`commune`, déjà connu de `POST /api/analyses` au
+moment de l'appel) n'était simplement jamais passé à la fonction.
+
+**Solution** : `analyzeGeoJSON` accepte désormais un 3ᵉ paramètre optionnel
+`communeName` (passé par `POST /api/analyses`, `src/app/api/analyses/route.ts`,
+depuis le `commune` déjà présent dans le corps de la requête). Pour chaque
+côté qui déborde (ouest/sud/est/nord), la distance géodésique entre le bord
+de la parcelle et le bord correspondant de la limite admin est calculée via
+`turf.distance` (coordonnées déjà en degrés WGS84, cf. §14 — piège déjà
+documenté pour les erreurs `gap`) sur un point médian de l'axe perpendiculaire,
+plutôt qu'un simple flag booléen. Exemple de description obtenue :
+`Parcelle "0143011102500024" déborde de la commune « Golf Sud » — est : 34 m,
+nord : 12 m`.
+
+**Pourquoi (pièges inclus)** : cette explicitation ne change AUCUNE logique
+de détection (même condition bbox, même seuil, même sévérité `high`) — seule
+la description change, donc aucune migration ni recalcul historique requis ;
+les analyses déjà en base gardent leur ancienne description tant qu'elles ne
+sont pas ré-analysées. Piège à éviter : `regenerate-report/route.ts`
+n'appelle `analyzeGeoJSON` qu'avec le GeoJSON seul (pas d'`adminBoundary`
+rechargé) — la vérification `boundary_cross` y est donc silencieusement
+absente, comportement inchangé et volontairement non touché ici (cette route
+ne fait que régénérer le rapport IA/score, pas ré-insérer les erreurs).
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait

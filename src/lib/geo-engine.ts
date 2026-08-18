@@ -178,7 +178,8 @@ function isMissingNicadValue(nicad: unknown): boolean {
 
 export async function analyzeGeoJSON(
   geojson: GeoFeatureCollection,
-  adminBoundary?: GeoFeatureCollection
+  adminBoundary?: GeoFeatureCollection,
+  communeName?: string | null
 ): Promise<AnalysisResult> {
   const features = geojson.features || [];
   const errors: AnalysisResult["errors"] = [];
@@ -574,23 +575,48 @@ export async function analyzeGeoJSON(
     const adminCoords = getPolygonCoords(adminFeature);
     if (adminCoords) {
       const adminBbox = getBBox(adminCoords);
+      const communeLabel = communeName ? `de la commune « ${communeName} »` : "de la commune déclarée";
       features.forEach((f, idx) => {
         const coords = getPolygonCoords(f);
         if (!coords) return;
         const bbox = getBBox(coords);
         const props = f.properties || {};
         const nicad = extractNicad(props) || `feature_${idx}`;
-        if (bbox[0] < adminBbox[0] || bbox[1] < adminBbox[1] || bbox[2] > adminBbox[2] || bbox[3] > adminBbox[3]) {
-          nonConformeIdx.add(idx);
-          errors.push({
-            type: "boundary_cross",
-            severity: "high",
-            nicad1: nicad,
-            description: `Parcelle "${nicad}" dépasse les limites administratives`,
-            confidence: 0.9,
-            geometry: f.geometry,
-          });
+
+        // Débordement par côté (ouest/sud/est/nord), distance géodésique en
+        // mètres au point le plus proche de la limite admin sur le même axe —
+        // pas seulement "dépasse", pour que l'utilisateur sache DE COMBIEN et
+        // DE QUEL CÔTÉ, sans avoir à ouvrir la carte pour comprendre l'erreur.
+        const midY = (bbox[1] + bbox[3]) / 2;
+        const midX = (bbox[0] + bbox[2]) / 2;
+        const overflow: string[] = [];
+        if (bbox[0] < adminBbox[0]) {
+          const d = turf.distance(turf.point([bbox[0], midY]), turf.point([adminBbox[0], midY]), { units: "meters" });
+          overflow.push(`ouest : ${d.toFixed(0)} m`);
         }
+        if (bbox[1] < adminBbox[1]) {
+          const d = turf.distance(turf.point([midX, bbox[1]]), turf.point([midX, adminBbox[1]]), { units: "meters" });
+          overflow.push(`sud : ${d.toFixed(0)} m`);
+        }
+        if (bbox[2] > adminBbox[2]) {
+          const d = turf.distance(turf.point([bbox[2], midY]), turf.point([adminBbox[2], midY]), { units: "meters" });
+          overflow.push(`est : ${d.toFixed(0)} m`);
+        }
+        if (bbox[3] > adminBbox[3]) {
+          const d = turf.distance(turf.point([midX, bbox[3]]), turf.point([midX, adminBbox[3]]), { units: "meters" });
+          overflow.push(`nord : ${d.toFixed(0)} m`);
+        }
+        if (overflow.length === 0) return;
+
+        nonConformeIdx.add(idx);
+        errors.push({
+          type: "boundary_cross",
+          severity: "high",
+          nicad1: nicad,
+          description: `Parcelle "${nicad}" déborde ${communeLabel} — ${overflow.join(", ")}`,
+          confidence: 0.9,
+          geometry: f.geometry,
+        });
       });
     }
   }
