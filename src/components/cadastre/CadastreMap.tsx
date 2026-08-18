@@ -97,6 +97,17 @@ function syscolChanged(info: ChangementInfo | null): boolean {
   return !!info?.syscol2026 && info.syscol2026 !== info.syscol2013;
 }
 
+function escHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// En dessous de ce niveau de zoom, les noms de commune ne s'affichent pas —
+// à l'échelle du pays (fitBounds initial, ~zoom 7) 1647 communes 2013
+// superposeraient un fouillis de texte illisible. Le libellé apparaît
+// progressivement en zoomant, même principe que les labels de section
+// (`showSectionLabels`, SectionsClient.tsx).
+const LABEL_MIN_ZOOM = 10;
+
 const selectCls =
   "h-9 w-full rounded-lg border border-border bg-background text-foreground px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&>option]:bg-background [&>option]:text-foreground";
 const optionCls = "bg-background text-foreground";
@@ -113,6 +124,8 @@ export default function CadastreMap() {
   const layerRef = useRef<any>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const overviewRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const labelGroupRef = useRef<any>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const LRef = useRef<any>(null);
 
@@ -146,6 +159,18 @@ export default function CadastreMap() {
       map.on("click", async (e: { latlng: { lat: number; lng: number } }) => {
         const p = await parcelleByCoords({ lat: e.latlng.lat, lng: e.latlng.lng, radiusKm: 0.3 });
         if (p) setSelected(p);
+      });
+
+      // Noms de commune : visibles seulement à partir de LABEL_MIN_ZOOM (cf.
+      // constante) — le groupe de labels est reconstruit par l'effet
+      // « vue d'ensemble » ci-dessous, ce listener ne fait qu'afficher/masquer.
+      map.on("zoomend", () => {
+        const group = labelGroupRef.current;
+        if (!group) return;
+        const show = map.getZoom() >= LABEL_MIN_ZOOM;
+        const has = map.hasLayer(group);
+        if (show && !has) group.addTo(map);
+        else if (!show && has) map.removeLayer(group);
       });
     })();
     return () => {
@@ -253,8 +278,13 @@ export default function CadastreMap() {
       map.removeLayer(overviewRef.current);
       overviewRef.current = null;
     }
+    if (labelGroupRef.current) {
+      map.removeLayer(labelGroupRef.current);
+      labelGroupRef.current = null;
+    }
     if (communes.length === 0) return;
     const group = L.featureGroup();
+    const labelGroup = L.featureGroup();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let selectedLayer: any = null;
     for (const c of communes) {
@@ -296,6 +326,20 @@ export default function CadastreMap() {
         gj.addTo(group);
         if (isSelected) selectedLayer = gj;
 
+        // Nom de commune permanent (pas seulement au survol) — n'apparaît qu'à
+        // partir de LABEL_MIN_ZOOM (listener "zoomend" ci-dessus), même
+        // pattern que les labels de section (`SectionsClient.tsx`).
+        const labelCenter = gj.getBounds().getCenter();
+        const labelHtml =
+          `<div style="color:#111827;font-size:11px;font-weight:600;` +
+          `text-shadow:0 0 2px #fff,0 0 2px #fff,0 0 2px #fff;` +
+          `white-space:nowrap;pointer-events:none">${escHtml(c.nomCommune)}</div>`;
+        L.marker(labelCenter, {
+          icon: L.divIcon({ className: "", html: labelHtml, iconSize: [0, 0] }),
+          interactive: false,
+          keyboard: false,
+        }).addTo(labelGroup);
+
         // Recodification Syscol : liseré pointillé bleu par-dessus, INDÉPENDANT
         // de la couleur de type — visible même sur une commune "inchangée"
         // (grise, peu opaque) où le changement serait sinon invisible.
@@ -335,6 +379,8 @@ export default function CadastreMap() {
     } catch {
       /* ignore */
     }
+    labelGroupRef.current = labelGroup;
+    if (map.getZoom() >= LABEL_MIN_ZOOM) labelGroup.addTo(map);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [communes, syscol, version, parSyscol2013, parSyscol2026]);
 

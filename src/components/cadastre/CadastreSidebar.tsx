@@ -45,6 +45,11 @@ export const CADASTRE_NAV = [
     // badge: "DXF, shp",
   },
   {
+    label: "Visualisation des parcelles",
+    href: "/cadastre/parcelles",
+    icon: Eye,
+  },
+  {
     label: "Vérification NICAD",
     href: "/cadastre/verification",
     icon: ShieldCheck,
@@ -62,11 +67,6 @@ export const CADASTRE_NAV = [
     badge: "Masse",
   },
   { label: "Carte interactive", href: "/cadastre/carte", icon: MapIcon },
-  {
-    label: "Visualisation des parcelles",
-    href: "/cadastre/parcelles",
-    icon: Eye,
-  },
   { label: "Communes", href: "/cadastre/communes", icon: Building2 },
   {
     label: "Correspondances",

@@ -3708,6 +3708,234 @@ correction (`/api/analyses/[id]/errors/[errorId]/correct`) ; la nouvelle
 page se contente d'un filtre d'affichage par type (masquer/afficher), qui ne
 modifie jamais `corrected` en base.
 
+## 39. Cache HTTP long réservé aux pages en lecture seule (`?ro=1`) : la fraîcheur n'a de coût que là où on édite
+
+**Problème métier** : `/cadastre/parcelles` peut charger plusieurs gros
+GeoJSON d'un coup (plusieurs `Analysis` sélectionnées) et re-fetch à chaque
+changement de sélection ; les routes `GET /api/analyses/[id]/geojson` et
+`GET /api/analyses/[id]/errors` qu'elle appelle sont PARTAGÉES avec
+`/map/[analysisId]` (page d'édition), qui a besoin de données fraîches après
+chaque correction/suppression/mise à jour NICAD.
+
+**Cause technique** : `geojson/route.ts` posait déjà `Cache-Control:
+private, max-age=30` — volontairement court pour ne jamais montrer une
+version périmée pendant une session de correction active. Appliquer le même
+cache court à `/cadastre/parcelles` gaspille son principal bénéfice (éviter
+de retélécharger un fichier déjà vu en changeant simplement la sélection
+courante) ; l'inverse — allonger le cache pour tout le monde — risquerait de
+masquer une correction qu'on vient de faire sur `/map/[analysisId]`.
+
+**Solution** (`geojson/route.ts`, `errors/route.ts`) : un paramètre de
+requête `?ro=1`, posé uniquement par `ParcellesVisualisationClient.tsx`
+(page sans aucune action d'édition), fait basculer le `Cache-Control` sur
+`private, max-age=300, stale-while-revalidate=3600` ; sans ce paramètre
+(pages éditrices), le comportement d'origine (`max-age=30`, ou
+`max-age=0, must-revalidate` pour les erreurs) est inchangé. Le cache reste
+`private` (pas de CDN/proxy partagé) : chaque utilisateur a sa propre copie
+navigateur, cohérent avec `requireSession()`.
+
+**Pourquoi (pièges inclus)** : la fraîcheur des données a un coût réel
+seulement là où l'utilisateur peut modifier l'état sous-jacent — une page de
+consultation pure peut se permettre plusieurs minutes de latence de
+propagation sans risque fonctionnel. Piège à éviter : ne pas allonger le
+cache par défaut sur la route partagée elle-même (sans le flag), ce qui
+casserait silencieusement le rafraîchissement après correction sur
+`/map/[analysisId]` — le flag doit rester opt-in, jamais le défaut.
+
+## 40. `/cadastre/parcelles` trop lent : la page chargeait le GeoJSON complet côté client au lieu de réutiliser les tuiles vectorielles
+
+**Problème métier** : `/cadastre/parcelles` (§38, §39) restait très lente à
+l'ouverture malgré le cache HTTP du §39 — le cache aide les rechargements
+d'un fichier déjà vu, pas le premier chargement, et le vrai coût était
+ailleurs : les 3 fichiers sélectionnés par défaut peuvent peser 50 à 80 Mo de
+GeoJSON chacun sur les gros DXF cadastraux (KEUR MASSAR.dxf, PLAN CADASTRAL
+PIKINE.dxf réels, ~80k parcelles chacun).
+
+**Cause technique** : la première implémentation de cette page (§38) faisait
+`fetch("/api/analyses/[id]/geojson")` puis `L.geoJSON(...)` (Leaflet, une
+géométrie SVG par parcelle) pour CHAQUE fichier sélectionné — exactement le
+chemin que `MapAnalysisClient.tsx`/`MapLibreMap.tsx` (`/map/[analysisId]`)
+n'emprunte JAMAIS au-delà de `LARGE_DATASET` (> 20 000 parcelles) : ce
+composant s'appuie sur des tuiles vectorielles (MVT, `geojson-vt`/`vt-pbf`,
+`/api/analyses/[id]/tiles/[z]/[x]/[y]`) et sur `/api/analyses/[id]/map-meta`
+pour l'emprise initiale (bbox), sans jamais embarquer toute la géométrie
+d'un coup. La nouvelle page avait réinventé, sans le savoir, exactement le
+chemin lent que l'appli avait déjà mis de côté pour cette même raison.
+
+**Solution** (`ParcellesMapLibre.tsx`, nouveau ; `ParcellesVisualisationClient.tsx`
+réécrit) : remplacement de Leaflet par `react-map-gl/maplibre`, une `Source`
+`type="vector"` par fichier sélectionné pointant sur la même route de tuiles
+que `/map/[analysisId]` (`tiles/[z]/[x]/[y]`, réutilisée telle quelle —
+n'importe quel `analysisId` y est déjà accepté), et `map-meta` (déjà
+utilisé côté page carte) pour l'emprise combinée (union des bbox) sans
+jamais transporter une géométrie de parcelle vers le navigateur. Seules les
+ERREURS (petit volume, quelques dizaines à centaines par fichier, jamais
+80 Mo) restent un `fetch` GeoJSON classique posé en overlay
+(`Source type="geojson"`), filtrées côté client par type de géométrie
+(`["geometry-type"]`) pour couvrir polygones/lignes/points avec les mêmes
+trois couches (fill/line/circle) que `MapLibreMap.tsx`. Le composant est
+chargé via `next/dynamic({ ssr: false })` (maplibre-gl touche `window` au
+chargement), même contrainte que `MapLibreMap` dans `MapAnalysisClient.tsx`.
+
+**Pourquoi (pièges inclus)** : ne jamais construire une nouvelle page carte
+« depuis zéro » sans vérifier d'abord comment la page carte EXISTANTE gère
+le même volume de données — l'app a déjà résolu ce problème une fois
+(`LARGE_DATASET`, tuiles vectorielles), le réinventer coûte une régression
+de performance évitable. Piège à éviter : les popups de cette page
+interpolaient `err.description`/`nicad` en HTML brut sans échappement
+(hérité de l'ancienne implémentation Leaflet, jamais un problème remarqué
+en pratique mais un vrai risque XSS puisque ces valeurs proviennent du
+fichier importé par l'utilisateur) — corrigé au passage avec le même
+`escHtml` déjà utilisé par `MapLibreMap.tsx`.
+
+## 41. Erreur `BOUNDARY_CROSS` : « dépasse les limites administratives » ne disait ni quelle commune, ni de combien
+
+**Problème métier** : l'erreur d'analyse `boundary_cross` (parcelle dont la
+bbox déborde de la limite administrative attachée au fichier importé)
+affichait un message générique — `Parcelle "X" dépasse les limites
+administratives` — sans nommer la commune concernée ni quantifier le
+débordement. Impossible de juger d'un coup d'œil si c'est un vrai problème
+de géoréférencement (des dizaines de mètres, plusieurs côtés) ou un artefact
+de tolérance (quelques centimètres sur un seul côté).
+
+**Cause technique** (`analyzeGeoJSON`, `src/lib/geo-engine.ts`, §4 « Admin
+boundary check ») : la vérification comparait déjà les bbox parcelle vs
+admin sur les 4 axes (`bbox[0] < adminBbox[0]`, etc.) pour DÉCIDER de lever
+l'erreur, mais jetait cette information avant de rédiger la description —
+et le nom de la commune (`commune`, déjà connu de `POST /api/analyses` au
+moment de l'appel) n'était simplement jamais passé à la fonction.
+
+**Solution** : `analyzeGeoJSON` accepte désormais un 3ᵉ paramètre optionnel
+`communeName` (passé par `POST /api/analyses`, `src/app/api/analyses/route.ts`,
+depuis le `commune` déjà présent dans le corps de la requête). Pour chaque
+côté qui déborde (ouest/sud/est/nord), la distance géodésique entre le bord
+de la parcelle et le bord correspondant de la limite admin est calculée via
+`turf.distance` (coordonnées déjà en degrés WGS84, cf. §14 — piège déjà
+documenté pour les erreurs `gap`) sur un point médian de l'axe perpendiculaire,
+plutôt qu'un simple flag booléen. Exemple de description obtenue :
+`Parcelle "0143011102500024" déborde de la commune « Golf Sud » — est : 34 m,
+nord : 12 m`.
+
+**Pourquoi (pièges inclus)** : cette explicitation ne change AUCUNE logique
+de détection (même condition bbox, même seuil, même sévérité `high`) — seule
+la description change, donc aucune migration ni recalcul historique requis ;
+les analyses déjà en base gardent leur ancienne description tant qu'elles ne
+sont pas ré-analysées. Piège à éviter : `regenerate-report/route.ts`
+n'appelle `analyzeGeoJSON` qu'avec le GeoJSON seul (pas d'`adminBoundary`
+rechargé) — la vérification `boundary_cross` y est donc silencieusement
+absente, comportement inchangé et volontairement non touché ici (cette route
+ne fait que régénérer le rapport IA/score, pas ré-insérer les erreurs).
+
+## 42. Noms de commune permanents sur `/cadastre/carte` — pas seulement au survol
+
+**Problème métier** : la vue d'ensemble de `/cadastre/carte` (§ précédents)
+affiche déjà TOUTES les communes du millésime sélectionné en permanence,
+mais leur nom n'apparaissait qu'au survol (`bindTooltip`, sticky) — invisible
+tant que la souris ne passe pas dessus, donc illisible en un coup d'œil sur
+une vue d'ensemble du pays.
+
+**Cause technique** : un `layer.bindTooltip(...)` par commune ne peut porter
+qu'UN SEUL tooltip (celui, déjà existant, affichant type de changement +
+département + Syscol au survol) — impossible d'y superposer un second
+libellé permanent sur la même couche.
+
+**Solution** (`CadastreMap.tsx`) : un marqueur `L.divIcon` séparé par
+commune, positionné sur `gj.getBounds().getCenter()`, ajouté à un groupe
+dédié (`labelGroupRef`) — même pattern que les labels de numéro de section
+déjà en place (`SectionsClient.tsx`, `showSectionLabels`). Le nom
+(`escHtml`, la valeur vient du référentiel `cad_communes_2013/2026`, pas
+d'un fichier importé, mais échappé par précaution) s'affiche seulement à
+partir de `LABEL_MIN_ZOOM = 10` : à l'échelle du pays (zoom initial ~7),
+1647 communes 2013 superposeraient un fouillis de texte illisible — un
+listener `zoomend` affiche/masque le groupe de labels sans reconstruire les
+polygones.
+
+**Pourquoi (pièges inclus)** : ne jamais empiler un second `bindTooltip` sur
+une couche qui en a déjà un — Leaflet écrase silencieusement le premier,
+sans erreur visible, d'où le passage par un marqueur `divIcon` séparé et
+non interactif (`interactive: false`) pour ne pas intercepter les clics
+destinés au polygone en dessous (sélection de la commune).
+
+## 43. Correction d'un débordement administratif (« Découper à la commune ») : aucun retour visuel pendant la requête
+
+**Problème métier** : sur `/cadastre/sections`, panneau « Limites
+administratives » (§34, §41), les boutons « Découper à la commune » et
+« Ignorer » sur chaque débordement passaient déjà par un état `busy`
+(`correctingMismatch`, `performMismatchCorrection`), mais celui-ci se
+contentait de désactiver le bouton (`disabled`, opacité 40 %) — aucun
+spinner, l'icône restait figée. Le découpage passe par une confirmation
+(`ConfirmDialog`) qui se ferme immédiatement au clic sans attendre la fin de
+la requête (`onConfirm` appelle `run()` puis `setConfirmState(null)` sans
+`await`) : l'utilisateur revient sur le panneau et ne voit RIEN indiquer
+qu'une correction est en cours tant que `fetchData` n'a pas fini de
+recharger (ST_Intersection/ST_Area sur une géométrie de section, non
+instantané sur les gros lots).
+
+**Solution** (`ActBtn`, `SectionsClient.tsx`) : l'icône passe à un `Loader2`
+animé (`animate-spin`) quand `busy` est vrai — même pattern déjà utilisé
+partout ailleurs dans ce fichier (validation de numéro de section, export,
+etc.), simplement jamais appliqué à ce composant partagé par les deux
+boutons du panneau de débordement.
+
+**Pourquoi (pièges inclus)** : `ActBtn` est un composant PARTAGÉ (mêmes deux
+boutons « clip »/« ignore ») — corriger l'icône au niveau du composant
+couvre les deux actions d'un coup, pas seulement celle demandée
+explicitement. Piège à éviter : le spinner ne couvre que le retour APRÈS
+fermeture de la boîte de confirmation (le seul moment où une attente réelle
+est perceptible) — la boîte elle-même n'a pas d'état de chargement propre,
+volontairement non touché ici (changement plus large, hors demande).
+
+## 44. Ajout des arrondissements aux limites administratives : géométrie propre, pas dissoute des communes
+
+**Problème métier** : `admin-boundaries.ts` ne connaissait que trois niveaux
+(régions, départements, communes) — les arrondissements (niveau
+administratif entre département et commune au Sénégal) étaient absents,
+alors qu'un référentiel officiel dédié existe (`Arrondissements.shp`,
+DGID/DTGC 2025, 127 features).
+
+**Cause technique** : `CadCommune2026` porte déjà un champ texte
+`arrondissement` par commune (posé à l'import, §« load-communes-2026 »), ce
+qui aurait permis de DISSOUDRE les arrondissements par `ST_Union` groupé —
+exactement comme départements/régions le sont déjà. Mais cette dissolution
+n'aurait été fiable que si `arrondissement` est renseigné de façon homogène
+sur TOUTES les communes (jamais vérifié), et le résultat n'aurait été qu'une
+approximation (union de polygones communaux) plutôt que le contour officiel
+réel — un écart potentiellement trompeur pour un usage cadastral.
+
+**Solution** :
+- Nouveau modèle `CadArrondissement` (`cad_arrondissements`, migration
+  `20260818143410_add_cad_arrondissements`) avec géométrie PROPRE
+  (`geom geometry(MultiPolygon, 4326)`), même schéma de colonnes que
+  `CadCommune2026` (nom, région, département, `cav`) + codes région/
+  département/CAV (`COD_REG`/`COD_DEPT`/`COD_CAV` du .dbf source, absents de
+  `CadCommune2026` mais conservés ici pour un futur rattachement).
+- `scripts/load-arrondissements.ts` lit le shapefile DIRECTEMENT (`shapefile`
+  npm, déjà une dépendance du projet — pas de conversion GeoJSON
+  intermédiaire par script Python, contrairement à `load-communes-2026.ts`)
+  et reprojette chaque géométrie via `convertGeometryToWgs84`
+  (`import-data.ts`) — le `.prj` du shapefile confirme une source en
+  `WGS_1984_UTM_Zone_28N`, la même heuristique planaire (coordonnées
+  |x| > 180 ou |y| > 90 ⇒ UTM) que `sections-from-shapefile.ts` s'applique
+  donc sans modification.
+- `admin-boundaries.ts` gagne un niveau `"arrondissements"` lisant
+  DIRECTEMENT `cad_arrondissements.geom` (comme `communes`, pas de
+  `ST_Union`) ; `GET /api/cadastre/admin-boundaries` accepte désormais
+  `?niveau=arrondissements`.
+
+**Pourquoi (pièges inclus)** : préférer une géométrie SOURCE dédiée à une
+dissolution dérivée dès qu'un référentiel officiel existe — la dissolution
+reste réservée aux niveaux qui n'ONT PAS de géométrie propre en base
+(départements/régions, faute d'alternative). Piège à éviter : ce
+changement ajoute le niveau à la couche de données partagée
+(`admin-boundaries.ts` + route API) mais NE branche PAS encore les
+sélecteurs UI existants (`ADMIN_LEVELS`/`ADMIN_STYLES`, dupliqués localement
+dans `MapAnalysisClient.tsx` et `MapLibreMap.tsx`) — c'est un choix de scope
+délibéré (script demandé, pas une refonte de tous les écrans carte), à
+faire séparément si besoin. Autre piège : la migration crée la table mais
+NE remplit RIEN — `npx prisma generate` (régénère le client Prisma) puis
+`npx tsx scripts/load-arrondissements.ts` restent à exécuter manuellement
+après application de la migration.
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait

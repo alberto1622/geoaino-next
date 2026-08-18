@@ -45,7 +45,8 @@ interface ShapefileFieldInventory {
   proposedMapping: Record<string, string>;
 }
 
-const FORMATS = ["SHP", "GeoJSON", "DGN v7", "DXF", "KML", "CSV"];
+// const FORMATS = ["SHP", "GeoJSON", "DGN v7", "DXF", "KML", "CSV"];
+const FORMATS = ["SHP", "GeoJSON", "DXF"];
 
 const FEATURES = [
   {
@@ -667,8 +668,12 @@ export default function HomeClient({ user, stats }: Props) {
             {/* Workflow — pipeline DXF réel (lecture → mappage → polygonisation → jointure) */}
             <DxfPipelineSection />
 
+            <h3 className="text-primary text-4xl font-bold tracking-tight my-6 leading-tight">
+              Statistiques
+            </h3>
+
             {stats.totalAnalyses > 0 && (
-              <div className="flex items-center justify-center gap-6 mt-4 mb-10 text-sm">
+              <div className="flex items-center justify-center gap-6 mt-4 mb-10 text-lg">
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <Database className="w-4 h-4 text-primary" />
                   <span>

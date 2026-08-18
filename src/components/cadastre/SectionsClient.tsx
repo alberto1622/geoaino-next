@@ -2985,7 +2985,7 @@ function ActBtn({
           : "bg-secondary text-foreground hover:bg-secondary/70",
       ].join(" ")}
     >
-      {icon}
+      {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : icon}
       {children}
     </button>
   );

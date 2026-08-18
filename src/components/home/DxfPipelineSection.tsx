@@ -661,7 +661,7 @@ export default function DxfPipelineSection() {
                     className="absolute inset-0 h-full w-full"
                   />
                 </div>
-                <div className="mt-2.5 h-[2px] w-full rounded-full bg-border relative overflow-hidden">
+                <div className="mt-2.5 h-0.5 w-full rounded-full bg-border relative overflow-hidden">
                   <div
                     ref={(el) => {
                       fillElsRef.current[i] = el;

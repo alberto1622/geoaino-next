@@ -1,16 +1,19 @@
 /**
  * admin-boundaries.ts — limites administratives (régions, départements,
- * communes) pour l'affichage carte.
+ * communes, arrondissements) pour l'affichage carte.
  *
- * Seules les communes (`cad_communes_2026`) portent une géométrie ; les
- * départements et régions sont DISSOUS à la volée (`ST_Union` groupé par
- * attribut) puis simplifiés (`ST_SimplifyPreserveTopology`) — les contours
- * servent au repérage visuel, pas aux jointures (qui restent sur les communes
- * pleines). Résultat mis en cache en mémoire : le référentiel est statique.
+ * Les communes (`cad_communes_2026`) ET les arrondissements
+ * (`cad_arrondissements`, cf. scripts/load-arrondissements.ts) portent
+ * chacun leur propre géométrie ; départements et régions n'ont pas de
+ * référentiel dédié et sont DISSOUS à la volée (`ST_Union` groupé par
+ * attribut, à partir des communes) puis simplifiés
+ * (`ST_SimplifyPreserveTopology`) — les contours servent au repérage visuel,
+ * pas aux jointures (qui restent sur les communes pleines). Résultat mis en
+ * cache en mémoire : le référentiel est statique.
  */
 import { prisma } from "@/lib/prisma";
 
-export type AdminLevel = "regions" | "departements" | "communes";
+export type AdminLevel = "regions" | "departements" | "communes" | "arrondissements";
 
 export interface AdminBoundaries {
   boundaries: GeoJSON.FeatureCollection;
@@ -21,6 +24,7 @@ export interface AdminBoundaries {
 // les contours à l'échelle d'usage, assez grossières pour un payload léger.
 const SIMPLIFY_TOLERANCE: Record<AdminLevel, number> = {
   communes: 0.0003, // ~33 m
+  arrondissements: 0.0004, // ~44 m
   departements: 0.0006, // ~66 m
   regions: 0.001, // ~110 m
 };
@@ -47,6 +51,15 @@ export async function getAdminBoundaries(niveau: AdminLevel): Promise<AdminBound
       FROM "cad_communes_2026"
       WHERE geom IS NOT NULL
       ORDER BY "nomCommune"
+    `;
+  } else if (niveau === "arrondissements") {
+    rows = await prisma.$queryRaw<Row[]>`
+      SELECT "nomArrondissement" AS nom,
+             ST_AsGeoJSON(ST_SimplifyPreserveTopology(geom, ${tol}))::jsonb AS geom,
+             ST_AsGeoJSON(ST_PointOnSurface(geom))::jsonb AS pt
+      FROM "cad_arrondissements"
+      WHERE geom IS NOT NULL
+      ORDER BY "nomArrondissement"
     `;
   } else if (niveau === "departements") {
     rows = await prisma.$queryRaw<Row[]>`
