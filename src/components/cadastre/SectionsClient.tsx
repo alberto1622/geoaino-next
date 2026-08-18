@@ -156,8 +156,8 @@ const BLINK_LOW_OPACITY = 0.2;
 // ── Limites administratives (régions / départements / communes) ──────────────
 // Contours + noms servis par /api/cadastre/admin-boundaries (dérivés de
 // cad_communes_2026). `minLabelZoom` évite le nuage d'étiquettes en vue large.
-type AdminLevel = "regions" | "departements" | "communes";
-const ADMIN_LEVELS: AdminLevel[] = ["regions", "departements", "communes"];
+type AdminLevel = "regions" | "departements" | "arrondissements" | "communes";
+const ADMIN_LEVELS: AdminLevel[] = ["regions", "departements", "arrondissements", "communes"];
 const ADMIN_STYLES: Record<
   AdminLevel,
   {
@@ -183,6 +183,14 @@ const ADMIN_STYLES: Record<
     dashArray: "6 3",
     minLabelZoom: 7.5,
     fontSize: 12,
+  },
+  arrondissements: {
+    label: "Arrondissements",
+    color: "#7c3aed",
+    weight: 1.6,
+    dashArray: "5 3",
+    minLabelZoom: 8.5,
+    fontSize: 11,
   },
   communes: {
     label: "Communes",
@@ -330,6 +338,7 @@ export default function SectionsClient() {
   const [adminShow, setAdminShow] = useState<Record<AdminLevel, boolean>>({
     regions: false,
     departements: false,
+    arrondissements: false,
     communes: false,
   });
   const adminDataRef = useRef<Partial<Record<AdminLevel, AdminData>>>({});

@@ -3936,6 +3936,85 @@ NE remplit RIEN — `npx prisma generate` (régénère le client Prisma) puis
 `npx tsx scripts/load-arrondissements.ts` restent à exécuter manuellement
 après application de la migration.
 
+## 45. Arrondissements branchés sur les sélecteurs UI (`MapAnalysisClient.tsx`, `MapLibreMap.tsx`, `SectionsClient.tsx`)
+
+**Problème métier** : suite au §44, `admin-boundaries.ts` et la route API
+savaient déjà servir `niveau=arrondissements`, mais aucun écran ne
+proposait ce niveau à l'utilisateur — le référentiel existait en base sans
+être consultable ailleurs que par appel API direct.
+
+**Cause technique** : `AdminLevel`/`ADMIN_LEVELS`/`ADMIN_STYLES` sont
+DUPLIQUÉS localement dans trois fichiers (`MapAnalysisClient.tsx` — état
+`adminShow` + menu déroulant, `MapLibreMap.tsx` — rendu carte MapLibre,
+`SectionsClient.tsx` — rendu carte Leaflet sur `/cadastre/sections`), sans
+import partagé depuis `admin-boundaries.ts` — chacun doit être étendu
+séparément.
+
+**Solution** : ajout de `arrondissements` (couleur `#7c3aed`, distincte des
+trois autres niveaux) aux trois définitions locales de `ADMIN_STYLES`/
+`ADMIN_LEVELS`/`adminShow` initial. Les boucles de rendu (`adminLevels.map`
+dans `MapLibreMap.tsx`, `for (const level of ADMIN_LEVELS)` dans
+`SectionsClient.tsx`, le menu déroulant générique de `MapAnalysisClient.tsx`)
+étaient déjà entièrement génériques sur le tableau `ADMIN_LEVELS` — aucune
+autre modification requise, le niveau apparaît automatiquement partout où
+la liste est parcourue.
+
+**Pourquoi (pièges inclus)** : la vraie dette ici est la DUPLICATION du type
+`AdminLevel` et des styles à travers trois fichiers plutôt qu'un import
+partagé depuis `admin-boundaries.ts` (qui exporte déjà son propre
+`AdminLevel`) — un futur niveau administratif (ex. quartier) demandera à
+nouveau trois modifications synchronisées. Non refactorisé ici
+(changement plus large que la demande), mais à corriger si un niveau
+supplémentaire est ajouté un jour. `CadastreMap.tsx` (`/cadastre/carte`)
+n'a PAS ce sélecteur — cette page a son propre mécanisme de vue d'ensemble
+communes 2013/2026 (§42), sans rapport avec `admin-boundaries.ts`.
+
+## 46. « Traitement bloqué » sur un gros DXF : la tuilage de polygonisation ne loggait RIEN entre le dédoublonnage et le résultat final
+
+**Problème métier** : sur un très gros DXF départemental (826 192 entités
+émises, 398 862 lignes `limites parcelles` avant dédoublonnage), le
+traitement semblait « bloqué » après le log `[polygonize] N ligne(s)
+dupliquée(s) écartée(s) avant noding` — plus aucune sortie console pendant
+un temps indéterminé, indiscernable d'un vrai blocage.
+
+**Cause technique** : `polygonizeTiled` (`src/lib/polygonize.ts`), le chemin
+emprunté au-delà de `TILE_THRESHOLD` (20 000 lignes — ce fichier en a
+~290 000 après dédoublonnage), ne loggait STRICTEMENT RIEN entre le début
+du tuilage et soit un `console.warn` de région abandonnée, soit le retour
+final. Deux mécanismes rendent une grosse tuile réellement lente (pas
+buguée, juste longue) :
+1. une tuile dense qui atteint `TILE_MAX_SEGMENTS` (8 000) sans pouvoir
+   descendre sous `TILE_MIN_SIZE_M` (500 m, marge de collecte `TILE_MARGIN_M`
+   = 400 m — à cette échelle la marge avoisine la taille de tuile, donc la
+   subdivision réduit peu le nombre de segments collectés) lance quand même
+   `polygonizeChunk` sur un lot bien plus gros que prévu ;
+2. `robustNodedUnion` (l. 140) retente jusqu'à **5 fois** (`PRECISION_SCALES`
+   = 1000,100,20,10,5) un `UnaryUnionOp.union()` complet — coûteux en JSTS
+   (port JS pur, pas l'implémentation Java/C++) — avant d'abandonner et de
+   remonter l'erreur à `processRegion`, qui subdivise alors.
+   Une seule tuile « difficile » peut donc engager plusieurs dizaines de
+   secondes à plusieurs minutes de calcul synchrone, sans qu'aucun octet ne
+   sorte sur la console.
+
+**Solution** (purement diagnostique, AUCUN changement de comportement/sortie) :
+trois logs `console.info` ajoutés à `polygonizeTiled`/`processRegion` :
+taille de grille au démarrage, progression toutes les 10 tuiles initiales
+(nombre de polygones déjà reconstitués), et un log dédié avant/après tout
+noding portant sur plus de 1 500 segments (durée mesurée, y compris en cas
+d'échec avant subdivision).
+
+**Pourquoi (pièges inclus)** : NE PAS confondre « lent » et « bloqué » sur
+un fichier de cette taille (le plus gros traité à ce jour d'après les
+volumétries documentées — Thiès/Keur Massar/Pikine tournaient autour de
+80 000-113 000 parcelles, celui-ci a ~46 000 parcelles mais 290 000 segments
+de limites après dédoublonnage, un ratio segments/parcelle plus dense) — la
+première réaction ne doit pas être d'interrompre le job mais de RELANCER
+avec cette instrumentation pour voir où le temps part réellement. Si les
+logs de progression montrent un blocage sur UNE tuile précise sans jamais
+avancer (pas juste « lent »), ce serait le signe d'un vrai problème (boucle
+infinie dans JSTS sur une géométrie pathologique) plutôt que de la charge —
+distinction impossible à faire avant cet ajout.
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
