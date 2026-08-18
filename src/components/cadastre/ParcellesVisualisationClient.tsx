@@ -118,9 +118,12 @@ export default function ParcellesVisualisationClient({ files }: { files: FileIte
       try {
         const results = await Promise.all(
           missing.map(async (id) => {
+            // `?ro=1` : signale aux routes qu'il s'agit de la page de consultation
+            // (aucune édition possible ici) → elles renvoient un Cache-Control plus
+            // long, le navigateur peut resservir depuis son cache HTTP.
             const [geoRes, errRes] = await Promise.all([
-              fetch(`/api/analyses/${id}/geojson`),
-              fetch(`/api/analyses/${id}/errors`),
+              fetch(`/api/analyses/${id}/geojson?ro=1`),
+              fetch(`/api/analyses/${id}/errors?ro=1`),
             ]);
             const geojson = geoRes.ok ? await geoRes.json() : { type: "FeatureCollection", features: [] };
             const errors = errRes.ok ? await errRes.json() : [];

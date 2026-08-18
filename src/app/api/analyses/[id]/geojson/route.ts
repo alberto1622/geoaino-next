@@ -44,10 +44,16 @@ export async function GET(req: NextRequest, { params }: { params: Params }) {
   const raw = (await loadGeoJsonFromKey(analysis.geojsonKey)) ?? analysis.geoJsonData;
   if (!raw) return jsonError("Données GeoJSON introuvables", 404);
 
+  // Lecture seule (page "Visualisation des parcelles", `?ro=1`) : cette page ne
+  // permet aucune édition, donc un cache HTTP plus long est sûr — au pire les
+  // corrections faites ailleurs (map/[analysisId]) mettent quelques minutes à
+  // apparaître ici. Les pages éditrices gardent le cache court d'origine.
+  const readOnly = req.nextUrl.searchParams.get("ro") === "1";
   const headers: Record<string, string> = {
     "Content-Type": "application/geo+json; charset=utf-8",
-    // Données éditables (corrections, suppression d'entités) → cache court côté client.
-    "Cache-Control": "private, max-age=30",
+    "Cache-Control": readOnly
+      ? "private, max-age=300, stale-while-revalidate=3600"
+      : "private, max-age=30",
     Vary: "Accept-Encoding",
   };
 

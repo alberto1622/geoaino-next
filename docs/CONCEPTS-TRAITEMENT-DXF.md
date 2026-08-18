@@ -3643,6 +3643,40 @@ correction (`/api/analyses/[id]/errors/[errorId]/correct`) ; la nouvelle
 page se contente d'un filtre d'affichage par type (masquer/afficher), qui ne
 modifie jamais `corrected` en base.
 
+## 39. Cache HTTP long réservé aux pages en lecture seule (`?ro=1`) : la fraîcheur n'a de coût que là où on édite
+
+**Problème métier** : `/cadastre/parcelles` peut charger plusieurs gros
+GeoJSON d'un coup (plusieurs `Analysis` sélectionnées) et re-fetch à chaque
+changement de sélection ; les routes `GET /api/analyses/[id]/geojson` et
+`GET /api/analyses/[id]/errors` qu'elle appelle sont PARTAGÉES avec
+`/map/[analysisId]` (page d'édition), qui a besoin de données fraîches après
+chaque correction/suppression/mise à jour NICAD.
+
+**Cause technique** : `geojson/route.ts` posait déjà `Cache-Control:
+private, max-age=30` — volontairement court pour ne jamais montrer une
+version périmée pendant une session de correction active. Appliquer le même
+cache court à `/cadastre/parcelles` gaspille son principal bénéfice (éviter
+de retélécharger un fichier déjà vu en changeant simplement la sélection
+courante) ; l'inverse — allonger le cache pour tout le monde — risquerait de
+masquer une correction qu'on vient de faire sur `/map/[analysisId]`.
+
+**Solution** (`geojson/route.ts`, `errors/route.ts`) : un paramètre de
+requête `?ro=1`, posé uniquement par `ParcellesVisualisationClient.tsx`
+(page sans aucune action d'édition), fait basculer le `Cache-Control` sur
+`private, max-age=300, stale-while-revalidate=3600` ; sans ce paramètre
+(pages éditrices), le comportement d'origine (`max-age=30`, ou
+`max-age=0, must-revalidate` pour les erreurs) est inchangé. Le cache reste
+`private` (pas de CDN/proxy partagé) : chaque utilisateur a sa propre copie
+navigateur, cohérent avec `requireSession()`.
+
+**Pourquoi (pièges inclus)** : la fraîcheur des données a un coût réel
+seulement là où l'utilisateur peut modifier l'état sous-jacent — une page de
+consultation pure peut se permettre plusieurs minutes de latence de
+propagation sans risque fonctionnel. Piège à éviter : ne pas allonger le
+cache par défaut sur la route partagée elle-même (sans le flag), ce qui
+casserait silencieusement le rafraîchissement après correction sur
+`/map/[analysisId]` — le flag doit rester opt-in, jamais le défaut.
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
