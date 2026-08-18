@@ -88,6 +88,19 @@ const TILE_MARGIN_M = Number(process.env.DXF_POLYGONIZE_TILE_MARGIN_M || 400);
 const TILE_MAX_SEGMENTS = Number(process.env.DXF_POLYGONIZE_TILE_MAX_SEGMENTS || 8000);
 const TILE_MAX_DEPTH = Number(process.env.DXF_POLYGONIZE_TILE_MAX_DEPTH || 8);
 const TILE_MIN_SIZE_M = Number(process.env.DXF_POLYGONIZE_TILE_MIN_SIZE_M || 500);
+// Garde-fou pour les tuiles arrivées à la taille plancher (`TILE_MIN_SIZE_M`,
+// donc impossibles à subdiviser davantage) mais encore très au-dessus de
+// `TILE_MAX_SEGMENTS` : une vraie densité cadastrale ne dépasse jamais ce
+// seuil sur une aire aussi petite (des dizaines de milliers de segments sur
+// quelques milliers de m² impliqueraient des parcelles d'une fraction de m²)
+// — c'est le signe d'un artefact de tracé (quasi-doublons non exacts, hatch
+// mal classé sur le calque limites) plutôt que de vraies parcelles. Observé
+// en pratique : des tuiles à 30-70k segments prenaient 150 à 2400 s CHACUNE
+// (JSTS `UnaryUnionOp` sur géométrie quasi-dégénérée) sans jamais échouer —
+// donc jamais comptabilisées comme perdues, juste interminables. Abandonner
+// SANS tenter le noding au-delà de ce seuil transforme un blocage de plusieurs
+// heures en une zone perdue mais comptée (même mécanique que `droppedRegions`).
+const TILE_HARD_DROP_SEGMENTS = Number(process.env.DXF_POLYGONIZE_TILE_HARD_DROP_SEGMENTS || 20000);
 // Tolérance de raccord des extrémités pendantes (cf. `healUndershoots`). Une
 // vraie limite de parcelle s'arrête rarement à > 25 cm de sa voisine, et deux
 // sommets cadastraux distincts sont à plusieurs mètres l'un de l'autre : 25 cm
@@ -550,6 +563,22 @@ function polygonizeTiled(
     // tenter le noding (coûteux et voué à l'échec au-delà de ~10⁴ segments).
     if (idxs.length > TILE_MAX_SEGMENTS && canSplit) {
       subdivide(idxs, rx0, ry0, rx1, ry1, depth);
+      return;
+    }
+
+    // Taille plancher atteinte (`!canSplit`) mais encore largement au-dessus de
+    // `TILE_MAX_SEGMENTS` : pas une vraie densité cadastrale (cf. commentaire
+    // `TILE_HARD_DROP_SEGMENTS`) — abandon SANS tenter le noding, plutôt que de
+    // risquer plusieurs dizaines de minutes pour un résultat déjà suspect.
+    if (idxs.length > TILE_HARD_DROP_SEGMENTS && !canSplit) {
+      droppedTiles++;
+      droppedSegments += idxs.length;
+      stats?.droppedRegions.push({ x0: rx0, y0: ry0, x1: rx1, y1: ry1, segments: idxs.length });
+      console.warn(
+        `[polygonize] région ${rx0.toFixed(0)},${ry0.toFixed(0)}–${rx1.toFixed(0)},${ry1.toFixed(0)} ` +
+          `abandonnée SANS tentative de noding (${idxs.length} segments ≥ ${TILE_HARD_DROP_SEGMENTS}, ` +
+          `taille plancher atteinte) — densité anormale pour une aire aussi petite, probable artefact de tracé.`
+      );
       return;
     }
 
