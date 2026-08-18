@@ -3761,6 +3761,38 @@ rechargé) — la vérification `boundary_cross` y est donc silencieusement
 absente, comportement inchangé et volontairement non touché ici (cette route
 ne fait que régénérer le rapport IA/score, pas ré-insérer les erreurs).
 
+## 42. Noms de commune permanents sur `/cadastre/carte` — pas seulement au survol
+
+**Problème métier** : la vue d'ensemble de `/cadastre/carte` (§ précédents)
+affiche déjà TOUTES les communes du millésime sélectionné en permanence,
+mais leur nom n'apparaissait qu'au survol (`bindTooltip`, sticky) — invisible
+tant que la souris ne passe pas dessus, donc illisible en un coup d'œil sur
+une vue d'ensemble du pays.
+
+**Cause technique** : un `layer.bindTooltip(...)` par commune ne peut porter
+qu'UN SEUL tooltip (celui, déjà existant, affichant type de changement +
+département + Syscol au survol) — impossible d'y superposer un second
+libellé permanent sur la même couche.
+
+**Solution** (`CadastreMap.tsx`) : un marqueur `L.divIcon` séparé par
+commune, positionné sur `gj.getBounds().getCenter()`, ajouté à un groupe
+dédié (`labelGroupRef`) — même pattern que les labels de numéro de section
+déjà en place (`SectionsClient.tsx`, `showSectionLabels`). Le nom
+(`escHtml`, la valeur vient du référentiel `cad_communes_2013/2026`, pas
+d'un fichier importé, mais échappé par précaution) s'affiche seulement à
+partir de `LABEL_MIN_ZOOM = 10` : à l'échelle du pays (zoom initial ~7),
+1647 communes 2013 superposeraient un fouillis de texte illisible — un
+listener `zoomend` affiche/masque le groupe de labels sans reconstruire les
+polygones.
+
+**Pourquoi (pièges inclus)** : ne jamais empiler un second `bindTooltip` sur
+une couche qui en a déjà un — Leaflet écrase silencieusement le premier,
+sans erreur visible, d'où le passage par un marqueur `divIcon` séparé et
+non interactif (`interactive: false`) pour ne pas intercepter les clics
+destinés au polygone en dessous (sélection de la commune).
+
+---
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
