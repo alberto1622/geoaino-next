@@ -506,10 +506,20 @@ function polygonizeTiled(
   const tilesPerAxis = Math.max(1, Math.ceil(Math.sqrt(nTiles)));
   const tileW = width / tilesPerAxis;
   const tileH = height / tilesPerAxis;
+  console.info(
+    `[polygonize] tuilage : ${lines.length} segments, grille ${tilesPerAxis}×${tilesPerAxis} ` +
+      `(${tileW.toFixed(0)}×${tileH.toFixed(0)} m/tuile), marge ${marginM} m.`
+  );
 
   const result: GeoJSON.Polygon[] = [];
   let droppedTiles = 0;
   let droppedSegments = 0;
+  // Compteurs de progression — sans eux, une tuile dense en cours de noding
+  // (JSTS peut prendre plusieurs minutes sur un bloc >10⁴ segments, cf.
+  // TILE_MAX_SEGMENTS) est indiscernable d'un blocage : aucun log n'apparaît
+  // entre le dédoublonnage et le résultat final sur un gros fichier.
+  let processedCells = 0;
+  const totalCells = tilesPerAxis * tilesPerAxis;
 
   /**
    * Polygonise une région rectangulaire [rx0,ry0]–[rx1,ry1]. `idxs` = indices des
@@ -546,14 +556,32 @@ function polygonizeTiled(
     const coords = idxs.map((i) => lines[i]);
     const owns = (cx: number, cy: number) =>
       cx >= rx0 && cx < rx1 && cy >= ry0 && cy < ry1;
+    // Seuil purement diagnostique (pas de comportement changé) : un bloc de
+    // cette taille peut prendre plusieurs dizaines de secondes en JSTS pur JS,
+    // et `robustNodedUnion` peut retenter jusqu'à 5 fois (PRECISION_SCALES)
+    // avant d'échouer — sans ce log, cette attente est indiscernable d'un blocage.
+    const isSlow = coords.length > 1500;
+    const startedAt = isSlow ? Date.now() : 0;
+    if (isSlow) {
+      console.info(
+        `[polygonize] noding tuile dense : ${coords.length} segments, profondeur ${depth}, ` +
+          `région ${rx0.toFixed(0)},${ry0.toFixed(0)}–${rx1.toFixed(0)},${ry1.toFixed(0)} — en cours…`
+      );
+    }
     try {
       for (const poly of polygonizeChunk(coords, minArea, maxArea, owns, snapTol, stats)) {
         result.push(poly);
+      }
+      if (isSlow) {
+        console.info(`[polygonize]   ↳ terminé en ${((Date.now() - startedAt) / 1000).toFixed(1)} s.`);
       }
     } catch (err) {
       // Noding impossible même après snap-rounding : on subdivise plutôt que de
       // perdre toute la région (comportement d'origine). En dernier recours
       // (région minimale atteinte), on l'abandonne en la comptabilisant.
+      if (isSlow) {
+        console.info(`[polygonize]   ↳ échec après ${((Date.now() - startedAt) / 1000).toFixed(1)} s (${canSplit ? "subdivision" : "abandon"}).`);
+      }
       if (canSplit) {
         subdivide(idxs, rx0, ry0, rx1, ry1, depth);
       } else {
@@ -614,6 +642,12 @@ function polygonizeTiled(
         }
       });
       processRegion(idxs, cx0, cy0, cx1, cy1, 0);
+      processedCells++;
+      if (processedCells % 10 === 0 || processedCells === totalCells) {
+        console.info(
+          `[polygonize] progression : ${processedCells}/${totalCells} tuiles initiales, ${result.length} polygone(s) reconstitué(s) jusqu'ici.`
+        );
+      }
     }
   }
 
