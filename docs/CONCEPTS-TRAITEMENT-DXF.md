@@ -3820,6 +3820,57 @@ fermeture de la boîte de confirmation (le seul moment où une attente réelle
 est perceptible) — la boîte elle-même n'a pas d'état de chargement propre,
 volontairement non touché ici (changement plus large, hors demande).
 
+## 44. Ajout des arrondissements aux limites administratives : géométrie propre, pas dissoute des communes
+
+**Problème métier** : `admin-boundaries.ts` ne connaissait que trois niveaux
+(régions, départements, communes) — les arrondissements (niveau
+administratif entre département et commune au Sénégal) étaient absents,
+alors qu'un référentiel officiel dédié existe (`Arrondissements.shp`,
+DGID/DTGC 2025, 127 features).
+
+**Cause technique** : `CadCommune2026` porte déjà un champ texte
+`arrondissement` par commune (posé à l'import, §« load-communes-2026 »), ce
+qui aurait permis de DISSOUDRE les arrondissements par `ST_Union` groupé —
+exactement comme départements/régions le sont déjà. Mais cette dissolution
+n'aurait été fiable que si `arrondissement` est renseigné de façon homogène
+sur TOUTES les communes (jamais vérifié), et le résultat n'aurait été qu'une
+approximation (union de polygones communaux) plutôt que le contour officiel
+réel — un écart potentiellement trompeur pour un usage cadastral.
+
+**Solution** :
+- Nouveau modèle `CadArrondissement` (`cad_arrondissements`, migration
+  `20260818143410_add_cad_arrondissements`) avec géométrie PROPRE
+  (`geom geometry(MultiPolygon, 4326)`), même schéma de colonnes que
+  `CadCommune2026` (nom, région, département, `cav`) + codes région/
+  département/CAV (`COD_REG`/`COD_DEPT`/`COD_CAV` du .dbf source, absents de
+  `CadCommune2026` mais conservés ici pour un futur rattachement).
+- `scripts/load-arrondissements.ts` lit le shapefile DIRECTEMENT (`shapefile`
+  npm, déjà une dépendance du projet — pas de conversion GeoJSON
+  intermédiaire par script Python, contrairement à `load-communes-2026.ts`)
+  et reprojette chaque géométrie via `convertGeometryToWgs84`
+  (`import-data.ts`) — le `.prj` du shapefile confirme une source en
+  `WGS_1984_UTM_Zone_28N`, la même heuristique planaire (coordonnées
+  |x| > 180 ou |y| > 90 ⇒ UTM) que `sections-from-shapefile.ts` s'applique
+  donc sans modification.
+- `admin-boundaries.ts` gagne un niveau `"arrondissements"` lisant
+  DIRECTEMENT `cad_arrondissements.geom` (comme `communes`, pas de
+  `ST_Union`) ; `GET /api/cadastre/admin-boundaries` accepte désormais
+  `?niveau=arrondissements`.
+
+**Pourquoi (pièges inclus)** : préférer une géométrie SOURCE dédiée à une
+dissolution dérivée dès qu'un référentiel officiel existe — la dissolution
+reste réservée aux niveaux qui n'ONT PAS de géométrie propre en base
+(départements/régions, faute d'alternative). Piège à éviter : ce
+changement ajoute le niveau à la couche de données partagée
+(`admin-boundaries.ts` + route API) mais NE branche PAS encore les
+sélecteurs UI existants (`ADMIN_LEVELS`/`ADMIN_STYLES`, dupliqués localement
+dans `MapAnalysisClient.tsx` et `MapLibreMap.tsx`) — c'est un choix de scope
+délibéré (script demandé, pas une refonte de tous les écrans carte), à
+faire séparément si besoin. Autre piège : la migration crée la table mais
+NE remplit RIEN — `npx prisma generate` (régénère le client Prisma) puis
+`npx tsx scripts/load-arrondissements.ts` restent à exécuter manuellement
+après application de la migration.
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait

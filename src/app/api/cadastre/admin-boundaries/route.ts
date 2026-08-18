@@ -4,13 +4,14 @@ import { getAdminBoundaries, type AdminLevel } from "@/lib/cadastre/admin-bounda
 
 export const runtime = "nodejs";
 
-const LEVELS = new Set<AdminLevel>(["regions", "departements", "communes"]);
+const LEVELS = new Set<AdminLevel>(["regions", "departements", "communes", "arrondissements"]);
 
 /**
- * GET /api/cadastre/admin-boundaries?niveau=regions|departements|communes —
- * contours administratifs (simplifiés) + points d'étiquette (noms), dérivés de
- * `cad_communes_2026` (dissolution pour départements/régions). Cache serveur
- * en mémoire + cache HTTP (référentiel statique).
+ * GET /api/cadastre/admin-boundaries?niveau=regions|departements|communes|arrondissements —
+ * contours administratifs (simplifiés) + points d'étiquette (noms). Communes
+ * et arrondissements ont leur propre géométrie ; départements/régions sont
+ * dissous à la volée depuis `cad_communes_2026`. Cache serveur en mémoire +
+ * cache HTTP (référentiel statique).
  */
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const session = await auth();
@@ -21,7 +22,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const niveau = req.nextUrl.searchParams.get("niveau") as AdminLevel | null;
   if (!niveau || !LEVELS.has(niveau)) {
     return NextResponse.json(
-      { error: "Paramètre niveau requis : regions | departements | communes" },
+      { error: "Paramètre niveau requis : regions | departements | communes | arrondissements" },
       { status: 400 },
     );
   }

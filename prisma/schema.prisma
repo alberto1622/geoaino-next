@@ -347,6 +347,27 @@ model CadCommune2026 {
   @@map("cad_communes_2026")
 }
 
+// Arrondissements — référentiel limites administratives 2025 (DGID/DTGC),
+// géométrie propre (contrairement à `departement`/`region` sur les communes,
+// qui restent dissoutes à la volée — cf. admin-boundaries.ts). Chargé depuis
+// un shapefile dédié (Arrondissements.shp), pas dérivé de `cad_communes_2026`.
+model CadArrondissement {
+  id                Int      @id @default(autoincrement())
+  nomArrondissement String
+  region            String?
+  codeRegion        String?
+  departement       String?
+  codeDepartement   String?
+  cav               String?
+  codeCav           String?
+  geojson           String?  @db.Text
+  geom              Unsupported("geometry(MultiPolygon, 4326)")?
+  createdAt         DateTime @default(now())
+
+  @@index([departement])
+  @@map("cad_arrondissements")
+}
+
 // Sections cadastrales (une section ∈ une commune)
 model CadSection {
   id            Int      @id @default(autoincrement())
