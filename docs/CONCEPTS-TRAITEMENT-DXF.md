@@ -3950,6 +3950,46 @@ avancer (pas juste « lent »), ce serait le signe d'un vrai problème (boucle
 infinie dans JSTS sur une géométrie pathologique) plutôt que de la charge —
 distinction impossible à faire avant cet ajout.
 
+## 47. Zone à densité aberrante (30-70k segments/tuile plancher) : abandonner sans tenter le noding plutôt que plusieurs dizaines de minutes par tuile
+
+**Problème métier** : suite au §46, le fichier départemental du §46
+comportait une zone de ~350×350 m dont TOUTES les tuiles plancher (88 m,
+après abaissement de `TILE_MIN_SIZE_M` à 100 via variable d'environnement)
+contenaient 30 000 à 70 000 segments. Chaque tuile a fini par se terminer
+SANS erreur (pas de `droppedRegions`, donc rien de comptabilisé comme
+perdu), mais en **150 à 2 364 secondes** (jusqu'à 39 minutes) — sur plus
+d'une heure d'exécution, cette seule zone n'était toujours pas passée.
+
+**Cause technique** : 30 000-70 000 segments sur une aire de ~7 700 m²
+impliquerait des parcelles d'une fraction de m² — géométriquement
+impossible pour du cadastre réel. C'est le signe d'un artefact de tracé
+(quasi-doublons à décalage flottant que `canonicalLineKey` — comparaison de
+chaîne EXACTE — ne détecte pas, ou un calque hachuré/rempli mal classé sur
+« limites parcelles »). Une fois la taille plancher atteinte
+(`!canSplit`), le code n'avait AUCUN garde-fou sur le nombre de segments :
+il tentait `polygonizeChunk` quel que soit le volume, et `robustNodedUnion`
+(union JSTS sur géométrie quasi-dégénérée, coûteuse en JS pur) finissait par
+réussir — donc jamais détecté comme un échec, juste interminable.
+
+**Solution** (`polygonize.ts`) : nouveau seuil `TILE_HARD_DROP_SEGMENTS`
+(20 000 par défaut, `DXF_POLYGONIZE_TILE_HARD_DROP_SEGMENTS`) — à la taille
+plancher, si le nombre de segments dépasse ce seuil, la région est
+abandonnée AVANT toute tentative de noding, avec le même mécanisme de
+comptage que les régions déjà irrécupérables (`droppedRegions`,
+`droppedTiles`/`droppedSegments`, `console.warn` explicite). Aucun
+changement pour les tuiles sous ce seuil, qui continuent de tenter le
+noding normalement.
+
+**Pourquoi (pièges inclus)** : préférer une perte COMPTABILISÉE et rapide à
+une réussite technique qui coûte des heures pour une zone dont la densité
+même trahit un problème de données en amont — cohérent avec le principe
+déjà établi ailleurs dans le pipeline (« Aucune perte silencieuse : chaque
+motif est comptabilisé », `dxf-native.ts`). Piège à éviter : ce seuil ne
+remplace PAS une investigation de la zone source (probable defaut de
+tracé/calque à corriger dans le DXF lui-même) — c'est un filet de sécurité
+pour que le RESTE du fichier se termine en temps raisonnable, pas une
+correction du problème de données sous-jacent.
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
