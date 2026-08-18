@@ -3791,7 +3791,34 @@ sans erreur visible, d'où le passage par un marqueur `divIcon` séparé et
 non interactif (`interactive: false`) pour ne pas intercepter les clics
 destinés au polygone en dessous (sélection de la commune).
 
----
+## 43. Correction d'un débordement administratif (« Découper à la commune ») : aucun retour visuel pendant la requête
+
+**Problème métier** : sur `/cadastre/sections`, panneau « Limites
+administratives » (§34, §41), les boutons « Découper à la commune » et
+« Ignorer » sur chaque débordement passaient déjà par un état `busy`
+(`correctingMismatch`, `performMismatchCorrection`), mais celui-ci se
+contentait de désactiver le bouton (`disabled`, opacité 40 %) — aucun
+spinner, l'icône restait figée. Le découpage passe par une confirmation
+(`ConfirmDialog`) qui se ferme immédiatement au clic sans attendre la fin de
+la requête (`onConfirm` appelle `run()` puis `setConfirmState(null)` sans
+`await`) : l'utilisateur revient sur le panneau et ne voit RIEN indiquer
+qu'une correction est en cours tant que `fetchData` n'a pas fini de
+recharger (ST_Intersection/ST_Area sur une géométrie de section, non
+instantané sur les gros lots).
+
+**Solution** (`ActBtn`, `SectionsClient.tsx`) : l'icône passe à un `Loader2`
+animé (`animate-spin`) quand `busy` est vrai — même pattern déjà utilisé
+partout ailleurs dans ce fichier (validation de numéro de section, export,
+etc.), simplement jamais appliqué à ce composant partagé par les deux
+boutons du panneau de débordement.
+
+**Pourquoi (pièges inclus)** : `ActBtn` est un composant PARTAGÉ (mêmes deux
+boutons « clip »/« ignore ») — corriger l'icône au niveau du composant
+couvre les deux actions d'un coup, pas seulement celle demandée
+explicitement. Piège à éviter : le spinner ne couvre que le retour APRÈS
+fermeture de la boîte de confirmation (le seul moment où une attente réelle
+est perceptible) — la boîte elle-même n'a pas d'état de chargement propre,
+volontairement non touché ici (changement plus large, hors demande).
 
 ---
 
