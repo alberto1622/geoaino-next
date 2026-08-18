@@ -46,11 +46,12 @@ import { useAnalysisUpdateListener } from "@/lib/analyses/live-refresh";
 
 // ── Limites administratives (régions / départements / communes) ──────────────
 // Mêmes contours nationaux (cad_communes_2026) que la page /cadastre/sections.
-type AdminLevel = "regions" | "departements" | "communes";
-const ADMIN_LEVELS: AdminLevel[] = ["regions", "departements", "communes"];
+type AdminLevel = "regions" | "departements" | "arrondissements" | "communes";
+const ADMIN_LEVELS: AdminLevel[] = ["regions", "departements", "arrondissements", "communes"];
 const ADMIN_STYLES: Record<AdminLevel, { label: string; color: string }> = {
   regions: { label: "Régions", color: "#b91c1c" },
   departements: { label: "Départements", color: "#b45309" },
+  arrondissements: { label: "Arrondissements", color: "#7c3aed" },
   communes: { label: "Communes", color: "#0f766e" },
 };
 
@@ -544,6 +545,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   const [adminShow, setAdminShow] = useState<Record<AdminLevel, boolean>>({
     regions: false,
     departements: false,
+    arrondissements: false,
     communes: false,
   });
   // Masque/affiche le panneau latéral gauche pour libérer de l'espace carte.
