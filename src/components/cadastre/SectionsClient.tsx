@@ -4,6 +4,7 @@ import "leaflet/dist/leaflet.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CadHistoryPanel } from "@/components/cadastre/CadHistoryPanel";
+import { JobProgressSteps, type JobProgressStep } from "@/components/import/JobProgressSteps";
 import { toast } from "sonner";
 import { notifyAnalysesUpdated } from "@/lib/analyses/live-refresh";
 import {
@@ -90,6 +91,13 @@ type JobState = {
   progress: number;
   error?: string | null;
 };
+
+/** Pipeline job kind "sections" (`run-job.ts` DXF ou `run-shapefile-job.ts` SHP — mêmes 3 phases). */
+const SECTIONS_JOB_STEPS: JobProgressStep[] = [
+  { key: "read", label: "Lecture du fichier" },
+  { key: "build", label: "Extraction des géométries" },
+  { key: "sections", label: "Construction des sections" },
+];
 
 interface Batch {
   sourceFichier: string;
@@ -2087,20 +2095,19 @@ export default function SectionsClient() {
         </div>
         {/* Progression du job d'import */}
         {job && (job.status === "pending" || job.status === "running") && (
-          <div className="rounded-xl border border-border/60 p-3 space-y-1.5">
-            <div className="mb-1 flex justify-between text-[11px] text-muted-foreground">
-              <span>Phase : {job.phase ?? "…"}</span>
-              <span>{job.progress}%</span>
+          <div className="rounded-xl border border-border/60 p-3 space-y-2">
+            <JobProgressSteps
+              steps={SECTIONS_JOB_STEPS}
+              phase={job.phase}
+              status={job.status as "pending" | "running" | "completed" | "failed" | "cancelled"}
+              progress={job.progress}
+              compact
+            />
+            <div className="text-center">
+              <Button variant="ghost" size="sm" onClick={handleCancelJob}>
+                Annuler
+              </Button>
             </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
-              <div
-                className="h-full bg-primary transition-all"
-                style={{ width: `${job.progress}%` }}
-              />
-            </div>
-            <Button variant="ghost" size="sm" onClick={handleCancelJob}>
-              Annuler
-            </Button>
           </div>
         )}
 

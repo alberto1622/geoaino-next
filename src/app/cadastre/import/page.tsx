@@ -7,6 +7,7 @@ import { Upload, FileUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import FieldMappingModal from "@/components/FieldMappingModal";
+import { JobProgressSteps, type JobProgressStep } from "@/components/import/JobProgressSteps";
 import { uploadShapefile } from "../_actions/import-export";
 import type { TargetFieldDef, ShapefileTarget } from "@/lib/import/field-mapping";
 
@@ -48,18 +49,11 @@ interface JobState {
   error?: string | null;
 }
 
-function phaseLabel(phase: string | null): string {
-  switch (phase) {
-    case "read":
-      return "Lecture du fichier…";
-    case "import":
-      return "Import des entités…";
-    case "done":
-      return "Terminé";
-    default:
-      return "Démarrage…";
-  }
-}
+/** Pipeline shapefile cad-parcelles/cad-sections (`run-shapefile-job.ts`) : lecture puis import batché. */
+const CAD_IMPORT_STEPS: JobProgressStep[] = [
+  { key: "read", label: "Lecture du fichier" },
+  { key: "import", label: "Import des entités" },
+];
 
 const selectCls =
   "h-9 w-full rounded-lg border border-border bg-transparent px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -262,18 +256,19 @@ export default function ImportPage() {
 
       {job && (
         <Card>
-          <CardContent className="space-y-2 p-5 text-sm">
-            <div className="flex items-center justify-between">
-              <span>{phaseLabel(job.phase)}</span>
-              <span>{job.progress}%</span>
-            </div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
-              <div className="h-full bg-primary transition-all" style={{ width: `${job.progress}%` }} />
-            </div>
+          <CardContent className="space-y-3 p-5 text-sm">
+            <JobProgressSteps
+              steps={CAD_IMPORT_STEPS}
+              phase={job.phase}
+              status={job.status as "pending" | "running" | "completed" | "failed" | "cancelled"}
+              progress={job.progress}
+            />
             {jobRunning && (
-              <Button variant="ghost" size="sm" onClick={handleCancel}>
-                Annuler
-              </Button>
+              <div className="text-center">
+                <Button variant="ghost" size="sm" onClick={handleCancel}>
+                  Annuler
+                </Button>
+              </div>
             )}
           </CardContent>
         </Card>

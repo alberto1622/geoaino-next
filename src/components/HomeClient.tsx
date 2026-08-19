@@ -13,6 +13,7 @@ import { NavBar } from "@/components/NavBar";
 import DxfPipelineSection from "@/components/home/DxfPipelineSection";
 import LayerMappingModal, { type LayerInventoryEntry } from "@/components/LayerMappingModal";
 import FieldMappingModal from "@/components/FieldMappingModal";
+import { JobProgressSteps, type JobProgressStep } from "@/components/import/JobProgressSteps";
 import type { TargetFieldDef } from "@/lib/import/field-mapping";
 import { toNum } from "@/lib/utils";
 
@@ -69,17 +70,19 @@ interface AnalysisResult {
   conformityScore: number;
 }
 
-/** Libellé lisible de la phase courante d'un job de traitement Microstation. */
-function caoPhaseLabel(phase: string | null): string {
-  switch (phase) {
-    case "read": return "Lecture du fichier…";
-    case "build": return "Reconstruction des parcelles (polygonisation)…";
-    case "nicad": return "Résolution des NICAD (jointure communes)…";
-    case "persist": return "Enregistrement en base…";
-    case "done": return "Terminé";
-    default: return "Démarrage…";
-  }
-}
+/** Pipeline job kind "parcelles" DXF/DGN (`run-job.ts`) : 4 phases jusqu'à l'analyse. */
+const DXF_PIPELINE_STEPS: JobProgressStep[] = [
+  { key: "read", label: "Lecture du fichier" },
+  { key: "build", label: "Construction des parcelles" },
+  { key: "nicad", label: "Résolution des NICAD" },
+  { key: "analyze", label: "Analyse topologique" },
+];
+
+/** Pipeline job kind "parcelles" shapefile (`run-shapefile-job.ts`) : pas d'étape NICAD/build distincte. */
+const SHP_PARCELLES_STEPS: JobProgressStep[] = [
+  { key: "read", label: "Lecture du fichier" },
+  { key: "analyze", label: "Analyse topologique" },
+];
 
 export default function HomeClient({ user, stats }: Props) {
   const router = useRouter();
@@ -91,6 +94,7 @@ export default function HomeClient({ user, stats }: Props) {
   const [mode, setMode] = useState<UploadMode>("analyze");
   const [jobPhase, setJobPhase] = useState<string | null>(null);
   const [jobProgress, setJobProgress] = useState(0);
+  const [jobSteps, setJobSteps] = useState<JobProgressStep[]>(DXF_PIPELINE_STEPS);
   // Inventaire des calques en attente de validation (variante « simple »).
   const [pendingInventory, setPendingInventory] = useState<LayerInventory | null>(null);
   // Inventaire des champs .dbf en attente de validation (shapefile page d'accueil).
@@ -105,6 +109,7 @@ export default function HomeClient({ user, stats }: Props) {
     setMode("analyze");
     setJobPhase(null);
     setJobProgress(0);
+    setJobSteps(DXF_PIPELINE_STEPS);
     setPendingInventory(null);
     setPendingFieldInventory(null);
     setCurrentJobId(null);
@@ -210,6 +215,7 @@ export default function HomeClient({ user, stats }: Props) {
       setUploadStep("reading");
       setJobPhase("read");
       setJobProgress(0);
+      setJobSteps(DXF_PIPELINE_STEPS);
       setAnalysisResult(null);
 
       try {
@@ -251,6 +257,7 @@ export default function HomeClient({ user, stats }: Props) {
       setUploadStep("reading");
       setJobPhase("read");
       setJobProgress(0);
+      setJobSteps(SHP_PARCELLES_STEPS);
       setAnalysisResult(null);
 
       try {
@@ -283,13 +290,14 @@ export default function HomeClient({ user, stats }: Props) {
    * Import direct (voie historique multipart, sans mappage) — repli si
    * l'inventaire des calques échoue.
    */
-  const runCaoImport = useCallback(async (fileList: File[], mainFile: File) => {
+  const runCaoImport = useCallback(async (fileList: File[], mainFile: File, steps: JobProgressStep[] = DXF_PIPELINE_STEPS) => {
     setMode("import");
     setIsUploading(true);
     setUploadFileName(mainFile.name);
     setUploadStep("reading");
     setJobPhase("read");
     setJobProgress(0);
+    setJobSteps(steps);
     setAnalysisResult(null);
 
     try {
@@ -338,7 +346,7 @@ export default function HomeClient({ user, stats }: Props) {
       setPendingFieldInventory(inv);
     } catch {
       // Repli robuste : import direct via la voie multipart historique.
-      await runCaoImport(fileList, shpFile);
+      await runCaoImport(fileList, shpFile, SHP_PARCELLES_STEPS);
     }
   }, [runCaoImport]);
 
@@ -650,17 +658,13 @@ export default function HomeClient({ user, stats }: Props) {
                         </div>
                       )}
                       {mode === "import" ? (
-                        <div className="w-full max-w-xs space-y-2">
-                          <div className="text-sm text-primary font-medium text-center">
-                            {caoPhaseLabel(jobPhase)}
-                          </div>
-                          <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
-                            <div
-                              className="h-full rounded-full bg-primary transition-all duration-500"
-                              style={{ width: `${jobProgress}%` }}
-                            />
-                          </div>
-                          <div className="text-center text-xs text-muted-foreground">{jobProgress}%</div>
+                        <div className="w-full max-w-sm space-y-3">
+                          <JobProgressSteps
+                            steps={jobSteps}
+                            phase={jobPhase}
+                            status="running"
+                            progress={jobProgress}
+                          />
                           <div className="text-center">
                             <Button variant="ghost" size="sm" onClick={handleCancelImport}>
                               Annuler
