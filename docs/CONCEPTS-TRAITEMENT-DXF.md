@@ -4102,5 +4102,69 @@ cadastrale est par nature vaste).
 
 ---
 
+## 49. Seuil de longueur dédié aux entités `ARC`/`SPLINE` : le type d'entité DXF source est un signal que le seuil bbox seul ne voit pas
+
+**Problème métier** : même après le filtre bbox < 2 m du §48, une partie du
+bruit persistait sur ZIG.dxf sous forme de fragments de courbe. Analyse par
+type d'entité DXF source (`ML/train_line_boundary_classifier.py` +
+`ML/threshold_search.py`, sur un jeu de 353 567 lignes candidates étiqueté
+par proximité au contour des parcelles finales) : `ARC` n'était une vraie
+limite que 8,3 % du temps globalement, et seulement **12,0 %** même parmi
+les `ARC` DÉJÀ retenus par le seuil de 2 m (3 572 conservés, 3 144 de bruit)
+; `SPLINE` similaire (3,8 % / 32,1 %). À l'inverse, `LWPOLYLINE` était une
+vraie limite 74,9 % du temps — le seuil de longueur seul ne peut pas
+distinguer ces deux populations, il ne regarde que la géométrie, jamais la
+provenance.
+
+**Cause technique** : `dxf-native.ts` distinguait déjà en interne chaque
+type d'entité DXF (`LINE`/`LWPOLYLINE`/`ARC`/`SPLINE`/…) pour les compteurs
+de réconciliation (seen/emitted/skipped), mais cette information était
+perdue à l'émission — toute entité produisant une ligne ouverte ressortait
+en simple `LineString` sans porter que `Layer`. En aval, `addOpenLine`
+n'avait donc aucun moyen de distinguer une vraie limite `LINE`/`LWPOLYLINE`
+d'un fragment de courbe `ARC`/`SPLINE` (arrondi de coin, courbe
+d'annotation, artefact de conversion CAO).
+
+**Solution** (`dxf-native.ts` · `emitGeometryFeatures` / `parcelle-ingestion.ts`
+· `addOpenLine`) : chaque feature émise porte désormais `_dgid_source_entity`
+(le type d'entité DXF d'origine), posé dans la fermeture `emit()` partagée —
+`filterDxfCadastralFeatures` propageait déjà les propriétés inconnues sans
+changement nécessaire. `addOpenLine` applique un second seuil, plus haut,
+`MIN_BOUNDARY_ARC_SPLINE_LENGTH_M` (10 m par défaut,
+`DXF_MIN_BOUNDARY_ARC_SPLINE_LENGTH_M`), UNIQUEMENT quand l'entité source est
+`ARC`/`SPLINE`, comptabilisé séparément dans `nbArcsSplinesCourtsIgnores`
+(avertissement propre, jamais fusionné avec `nbLignesTropCourtesIgnorees`).
+Volontairement PAS une exclusion catégorique de `ARC`/`SPLINE` : la
+densification (`densifyPolyline`/`arcPoints`) sait déjà reconstruire une
+vraie limite courbe (ex. bord de parcelle suivant une route incurvée) — une
+exclusion totale aurait cassé silencieusement ce cas sur un futur fichier.
+
+Vérifié empiriquement deux fois avant d'implémenter :
+1. Sur le jeu de test étiqueté : la règle « bbox ≥ 2 m ET entité PAS dans
+   {ARC, SPLINE} » atteint une précision de 0,833 contre 0,815 pour le
+   seuil actuel seul (rappel −0,3 pt) — signal réel, pas du bruit de mesure.
+2. Ré-ingestion complète à blanc du vrai ZIG.dxf (`ingestDxfToParcelles`,
+   aucune écriture en base) : **59 012 parcelles construites contre 57 822
+   avant** (§48) — +1 190 parcelles valides récupérées, alors même que
+   31 238 fragments `ARC`/`SPLINE` supplémentaires sont désormais écartés
+   (166 645 lignes restent écartées par le seuil général de 2 m,
+   séparément). Toujours 0 zone irrécupérable
+   (`nbZonesPolygonisationEchouee`).
+
+**Pourquoi (pièges inclus)** : le modèle Gradient Boosting entraîné sur
+toutes les features accordait une importance quasi nulle à `source_entity`
+(~0,0005) — la variance du type d'entité est en grande partie corrélée aux
+features de longueur, un modèle boosté peu profond n'a donc pas besoin de la
+regarder séparément pour bien classer EN MOYENNE. Piège : une feature à
+faible importance dans un modèle combiné n'est pas forcément sans valeur,
+surtout si son effet est surtout marginal/conditionnel (ici : parmi les
+lignes DÉJÀ assez longues pour passer le premier filtre) — un test en règle
+déterministe simple l'a révélé alors que le modèle boosté le masquait.
+Second piège : ne jamais bannir catégoriquement un type d'entité sans seuil
+de secours — `ARC`/`SPLINE` portent aussi de vraies limites courbes, d'où un
+seuil plus haut plutôt qu'une exclusion totale.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*
