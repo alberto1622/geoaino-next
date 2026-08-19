@@ -154,3 +154,10 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 ## 1. intersections des sections entre deux fichiers charger
 
 # A véfifier
+
+## Fichier zig.dxf
+
+analyser le fichier Zig sachant que le fichier est trés impropre par rapport au information notamment les claques.
+Exemple: avec le calque limites parcelles ont a des textes, des lignes mélangées comme pas possible
+
+Donner des propositions pour le traitement de ce genre de fichier

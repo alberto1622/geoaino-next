@@ -121,6 +121,9 @@ export interface DxfIngestionReport {
   nbPolygonesEnveloppeIgnores: number;
   nbHorsEmprise: number;
   nbPolylignesOuvertesIgnorees: number;
+  /** Polylignes écartées AVANT polygonisation, bbox < `MIN_BOUNDARY_LINE_LENGTH_M`
+   *  (artefacts de tracé sur le calque des limites — cf. § 47/48). */
+  nbLignesTropCourtesIgnorees: number;
   nbTextesHorsParcelle: number;
   /** Numéros de parcelle récupérés par repli débordement (point d'insertion
    *  hors de toute parcelle, ≤ NUMERO_LABEL_OVERFLOW_TOLERANCE_M) — cf. § 23. */
@@ -190,6 +193,16 @@ const CLOSE_SNAP_TOLERANCE_M = Number(process.env.DXF_CLOSE_SNAP_TOLERANCE_M || 
 // global produit par la polygonisation (la zone entière du lotissement).
 const POLYGONIZE_MIN_AREA_M2 = Number(process.env.DXF_POLYGONIZE_MIN_AREA_M2 || 5);
 const POLYGONIZE_MAX_AREA_M2 = Number(process.env.DXF_POLYGONIZE_MAX_AREA_M2 || 50000);
+// Longueur mini (diagonale de la bbox, pas la somme des segments) d'une
+// polyligne ouverte pour être retenue comme limite de parcelle. Certains DXF
+// mélangent, sur le calque des limites, de véritables limites ET des artefacts
+// (hachures, coches d'annotation, mini-tracés décoratifs) — sur un lot réel,
+// 88 % des segments faisaient < 2 m (moyenne 4,98 m) contre des dizaines de
+// mètres pour une vraie limite, causant des tuiles à 30-70k segments/tuile
+// plancher (des dizaines de minutes CHACUNE en noding JSTS, cf. § 47). La
+// bbox (pas la somme des segments) évite d'écarter une vraie limite juste
+// parce qu'elle a un coin anguleux avec un petit segment interne.
+const MIN_BOUNDARY_LINE_LENGTH_M = Number(process.env.DXF_MIN_BOUNDARY_LINE_LENGTH_M || 2);
 
 // Tolérance de raccord des micro-trous (cf. polygonize.ts · healUndershoots)
 // SPÉCIFIQUE aux limites de sections : les tracés de sections (numérisés à plus
@@ -912,6 +925,21 @@ interface ExtractionResult {
   nbHorsEmprise: number;
   nbPolylignesOuvertesIgnorees: number;
   nbAutresCouchesIgnorees: number;
+  /** Polylignes ouvertes écartées AVANT polygonisation, bbox < `MIN_BOUNDARY_LINE_LENGTH_M`
+   *  (artefacts de tracé — hachures, coches d'annotation — pas de vraies limites). */
+  nbLignesTropCourtesIgnorees: number;
+}
+
+/** Diagonale (m) de la bbox d'une polyligne — cf. `MIN_BOUNDARY_LINE_LENGTH_M`. */
+function lineBBoxDiagonalM(coords: number[][]): number {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of coords) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  return Math.hypot(maxX - minX, maxY - minY);
 }
 
 /** Classes dont les lignes ouvertes peuvent être polygonisées en surfaces. */
@@ -934,6 +962,7 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
   let nbHorsEmprise = 0;
   let nbPolylignesOuvertesIgnorees = 0;
   let nbAutresCouchesIgnorees = 0;
+  let nbLignesTropCourtesIgnorees = 0;
 
   /** Aiguille un polygone vers la bonne couche selon son calque DGID. */
   const routePolygon = (geom: PolygonGeom, layerClass: string): void => {
@@ -956,6 +985,10 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
       return;
     }
     if (polygonizableClass(layerClass)) {
+      if (lineBBoxDiagonalM(coords) < MIN_BOUNDARY_LINE_LENGTH_M) {
+        nbLignesTropCourtesIgnorees++;
+        return;
+      }
       (boundaryLinesByClass[layerClass] ||= []).push(coords);
     } else {
       nbPolylignesOuvertesIgnorees++;
@@ -1031,6 +1064,7 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
     nbHorsEmprise,
     nbPolylignesOuvertesIgnorees,
     nbAutresCouchesIgnorees,
+    nbLignesTropCourtesIgnorees,
   };
 }
 
@@ -1491,7 +1525,7 @@ function blankIngestionReport(warnings: string[] = []): DxfIngestionReport {
     nbSansSection: 0, nbSansCommune2026: 0, nbCommune2026Approx: 0,
     nbSectionDepuisTableSections: 0, nbSectionApprox: 0, nbNumeroNonConforme: 0,
     nbPiscines: 0, nbParcellesPolygonisees: 0, nbZonesPolygonisationEchouee: 0, nbPolygonesEnveloppeIgnores: 0, nbHorsEmprise: 0,
-    nbPolylignesOuvertesIgnorees: 0, nbTextesHorsParcelle: 0, nbNumerosRecuperesParDebordement: 0,
+    nbPolylignesOuvertesIgnorees: 0, nbLignesTropCourtesIgnorees: 0, nbTextesHorsParcelle: 0, nbNumerosRecuperesParDebordement: 0,
     nbParcellesMultiNumeros: 0,
     nbPolygonesInvalidesRejetes: 0,
     nbAutresCouchesIgnorees: 0, nbDoublonsGeometrie: 0, nbDoublonsRecouvrement: 0,
@@ -1527,6 +1561,7 @@ export function buildParcellesFromFc32628(
     nbHorsEmprise,
     nbPolylignesOuvertesIgnorees,
     nbAutresCouchesIgnorees,
+    nbLignesTropCourtesIgnorees,
   } = extractPolygonsAndLabels(classified);
   _t = phase(`extract (parcels=${parcelPolygons.length}, lines=${Object.values(boundaryLinesByClass).reduce((s, a) => s + a.length, 0)})`, _t);
 
@@ -1900,6 +1935,13 @@ export function buildParcellesFromFc32628(
         "(limites sur un calque non polygonisable)."
     );
   }
+  if (nbLignesTropCourtesIgnorees > 0) {
+    warnings.push(
+      `${nbLignesTropCourtesIgnorees} polyligne(s) trop courte(s) écartée(s) avant polygonisation ` +
+        `(bbox < ${MIN_BOUNDARY_LINE_LENGTH_M} m — probable artefact de tracé sur le calque des limites, ` +
+        "pas une vraie limite de parcelle)."
+    );
+  }
   if (nbAutresCouchesIgnorees > 0) {
     warnings.push(
       `${nbAutresCouchesIgnorees} entité(s) ignorée(s) car situées sur un calque hors parcelle ` +
@@ -1997,6 +2039,7 @@ export function buildParcellesFromFc32628(
       nbPolygonesEnveloppeIgnores: nbParcellesTropGrandes,
       nbHorsEmprise,
       nbPolylignesOuvertesIgnorees,
+      nbLignesTropCourtesIgnorees,
       nbTextesHorsParcelle,
       nbNumerosRecuperesParDebordement,
       nbParcellesMultiNumeros,

@@ -4055,6 +4055,51 @@ tracé/calque à corriger dans le DXF lui-même) — c'est un filet de sécurit�
 pour que le RESTE du fichier se termine en temps raisonnable, pas une
 correction du problème de données sous-jacent.
 
+## 48. Fichier DXF au calque « limites parcelles » impropre (texte/lignes/polygones mélangés) : filtrer les micro-tracés AVANT polygonisation, pas seulement absorber le symptôme
+
+**Problème métier** : sur le fichier ZIG.dxf (§46-47), le calque « limites
+parcelles » s'est révélé être un fourre-tout : 496 112 features (60 % du
+fichier entier), mélangeant `Point`/texte (97 250, dont 76 145 avec un
+libellé — échantillon `C24`, `B0`…`B8`, des codes de lot/bloc, pas des
+numéros de parcelle), `LineString` (351 144) et `Polygon` déjà fermés
+(47 718). Analyse empirique des segments `LineString` de ce calque :
+**88,2 % font moins de 2 m** (moyenne 4,98 m, contre des dizaines de mètres
+pour une vraie limite cadastrale) — exactement la signature des zones à
+densité aberrante du §47 (annotations/hachures/micro-tracés décoratifs
+plutôt que de vraies limites).
+
+**Cause technique** : deux angles distincts, vérifiés séparément dans le
+code AVANT d'écrire quoi que ce soit :
+1. Les `Polygon` déjà fermés sur ce calque étaient-ils renodés inutilement ?
+   NON — `routePolygon` (`parcelle-ingestion.ts`) les route déjà directement
+   vers `parcelPolygons` (`source: "authored"`), à l'écart du réseau de
+   lignes ouvertes envoyé à `polygonizeLines` — déjà correct, rien à changer.
+2. Les polylignes ouvertes minuscules (annotations/hachures) n'avaient
+   AUCUN filtre avant d'entrer dans le réseau de noding — chaque `LINE`/
+   `LWPOLYLINE`, quelle que soit sa taille, finissait dans
+   `boundaryLinesByClass` puis `polygonizeLines`.
+
+**Solution** (`parcelle-ingestion.ts`) : `addOpenLine` filtre désormais
+toute polyligne dont la **diagonale de la bbox** (pas la somme des
+segments — un vrai coin anguleux garde un petit segment interne sans que la
+ligne entière soit petite) est inférieure à `MIN_BOUNDARY_LINE_LENGTH_M`
+(2 m par défaut, `DXF_MIN_BOUNDARY_LINE_LENGTH_M`), comptée dans
+`nbLignesTropCourtesIgnorees` et remontée en avertissement — même principe
+« aucune perte silencieuse » que les autres compteurs du fichier. Vérifié
+empiriquement sur ZIG.dxf AVANT de considérer le correctif suffisant : le
+volume de segments alimentant la polygonisation du calque passe de
+1 391 773 à 263 441 (18,9 % du volume d'origine).
+
+**Pourquoi (pièges inclus)** : ne jamais supposer qu'une optimisation
+proposée (ici, séparer les polygones déjà fermés) est encore à faire sans
+relire le code existant — `routePolygon` le faisait déjà, l'implémenter à
+nouveau aurait été du temps perdu. Piège à éviter : le filtre s'applique à
+TOUTES les classes polygonisables (parcelles, sections, piscines), pas
+seulement à `limites_parcelles` — cohérent avec `addOpenLine` qui est le
+point de passage unique, mais à garder en tête si un futur calque de
+section légitime a des tronçons très courts (peu probable : une section
+cadastrale est par nature vaste).
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
