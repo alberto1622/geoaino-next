@@ -148,6 +148,7 @@ function indexPolygonBoundaries(geom: GeoJSON.Geometry, grid: SegmentGrid): void
 
 interface LineFeatureRow {
   layer_class: string;
+  source_entity: string;
   bbox_diagonal_m: number;
   total_length_m: number;
   num_vertices: number;
@@ -161,7 +162,7 @@ interface LineFeatureRow {
   label: 0 | 1;
 }
 
-function lineFeatures(coords: Ring): Omit<LineFeatureRow, "layer_class" | "dist_to_final_boundary_m" | "label"> {
+function lineFeatures(coords: Ring): Omit<LineFeatureRow, "layer_class" | "source_entity" | "dist_to_final_boundary_m" | "label"> {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   let totalLen = 0, minSeg = Infinity, maxSeg = 0;
   for (let i = 0; i < coords.length; i++) {
@@ -205,17 +206,18 @@ async function main() {
     { maxFeatures: null },
   );
 
-  const candidates: { coords: Ring; layerClass: string }[] = [];
+  const candidates: { coords: Ring; layerClass: string; sourceEntity: string }[] = [];
   for (const feat of classified.features) {
     const cls = String(feat.properties?._dgid_layer_class ?? "");
     if (!POLYGONIZABLE_CLASSES.has(cls)) continue;
     const geom = feat.geometry;
     if (!geom) continue;
+    const sourceEntity = String(feat.properties?._dgid_source_entity ?? "INCONNU");
     if (geom.type === "LineString") {
-      candidates.push({ coords: geom.coordinates as Ring, layerClass: cls });
+      candidates.push({ coords: geom.coordinates as Ring, layerClass: cls, sourceEntity });
     } else if (geom.type === "MultiLineString") {
       for (const line of geom.coordinates as unknown as Ring[]) {
-        candidates.push({ coords: line, layerClass: cls });
+        candidates.push({ coords: line, layerClass: cls, sourceEntity });
       }
     }
   }
@@ -245,7 +247,7 @@ async function main() {
   const pool = LIMIT > 0 ? candidates.slice(0, LIMIT) : candidates;
   const rows: LineFeatureRow[] = [];
   let done = 0;
-  for (const { coords, layerClass } of pool) {
+  for (const { coords, layerClass, sourceEntity } of pool) {
     if (!Array.isArray(coords) || coords.length < 2) continue;
     const feats = lineFeatures(coords);
     // Échantillonne au plus 8 sommets répartis sur la ligne pour rester rapide
@@ -256,13 +258,13 @@ async function main() {
     const dists = sampled.map((p) => grid.nearestDistance(p));
     const distToBoundary = dists.reduce((a, b) => a + b, 0) / dists.length;
     const label: 0 | 1 = dists.filter((d) => d <= TOLERANCE_M).length >= Math.ceil(dists.length / 2) ? 1 : 0;
-    rows.push({ layer_class: layerClass, ...feats, dist_to_final_boundary_m: distToBoundary, label });
+    rows.push({ layer_class: layerClass, source_entity: sourceEntity, ...feats, dist_to_final_boundary_m: distToBoundary, label });
     done++;
     if (done % 20000 === 0) console.log(`[export-line-features] ${done}/${pool.length} lignes traitées...`);
   }
 
   const header = [
-    "layer_class", "bbox_diagonal_m", "total_length_m", "num_vertices", "num_segments",
+    "layer_class", "source_entity", "bbox_diagonal_m", "total_length_m", "num_vertices", "num_segments",
     "min_segment_len_m", "max_segment_len_m", "mean_segment_len_m", "straightness",
     "closes_near_start", "dist_to_final_boundary_m", "label",
   ];

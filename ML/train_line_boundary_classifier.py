@@ -48,7 +48,7 @@ FEATURE_COLUMNS = [
     "straightness",
     "closes_near_start",
 ]
-CATEGORICAL_COLUMN = "layer_class"
+CATEGORICAL_COLUMNS = ["layer_class", "source_entity"]
 LABEL_COLUMN = "label"
 
 
@@ -81,7 +81,7 @@ def load_dataset(csv_path: Path, label_tolerance: float | None) -> pd.DataFrame:
             "Génère-le d'abord avec : npx tsx scripts/export-line-features.ts <fichier.dxf> <analysisId>"
         )
     df = pd.read_csv(csv_path)
-    missing = [c for c in [*FEATURE_COLUMNS, CATEGORICAL_COLUMN, LABEL_COLUMN] if c not in df.columns]
+    missing = [c for c in [*FEATURE_COLUMNS, *CATEGORICAL_COLUMNS, LABEL_COLUMN] if c not in df.columns]
     if missing:
         sys.exit(f"Colonnes manquantes dans {csv_path} : {missing}")
     if label_tolerance is not None:
@@ -90,7 +90,7 @@ def load_dataset(csv_path: Path, label_tolerance: float | None) -> pd.DataFrame:
 
 
 def build_matrix(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, list[str]]:
-    dummies = pd.get_dummies(df[CATEGORICAL_COLUMN], prefix="layer")
+    dummies = pd.get_dummies(df[CATEGORICAL_COLUMNS])
     X = pd.concat([df[FEATURE_COLUMNS], dummies], axis=1)
     y = df[LABEL_COLUMN].astype(int)
     return X, y, list(X.columns)

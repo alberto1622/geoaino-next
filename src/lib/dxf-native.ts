@@ -525,7 +525,7 @@ function emitGeometryFeatures(
 
     // Émission comptabilisée (réconciliation) + repli sur « écarté + motif ».
     const emit = (geometry: GeoJSON.Geometry): void => {
-      out.push({ type: "Feature", geometry, properties: { Layer: layer } });
+      out.push({ type: "Feature", geometry, properties: { Layer: layer, _dgid_source_entity: e.type } });
       if (census) bump(census.emitted, e.type);
     };
     const emitText = (text: string, pt: Pt, height: number | null, hJustify: number): void => {
