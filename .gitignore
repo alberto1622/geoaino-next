@@ -46,3 +46,10 @@ uploads/
 
 # superpowers subagent-driven-development scratch workspace
 .superpowers/
+
+# ML : jeux d'entraînement générés (scripts/export-line-features.ts) et modèles
+# entraînés — reproductibles à la demande, pas versionnés (CSV volumineux).
+ML/data/
+ML/models/
+__pycache__/
+*.pyc
