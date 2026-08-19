@@ -124,6 +124,9 @@ export interface DxfIngestionReport {
   /** Polylignes écartées AVANT polygonisation, bbox < `MIN_BOUNDARY_LINE_LENGTH_M`
    *  (artefacts de tracé sur le calque des limites — cf. § 47/48). */
   nbLignesTropCourtesIgnorees: number;
+  /** Arcs/splines écartés AVANT polygonisation, bbox < `MIN_BOUNDARY_ARC_SPLINE_LENGTH_M`
+   *  (fragments de courbe/annotation, très majoritairement du bruit — cf. § 49). */
+  nbArcsSplinesCourtsIgnores: number;
   nbTextesHorsParcelle: number;
   /** Numéros de parcelle récupérés par repli débordement (point d'insertion
    *  hors de toute parcelle, ≤ NUMERO_LABEL_OVERFLOW_TOLERANCE_M) — cf. § 23. */
@@ -203,6 +206,14 @@ const POLYGONIZE_MAX_AREA_M2 = Number(process.env.DXF_POLYGONIZE_MAX_AREA_M2 || 
 // bbox (pas la somme des segments) évite d'écarter une vraie limite juste
 // parce qu'elle a un coin anguleux avec un petit segment interne.
 const MIN_BOUNDARY_LINE_LENGTH_M = Number(process.env.DXF_MIN_BOUNDARY_LINE_LENGTH_M || 2);
+// Seuil spécifique aux entités ARC/SPLINE (courbes) : sur un DXF réel analysé
+// (ML/train_line_boundary_classifier.py + ML/threshold_search.py), ces types ne
+// faisaient que 8,3 %/3,8 % de vraies limites au global, et 12 %/32 % même parmi
+// ceux DÉJÀ retenus par le seuil de 2 m ci-dessus (fragments de courbe d'arrondi,
+// annotations) — contre 74,9 % pour LWPOLYLINE. Un seuil dédié plus haut (pas une
+// exclusion totale : de vraies limites courbes existent, cf. densifyPolyline)
+// réduit ce bruit sans jamais l'écarter silencieusement (compté séparément).
+const MIN_BOUNDARY_ARC_SPLINE_LENGTH_M = Number(process.env.DXF_MIN_BOUNDARY_ARC_SPLINE_LENGTH_M || 10);
 
 // Tolérance de raccord des micro-trous (cf. polygonize.ts · healUndershoots)
 // SPÉCIFIQUE aux limites de sections : les tracés de sections (numérisés à plus
@@ -928,6 +939,8 @@ interface ExtractionResult {
   /** Polylignes ouvertes écartées AVANT polygonisation, bbox < `MIN_BOUNDARY_LINE_LENGTH_M`
    *  (artefacts de tracé — hachures, coches d'annotation — pas de vraies limites). */
   nbLignesTropCourtesIgnorees: number;
+  /** Arcs/splines écartés AVANT polygonisation, bbox < `MIN_BOUNDARY_ARC_SPLINE_LENGTH_M`. */
+  nbArcsSplinesCourtsIgnores: number;
 }
 
 /** Diagonale (m) de la bbox d'une polyligne — cf. `MIN_BOUNDARY_LINE_LENGTH_M`. */
@@ -963,6 +976,7 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
   let nbPolylignesOuvertesIgnorees = 0;
   let nbAutresCouchesIgnorees = 0;
   let nbLignesTropCourtesIgnorees = 0;
+  let nbArcsSplinesCourtsIgnores = 0;
 
   /** Aiguille un polygone vers la bonne couche selon son calque DGID. */
   const routePolygon = (geom: PolygonGeom, layerClass: string): void => {
@@ -978,15 +992,18 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
   };
 
   /** Collecte une polyligne ouverte pour polygonisation ultérieure, ou l'ignore. */
-  const addOpenLine = (coords: number[][], layerClass: string): void => {
+  const addOpenLine = (coords: number[][], layerClass: string, sourceEntity?: string): void => {
     if (!Array.isArray(coords) || coords.length < 2) return;
     if (!ringInSenegalUtm(coords)) {
       nbHorsEmprise++;
       return;
     }
     if (polygonizableClass(layerClass)) {
-      if (lineBBoxDiagonalM(coords) < MIN_BOUNDARY_LINE_LENGTH_M) {
-        nbLignesTropCourtesIgnorees++;
+      const isArcOrSpline = sourceEntity === "ARC" || sourceEntity === "SPLINE";
+      const minLength = isArcOrSpline ? MIN_BOUNDARY_ARC_SPLINE_LENGTH_M : MIN_BOUNDARY_LINE_LENGTH_M;
+      if (lineBBoxDiagonalM(coords) < minLength) {
+        if (isArcOrSpline) nbArcsSplinesCourtsIgnores++;
+        else nbLignesTropCourtesIgnorees++;
         return;
       }
       (boundaryLinesByClass[layerClass] ||= []).push(coords);
@@ -1000,6 +1017,7 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
     if (!geom) continue;
     const props = (feature.properties || {}) as Record<string, unknown>;
     const layerClass = getDgidLayerClass(feature);
+    const sourceEntity = typeof props._dgid_source_entity === "string" ? props._dgid_source_entity : undefined;
 
     if (geom.type === "Polygon" || geom.type === "MultiPolygon") {
       routePolygon(geom as PolygonGeom, layerClass);
@@ -1009,7 +1027,7 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
     if (geom.type === "LineString") {
       const ring = lineStringToClosedRing(geom.coordinates);
       if (ring) routePolygon({ type: "Polygon", coordinates: [ring] }, layerClass);
-      else addOpenLine(geom.coordinates as number[][], layerClass);
+      else addOpenLine(geom.coordinates as number[][], layerClass, sourceEntity);
       continue;
     }
 
@@ -1017,7 +1035,7 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
       for (const line of geom.coordinates as unknown as number[][][]) {
         const ring = lineStringToClosedRing(line);
         if (ring) routePolygon({ type: "Polygon", coordinates: [ring] }, layerClass);
-        else addOpenLine(line, layerClass);
+        else addOpenLine(line, layerClass, sourceEntity);
       }
       continue;
     }
@@ -1065,6 +1083,7 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
     nbPolylignesOuvertesIgnorees,
     nbAutresCouchesIgnorees,
     nbLignesTropCourtesIgnorees,
+    nbArcsSplinesCourtsIgnores,
   };
 }
 
@@ -1525,7 +1544,7 @@ function blankIngestionReport(warnings: string[] = []): DxfIngestionReport {
     nbSansSection: 0, nbSansCommune2026: 0, nbCommune2026Approx: 0,
     nbSectionDepuisTableSections: 0, nbSectionApprox: 0, nbNumeroNonConforme: 0,
     nbPiscines: 0, nbParcellesPolygonisees: 0, nbZonesPolygonisationEchouee: 0, nbPolygonesEnveloppeIgnores: 0, nbHorsEmprise: 0,
-    nbPolylignesOuvertesIgnorees: 0, nbLignesTropCourtesIgnorees: 0, nbTextesHorsParcelle: 0, nbNumerosRecuperesParDebordement: 0,
+    nbPolylignesOuvertesIgnorees: 0, nbLignesTropCourtesIgnorees: 0, nbArcsSplinesCourtsIgnores: 0, nbTextesHorsParcelle: 0, nbNumerosRecuperesParDebordement: 0,
     nbParcellesMultiNumeros: 0,
     nbPolygonesInvalidesRejetes: 0,
     nbAutresCouchesIgnorees: 0, nbDoublonsGeometrie: 0, nbDoublonsRecouvrement: 0,
@@ -1562,6 +1581,7 @@ export function buildParcellesFromFc32628(
     nbPolylignesOuvertesIgnorees,
     nbAutresCouchesIgnorees,
     nbLignesTropCourtesIgnorees,
+    nbArcsSplinesCourtsIgnores,
   } = extractPolygonsAndLabels(classified);
   _t = phase(`extract (parcels=${parcelPolygons.length}, lines=${Object.values(boundaryLinesByClass).reduce((s, a) => s + a.length, 0)})`, _t);
 
@@ -1942,6 +1962,13 @@ export function buildParcellesFromFc32628(
         "pas une vraie limite de parcelle)."
     );
   }
+  if (nbArcsSplinesCourtsIgnores > 0) {
+    warnings.push(
+      `${nbArcsSplinesCourtsIgnores} arc(s)/spline(s) trop court(s) écarté(s) avant polygonisation ` +
+        `(bbox < ${MIN_BOUNDARY_ARC_SPLINE_LENGTH_M} m — fragment de courbe d'arrondi/annotation, ` +
+        "très majoritairement du bruit sur ce type d'entité, pas une vraie limite de parcelle)."
+    );
+  }
   if (nbAutresCouchesIgnorees > 0) {
     warnings.push(
       `${nbAutresCouchesIgnorees} entité(s) ignorée(s) car situées sur un calque hors parcelle ` +
@@ -2040,6 +2067,7 @@ export function buildParcellesFromFc32628(
       nbHorsEmprise,
       nbPolylignesOuvertesIgnorees,
       nbLignesTropCourtesIgnorees,
+      nbArcsSplinesCourtsIgnores,
       nbTextesHorsParcelle,
       nbNumerosRecuperesParDebordement,
       nbParcellesMultiNumeros,
