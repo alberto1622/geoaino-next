@@ -10,6 +10,7 @@ import {
   Brain,
   FileText,
   Download,
+  Loader2,
   Wrench,
   ChevronRight,
   MapPin,
@@ -25,6 +26,7 @@ import {
   Undo2,
   Redo2,
   ChevronLeft,
+  Upload,
 } from "lucide-react";
 import { useUndoHistory, useUndoRedoShortcuts } from "@/hooks/use-undo-history";
 import { Button } from "@/components/ui/button";
@@ -46,7 +48,12 @@ import { useAnalysisUpdateListener } from "@/lib/analyses/live-refresh";
 // ── Limites administratives (régions / départements / communes) ──────────────
 // Mêmes contours nationaux (cad_communes_2026) que la page /cadastre/sections.
 type AdminLevel = "regions" | "departements" | "arrondissements" | "communes";
-const ADMIN_LEVELS: AdminLevel[] = ["regions", "departements", "arrondissements", "communes"];
+const ADMIN_LEVELS: AdminLevel[] = [
+  "regions",
+  "departements",
+  "arrondissements",
+  "communes",
+];
 const ADMIN_STYLES: Record<AdminLevel, { label: string; color: string }> = {
   regions: { label: "Régions", color: "#b91c1c" },
   departements: { label: "Départements", color: "#b45309" },
@@ -549,6 +556,35 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   });
   // Masque/affiche le panneau latéral gauche pour libérer de l'espace carte.
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
+  // Largeur du panneau latéral (redimensionnable par glisser sur son bord droit).
+  const [leftPanelWidth, setLeftPanelWidth] = useState(384);
+  const [resizingPanel, setResizingPanel] = useState(false);
+  // Démarre le redimensionnement du panneau latéral : écoute mousemove/mouseup
+  // sur `window` (pas seulement la poignée) pour rester réactif même si le
+  // curseur quitte la poignée pendant le glisser.
+  const handleResizeStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = leftPanelWidth;
+      setResizingPanel(true);
+      const onMouseMove = (ev: MouseEvent) => {
+        const next = Math.min(
+          640,
+          Math.max(280, startWidth + (ev.clientX - startX)),
+        );
+        setLeftPanelWidth(next);
+      };
+      const onMouseUp = () => {
+        setResizingPanel(false);
+        window.removeEventListener("mousemove", onMouseMove);
+        window.removeEventListener("mouseup", onMouseUp);
+      };
+      window.addEventListener("mousemove", onMouseMove);
+      window.addEventListener("mouseup", onMouseUp);
+    },
+    [leftPanelWidth],
+  );
   const [isSavingReport, setIsSavingReport] = useState(false);
   const [isRegeneratingReport, setIsRegeneratingReport] = useState(false);
   const [aiReport, setAiReport] = useState<string | null>(analysis.aiReport);
@@ -1556,7 +1592,12 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action, targetNicad, targetSection, targetNumero }),
+            body: JSON.stringify({
+              action,
+              targetNicad,
+              targetSection,
+              targetNumero,
+            }),
           },
         );
         const data = await res.json();
@@ -1770,6 +1811,38 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     }
   };
 
+  const [exportingShp, setExportingShp] = useState(false);
+
+  const handleExportShapefile = async () => {
+    setExportingShp(true);
+    try {
+      const res = await fetch("/api/cadastre/export/shapefile/analyses", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ analysisIds: [analysis.id] }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Échec de l'export.");
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const match = /filename="([^"]+)"/.exec(disposition);
+      const filename = match?.[1] ?? `${analysis.fileName}_shapefile.zip`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Export shapefile téléchargé.");
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setExportingShp(false);
+    }
+  };
+
   const handleDownloadCorrected = () => {
     if (!correctedData) {
       toast.error("Aucune correction disponible");
@@ -1791,23 +1864,42 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       <div className="flex flex-1 overflow-hidden">
         {/* Left panel */}
         <div
-          className={`border-border flex flex-col bg-card shrink-0 overflow-hidden transition-[width,border-width] duration-300 ease-in-out ${
-            leftPanelOpen ? "w-96 border-r" : "w-0 border-r-0"
-          }`}
+          className={`relative border-border flex flex-col bg-card shrink-0 overflow-hidden ${
+            resizingPanel
+              ? ""
+              : "transition-[width,border-width] duration-300 ease-in-out"
+          } ${leftPanelOpen ? "border-r" : "w-0 border-r-0"}`}
+          style={{ width: leftPanelOpen ? leftPanelWidth : 0 }}
         >
+          {leftPanelOpen && (
+            <div
+              onMouseDown={handleResizeStart}
+              title="Redimensionner le panneau"
+              className="absolute top-0 right-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-primary/40 active:bg-primary/60"
+            />
+          )}
           <div className="p-4 border-b border-border">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-sm font-semibold truncate">
                 {analysis.fileName}
               </h2>
-              <Badge
-                variant={
-                  displayConformityScore >= 70 ? "default" : "destructive"
-                }
-                className="text-xs shrink-0 ml-2"
-              >
-                {displayConformityScore.toFixed(0)}%
-              </Badge>
+              <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                <Badge
+                  variant={
+                    displayConformityScore >= 70 ? "default" : "destructive"
+                  }
+                  className="text-xs shrink-0"
+                >
+                  {displayConformityScore.toFixed(0)}%
+                </Badge>
+                <button
+                  onClick={() => setLeftPanelOpen(false)}
+                  title="Masquer le panneau latéral"
+                  className="shrink-0 p-1 rounded hover:bg-secondary/60 text-muted-foreground hover:text-foreground cursor-pointer transition-colors bg-primary/20 active:bg-accent/30"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
             <div className="flex items-center gap-3 text-xs text-muted-foreground">
               <span>
@@ -1847,6 +1939,14 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                   </span>
                 </>
               )}
+              <button
+                onClick={() => router.push("/")}
+                title="Retourner à l'accueil pour charger un nouveau fichier"
+                className="ml-auto shrink-0 flex items-center gap-1 text-primary hover:underline cursor-pointer"
+              >
+                <Upload className="w-3 h-3" />
+                Nouvelle analyse
+              </button>
             </div>
 
             {/* NICAD search */}
@@ -1882,6 +1982,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 className="h-8 px-3 text-xs"
                 onClick={handleSearchNicad}
                 disabled={!nicadSearch.trim()}
+                title="Exporter les parcelles de cette analyse en shapefile (.shp/.dbf/.shx/.prj)"
               >
                 Chercher
               </Button>
@@ -2725,20 +2826,16 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
           )}
         </div>
 
-        {/* Bascule d'affichage du panneau latéral. */}
-        <button
-          onClick={() => setLeftPanelOpen((v) => !v)}
-          title={
-            leftPanelOpen
-              ? "Masquer le panneau latéral"
-              : "Afficher le panneau latéral"
-          }
-          className="shrink-0 w-4 flex items-center justify-center border-r border-border bg-card hover:bg-secondary/60 text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
-        >
-          <ChevronLeft
-            className={`w-3 h-3 transition-transform ${leftPanelOpen ? "" : "rotate-180"}`}
-          />
-        </button>
+        {/* Réaffichage du panneau latéral (masqué via le bouton en haut du panneau). */}
+        {!leftPanelOpen && (
+          <button
+            onClick={() => setLeftPanelOpen(true)}
+            title="Afficher le panneau latéral"
+            className="shrink-0 self-start mt-3 ml-2 p-1.5 rounded-md border border-border bg-card shadow-sm hover:bg-secondary/60 text-muted-foreground hover:text-foreground cursor-pointer transition-colors"
+          >
+            <ChevronLeft className="w-3.5 h-3.5 rotate-180" />
+          </button>
+        )}
 
         {/* Map + Attribute Table */}
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -2790,6 +2887,21 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 <Redo2 className="w-3.5 h-3.5" />
               </button>
             </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="absolute top-2 right-2 z-10 gap-1.5 h-8 text-xs bg-card/90 backdrop-blur-sm border-border shadow-lg"
+              onClick={handleExportShapefile}
+              disabled={exportingShp}
+              title="Exporter les parcelles de cette analyse en shapefile (.shp/.dbf/.shx/.prj)"
+            >
+              {exportingShp ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
+              Export SHP
+            </Button>
             {geoLoading && (
               <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-3 py-1.5 text-[11px] rounded-full bg-card/90 backdrop-blur-sm border border-border shadow-lg">
                 <RefreshCw className="w-3 h-3 animate-spin text-primary" />

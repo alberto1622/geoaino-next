@@ -27,7 +27,10 @@ import LayerMappingModal, {
   type LayerInventoryEntry,
 } from "@/components/LayerMappingModal";
 import FieldMappingModal from "@/components/FieldMappingModal";
-import { JobProgressSteps, type JobProgressStep } from "@/components/import/JobProgressSteps";
+import {
+  JobProgressSteps,
+  type JobProgressStep,
+} from "@/components/import/JobProgressSteps";
 import type { TargetFieldDef } from "@/lib/import/field-mapping";
 import { toNum } from "@/lib/utils";
 
@@ -123,25 +126,6 @@ interface AnalysisResult {
   conformityScore: number;
 }
 
-<<<<<<< HEAD
-/** Libellé lisible de la phase courante d'un job de traitement Microstation. */
-function caoPhaseLabel(phase: string | null): string {
-  switch (phase) {
-    case "read":
-      return "Lecture du fichier…";
-    case "build":
-      return "Reconstruction des parcelles (polygonisation)…";
-    case "nicad":
-      return "Résolution des NICAD (jointure communes)…";
-    case "persist":
-      return "Enregistrement en base…";
-    case "done":
-      return "Terminé";
-    default:
-      return "Démarrage…";
-  }
-}
-=======
 /** Pipeline job kind "parcelles" DXF/DGN (`run-job.ts`) : 4 phases jusqu'à l'analyse. */
 const DXF_PIPELINE_STEPS: JobProgressStep[] = [
   { key: "read", label: "Lecture du fichier" },
@@ -155,7 +139,6 @@ const SHP_PARCELLES_STEPS: JobProgressStep[] = [
   { key: "read", label: "Lecture du fichier" },
   { key: "analyze", label: "Analyse topologique" },
 ];
->>>>>>> worktree-shapefile-parcelles-section-coherence
 
 export default function HomeClient({ user, stats }: Props) {
   const router = useRouter();
@@ -169,7 +152,8 @@ export default function HomeClient({ user, stats }: Props) {
   const [mode, setMode] = useState<UploadMode>("analyze");
   const [jobPhase, setJobPhase] = useState<string | null>(null);
   const [jobProgress, setJobProgress] = useState(0);
-  const [jobSteps, setJobSteps] = useState<JobProgressStep[]>(DXF_PIPELINE_STEPS);
+  const [jobSteps, setJobSteps] =
+    useState<JobProgressStep[]>(DXF_PIPELINE_STEPS);
   // Inventaire des calques en attente de validation (variante « simple »).
   const [pendingInventory, setPendingInventory] =
     useState<LayerInventory | null>(null);
@@ -385,27 +369,20 @@ export default function HomeClient({ user, stats }: Props) {
    * Import direct (voie historique multipart, sans mappage) — repli si
    * l'inventaire des calques échoue.
    */
-<<<<<<< HEAD
   const runCaoImport = useCallback(
-    async (fileList: File[], mainFile: File) => {
+    async (
+      fileList: File[],
+      mainFile: File,
+      steps: JobProgressStep[] = DXF_PIPELINE_STEPS,
+    ) => {
       setMode("import");
       setIsUploading(true);
       setUploadFileName(mainFile.name);
       setUploadStep("reading");
       setJobPhase("read");
       setJobProgress(0);
+      setJobSteps(steps);
       setAnalysisResult(null);
-=======
-  const runCaoImport = useCallback(async (fileList: File[], mainFile: File, steps: JobProgressStep[] = DXF_PIPELINE_STEPS) => {
-    setMode("import");
-    setIsUploading(true);
-    setUploadFileName(mainFile.name);
-    setUploadStep("reading");
-    setJobPhase("read");
-    setJobProgress(0);
-    setJobSteps(steps);
-    setAnalysisResult(null);
->>>>>>> worktree-shapefile-parcelles-section-coherence
 
       try {
         const formData = new FormData();
@@ -456,29 +433,17 @@ export default function HomeClient({ user, stats }: Props) {
         if (!res.ok) throw new Error(String(res.status));
         const inv = (await res.json()) as ShapefileFieldInventory;
 
-<<<<<<< HEAD
         // Suspend le spinner, la modale prend le relais jusqu'à validation.
         setIsUploading(false);
         setUploadStep(null);
         setPendingFieldInventory(inv);
       } catch {
         // Repli robuste : import direct via la voie multipart historique.
-        await runCaoImport(fileList, shpFile);
+        await runCaoImport(fileList, shpFile, SHP_PARCELLES_STEPS);
       }
     },
     [runCaoImport],
   );
-=======
-      // Suspend le spinner, la modale prend le relais jusqu'à validation.
-      setIsUploading(false);
-      setUploadStep(null);
-      setPendingFieldInventory(inv);
-    } catch {
-      // Repli robuste : import direct via la voie multipart historique.
-      await runCaoImport(fileList, shpFile, SHP_PARCELLES_STEPS);
-    }
-  }, [runCaoImport]);
->>>>>>> worktree-shapefile-parcelles-section-coherence
 
   /**
    * Étape « variante simple » : inventorie les calques du fichier CAO puis ouvre
@@ -848,7 +813,7 @@ export default function HomeClient({ user, stats }: Props) {
                       <div className="flex gap-3 flex-wrap justify-center w-full">
                         <Button
                           size="lg"
-                          className="gap-2 flex-1 min-w-[160px] shadow-lg shadow-primary/20"
+                          className="gap-2 flex-1 min-w-40 shadow-lg shadow-primary/20"
                           onClick={() =>
                             router.push(`/map/${analysisResult.id}`)
                           }
@@ -858,7 +823,7 @@ export default function HomeClient({ user, stats }: Props) {
                         <Button
                           size="lg"
                           variant="outline"
-                          className="gap-2 flex-1 min-w-[160px]"
+                          className="gap-2 flex-1 min-w-40"
                           onClick={() =>
                             router.push(`/map/${analysisResult.id}?tab=table`)
                           }
@@ -894,21 +859,6 @@ export default function HomeClient({ user, stats }: Props) {
                         </div>
                       )}
                       {mode === "import" ? (
-<<<<<<< HEAD
-                        <div className="w-full max-w-xs space-y-2">
-                          <div className="text-sm text-primary font-medium text-center">
-                            {caoPhaseLabel(jobPhase)}
-                          </div>
-                          <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
-                            <div
-                              className="h-full rounded-full bg-primary transition-all duration-500"
-                              style={{ width: `${jobProgress}%` }}
-                            />
-                          </div>
-                          <div className="text-center text-xs text-muted-foreground">
-                            {jobProgress}%
-                          </div>
-=======
                         <div className="w-full max-w-sm space-y-3">
                           <JobProgressSteps
                             steps={jobSteps}
@@ -916,7 +866,6 @@ export default function HomeClient({ user, stats }: Props) {
                             status="running"
                             progress={jobProgress}
                           />
->>>>>>> worktree-shapefile-parcelles-section-coherence
                           <div className="text-center">
                             <Button
                               variant="ghost"
