@@ -140,6 +140,10 @@ export interface DxfIngestionReport {
   nbDoublonsRecouvrement: number;
   /** Grandes parcelles/enveloppes supprimées car contenant des parcelles numérotées. */
   nbEnveloppesSupprimees: number;
+  /** Segments de limite restés pendants après raccord (§ 53) : jamais fermés en
+   *  anneau, donc jamais construits en parcelle. Diagnostic (comptage par tuile,
+   *  surcompte possible en marge), n'écarte rien de nouveau. */
+  nbLimitesNonRefermees: number;
   /** Chevauchements erronés (intersection > DXF_OVERLAP_FIX_MIN_M2) détectés entre parcelles. */
   nbChevauchements: number;
   /** Parcelles retaillées (soustraction de la parcelle prioritaire) pour résorber ces chevauchements. */
@@ -932,6 +936,13 @@ interface ExtractionResult {
    * polygonisation (limites dessinées en segments séparés, cf. DGN→DXF).
    */
   boundaryLinesByClass: Record<string, number[][][]>;
+  /**
+   * Type DXF source (`_dgid_source_entity` — `LINE`/`LWPOLYLINE`/`ARC`/`SPLINE`…)
+   * de chaque ligne de `boundaryLinesByClass`, même ordre/index par classe.
+   * Permet de retrouver le vrai type d'origine d'un dangle (§ 53) plutôt que
+   * de le deviner via un proxy (nombre de sommets).
+   */
+  boundarySourceEntityByClass: Record<string, string[]>;
   /** Entités écartées car hors de l'emprise UTM28N plausible (parasites CAO). */
   nbHorsEmprise: number;
   nbPolylignesOuvertesIgnorees: number;
@@ -972,6 +983,7 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
   const labels: RawLabel[] = [];
   const sectionLabels: RawPointText[] = [];
   const boundaryLinesByClass: Record<string, number[][][]> = {};
+  const boundarySourceEntityByClass: Record<string, string[]> = {};
   let nbHorsEmprise = 0;
   let nbPolylignesOuvertesIgnorees = 0;
   let nbAutresCouchesIgnorees = 0;
@@ -1007,6 +1019,8 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
         return;
       }
       (boundaryLinesByClass[layerClass] ||= []).push(coords);
+      // Même ordre/index que boundaryLinesByClass[layerClass] — cf. § 53.
+      (boundarySourceEntityByClass[layerClass] ||= []).push(sourceEntity ?? "?");
     } else {
       nbPolylignesOuvertesIgnorees++;
     }
@@ -1079,6 +1093,7 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
     labels,
     sectionLabels,
     boundaryLinesByClass,
+    boundarySourceEntityByClass,
     nbHorsEmprise,
     nbPolylignesOuvertesIgnorees,
     nbAutresCouchesIgnorees,
@@ -1104,6 +1119,7 @@ function extractPolygonsAndLabels(fc: DgidFeatureCollection): ExtractionResult {
  */
 function polygonizeBoundaries(
   boundaryLinesByClass: Record<string, number[][][]>,
+  boundarySourceEntityByClass: Record<string, string[]>,
   parcelPolygons: RawPolygon[],
   sectionPolygons: RawPolygon[],
   piscinePolygons: RawPolygon[]
@@ -1111,10 +1127,13 @@ function polygonizeBoundaries(
   reconstructed: number;
   oversized: number;
   droppedRegions: Array<{ x0: number; y0: number; x1: number; y1: number; segments: number }>;
+  /** Cf. § 53, docs/CONCEPTS-TRAITEMENT-DXF.md — segments restés pendants après raccord. */
+  dangles: Array<{ x0: number; y0: number; x1: number; y1: number; lengthM: number; selfGapM: number; numVertices: number; sourceEntity: string }>;
 } {
   let reconstructed = 0;
   let oversized = 0;
   const droppedRegions: Array<{ x0: number; y0: number; x1: number; y1: number; segments: number }> = [];
+  const dangles: Array<{ x0: number; y0: number; x1: number; y1: number; lengthM: number; selfGapM: number; numVertices: number; sourceEntity: string }> = [];
 
   // Arêtes des polygones de section « authored » (polylignes fermées/3DFACE du
   // calque sections, routés en polygones AVANT cet appel) : une limite mitoyenne
@@ -1122,45 +1141,140 @@ function polygonizeBoundaries(
   // s'appuie fait partie du réseau nodé. Sans ces arêtes, les faces
   // polygonisées débordaient les contours fermés (sections fusionnées, libellés
   // orphelins). Les anneaux de sections se comptent en dizaines : coût marginal.
+  // Dérivées d'un polygone déjà fermé (pas d'une ligne source unique) — aucun
+  // `_dgid_source_entity` à leur associer, taguées "RING_EDGE".
   const authoredSectionEdges: number[][][] = [];
+  const authoredSectionEdgeSourceEntities: string[] = [];
   for (const sp of sectionPolygons) {
     const polys = sp.geom.type === "Polygon" ? [sp.geom.coordinates] : sp.geom.coordinates;
     for (const rings of polys) {
-      for (const ring of rings) authoredSectionEdges.push(ring as number[][]);
+      for (const ring of rings) {
+        authoredSectionEdges.push(ring as number[][]);
+        authoredSectionEdgeSourceEntities.push("RING_EDGE");
+      }
+    }
+  }
+
+  // Anneaux "authored" (déjà fermés — ex. grand `Shape` MicroStation
+  // englobant un îlot) touchés par une ligne ouverte du réseau parcelles à
+  // proximité immédiate de leur bord : § 53 bis, docs/CONCEPTS-TRAITEMENT-DXF.md.
+  // Un tel anneau routé tel quel (comportement d'origine) empêche
+  // STRUCTURELLEMENT ses subdivisions intérieures de jamais se fermer — son
+  // bord n'entre jamais dans le graphe de noding, même à écart nul, car
+  // `routePolygon` (extractPolygonsAndLabels) le sort du circuit avant même
+  // la construction de `boundaryLinesByClass`. Détection SÉLECTIVE, pas
+  // systématique comme pour les sections ci-dessus (bien plus nombreux —
+  // réinjecter tous les anneaux coûterait cher en noding pour un gain
+  // marginal sur la majorité qui n'a aucune subdivision intérieure ; mesuré
+  // à 69/231 anneaux concernés sur un cas réel, § 53 bis).
+  const RING_TOUCH_TOLERANCE_M = Number(process.env.DXF_RING_TOUCH_TOLERANCE_M || 1);
+  const ringEdgeLines: number[][][] = [];
+  const ringEdgeSourceEntities: string[] = [];
+  if (parcelPolygons.length > 0) {
+    const ringIndex = new BBoxGridIndex(parcelPolygons.map((p) => geometryBBox(p.geom)));
+    const touchedRingIdx = new Set<number>();
+    for (const [layerClass, lines] of Object.entries(boundaryLinesByClass)) {
+      if (layerClass === SECTION_BOUNDARY_CLASS || layerClass === PISCINE_CLASS) continue;
+      for (const line of lines) {
+        for (const endpoint of [line[0], line[line.length - 1]] as [number, number][]) {
+          const queryBox: BBox = [
+            endpoint[0] - RING_TOUCH_TOLERANCE_M,
+            endpoint[1] - RING_TOUCH_TOLERANCE_M,
+            endpoint[0] + RING_TOUCH_TOLERANCE_M,
+            endpoint[1] + RING_TOUCH_TOLERANCE_M,
+          ];
+          for (const idx of ringIndex.queryRange(queryBox)) {
+            if (touchedRingIdx.has(idx)) continue;
+            if (pointToPolygonBoundaryDistanceM(endpoint, parcelPolygons[idx].geom) <= RING_TOUCH_TOLERANCE_M) {
+              touchedRingIdx.add(idx);
+            }
+          }
+        }
+      }
+    }
+    if (touchedRingIdx.size > 0) {
+      const kept: RawPolygon[] = [];
+      parcelPolygons.forEach((p, idx) => {
+        if (!touchedRingIdx.has(idx)) {
+          kept.push(p);
+          return;
+        }
+        const polys = p.geom.type === "Polygon" ? [p.geom.coordinates] : p.geom.coordinates;
+        for (const rings of polys) {
+          for (const ring of rings) {
+            ringEdgeLines.push(ring as number[][]);
+            ringEdgeSourceEntities.push("RING_EDGE");
+          }
+        }
+      });
+      // Mutation en place : `parcelPolygons` est la MÊME référence détenue par
+      // l'appelant (buildParcellesFromFc32628) — cf. `net.target.push(...)`
+      // plus bas, qui repose déjà sur cette mutation partagée.
+      parcelPolygons.length = 0;
+      parcelPolygons.push(...kept);
     }
   }
 
   // NB : pas de `push(...gros_tableau)` ici — le spread passe chaque ligne en
   // argument d'appel et fait déborder la pile au-delà de ~100k éléments
   // (RangeError sur les calques départementaux type limites_parcelles).
+  // `*SourceEntities` reste STRICTEMENT en lockstep (même ordre, même longueur)
+  // avec le tableau de lignes correspondant — cf. § 53 (type source exact d'un
+  // dangle, plutôt qu'un proxy déduit du nombre de sommets).
   const sectionLines: number[][][] = [];
-  for (const l of boundaryLinesByClass[SECTION_BOUNDARY_CLASS] ?? []) sectionLines.push(l);
-  for (const l of authoredSectionEdges) sectionLines.push(l);
+  const sectionLineSourceEntities: string[] = [];
+  const sectionSrc = boundarySourceEntityByClass[SECTION_BOUNDARY_CLASS] ?? [];
+  (boundaryLinesByClass[SECTION_BOUNDARY_CLASS] ?? []).forEach((l, i) => {
+    sectionLines.push(l);
+    sectionLineSourceEntities.push(sectionSrc[i] ?? "?");
+  });
+  for (let i = 0; i < authoredSectionEdges.length; i++) {
+    sectionLines.push(authoredSectionEdges[i]);
+    sectionLineSourceEntities.push(authoredSectionEdgeSourceEntities[i]);
+  }
   const piscineLines = boundaryLinesByClass[PISCINE_CLASS] ?? [];
+  const piscineLineSourceEntities = boundarySourceEntityByClass[PISCINE_CLASS] ?? [];
   const parcelLines: number[][][] = [];
+  const parcelLineSourceEntities: string[] = [];
   for (const [layerClass, lines] of Object.entries(boundaryLinesByClass)) {
     if (layerClass === SECTION_BOUNDARY_CLASS || layerClass === PISCINE_CLASS) continue;
-    for (const l of lines) parcelLines.push(l);
+    const src = boundarySourceEntityByClass[layerClass] ?? [];
+    lines.forEach((l, i) => {
+      parcelLines.push(l);
+      parcelLineSourceEntities.push(src[i] ?? "?");
+    });
   }
-  for (const l of sectionLines) parcelLines.push(l);
+  for (let i = 0; i < sectionLines.length; i++) {
+    parcelLines.push(sectionLines[i]);
+    parcelLineSourceEntities.push(sectionLineSourceEntities[i]);
+  }
+  // Arêtes des anneaux "authored" touchés (§ 53 bis, ci-dessus) — réinjectées
+  // dans le MÊME réseau que les limites ouvertes pour que noding/polygonizer
+  // puisse enfin raccorder leurs subdivisions intérieures à leur bord.
+  for (let i = 0; i < ringEdgeLines.length; i++) {
+    parcelLines.push(ringEdgeLines[i]);
+    parcelLineSourceEntities.push(ringEdgeSourceEntities[i]);
+  }
 
   const networks: Array<{
     label: string;
     lines: number[][][];
+    sourceEntities: string[];
     target: RawPolygon[];
     isSection: boolean;
     snapTol?: number;
   }> = [
-    { label: "limites de parcelles (réseau unifié)", lines: parcelLines, target: parcelPolygons, isSection: false },
+    { label: "limites de parcelles (réseau unifié)", lines: parcelLines, sourceEntities: parcelLineSourceEntities, target: parcelPolygons, isSection: false },
     {
       label: SECTION_BOUNDARY_CLASS,
       lines: sectionLines,
+      sourceEntities: sectionLineSourceEntities,
       target: sectionPolygons,
       isSection: true,
       // Tolérance élargie : trous d'accrochage métriques sur les tracés de sections.
       snapTol: SECTION_SNAP_TOLERANCE_M,
     },
-    { label: PISCINE_CLASS, lines: piscineLines, target: piscinePolygons, isSection: false },
+    { label: PISCINE_CLASS, lines: piscineLines, sourceEntities: piscineLineSourceEntities, target: piscinePolygons, isSection: false },
   ];
 
   for (const net of networks) {
@@ -1173,6 +1287,8 @@ function polygonizeBoundaries(
         minAreaM2: POLYGONIZE_MIN_AREA_M2,
         ...(net.snapTol != null ? { snapToleranceM: net.snapTol } : {}),
         droppedRegions,
+        dangles,
+        lineSourceEntities: net.sourceEntities,
       });
     } catch (err) {
       console.warn(`[parcelle-ingestion] polygonisation échouée pour ${net.label}:`, err);
@@ -1195,7 +1311,7 @@ function polygonizeBoundaries(
     }
   }
 
-  return { reconstructed, oversized, droppedRegions };
+  return { reconstructed, oversized, droppedRegions, dangles };
 }
 
 /** Point représentatif garanti à l'intérieur de la géométrie (pour les jointures). */
@@ -1543,7 +1659,7 @@ function blankIngestionReport(warnings: string[] = []): DxfIngestionReport {
     nbParcelles: 0, nbSansNumero: 0, nbSansDenomination: 0, nbSansProprietaire: 0,
     nbSansSection: 0, nbSansCommune2026: 0, nbCommune2026Approx: 0,
     nbSectionDepuisTableSections: 0, nbSectionApprox: 0, nbNumeroNonConforme: 0,
-    nbPiscines: 0, nbParcellesPolygonisees: 0, nbZonesPolygonisationEchouee: 0, nbPolygonesEnveloppeIgnores: 0, nbHorsEmprise: 0,
+    nbPiscines: 0, nbParcellesPolygonisees: 0, nbZonesPolygonisationEchouee: 0, nbLimitesNonRefermees: 0, nbPolygonesEnveloppeIgnores: 0, nbHorsEmprise: 0,
     nbPolylignesOuvertesIgnorees: 0, nbLignesTropCourtesIgnorees: 0, nbArcsSplinesCourtsIgnores: 0, nbTextesHorsParcelle: 0, nbNumerosRecuperesParDebordement: 0,
     nbParcellesMultiNumeros: 0,
     nbPolygonesInvalidesRejetes: 0,
@@ -1577,6 +1693,7 @@ export function buildParcellesFromFc32628(
     labels,
     sectionLabels,
     boundaryLinesByClass,
+    boundarySourceEntityByClass,
     nbHorsEmprise,
     nbPolylignesOuvertesIgnorees,
     nbAutresCouchesIgnorees,
@@ -1592,7 +1709,8 @@ export function buildParcellesFromFc32628(
     reconstructed: nbParcellesPolygonisees,
     oversized: nbPolygonesEnveloppeIgnores,
     droppedRegions: nbParcellesZonesIrrecuperablesRegions,
-  } = polygonizeBoundaries(boundaryLinesByClass, parcelPolygons, sectionPolygons, piscinePolygons);
+    dangles: limitesNonRefermees,
+  } = polygonizeBoundaries(boundaryLinesByClass, boundarySourceEntityByClass, parcelPolygons, sectionPolygons, piscinePolygons);
   const nbZonesPolygonisationEchouee = nbParcellesZonesIrrecuperablesRegions.length;
   if (nbZonesPolygonisationEchouee > 0) {
     const totalSegments = nbParcellesZonesIrrecuperablesRegions.reduce((s, r) => s + r.segments, 0);
@@ -1606,6 +1724,31 @@ export function buildParcellesFromFc32628(
           .join(" ; ") +
         (nbZonesPolygonisationEchouee > 5 ? `, +${nbZonesPolygonisationEchouee - 5} autre(s)` : "") +
         "."
+    );
+  }
+  // Cf. § 53, docs/CONCEPTS-TRAITEMENT-DXF.md : segments restés pendants (écart
+  // premier/dernier sommet > tolérance de raccord) — décompte DIAGNOSTIC, pas
+  // une nouvelle règle de rejet (comportement inchangé). En tuilé, un même
+  // segment en marge de plusieurs tuiles peut être compté plusieurs fois.
+  const nbLimitesNonRefermees = limitesNonRefermees.length;
+  if (nbLimitesNonRefermees > 0) {
+    const totalLongueurM = limitesNonRefermees.reduce((s, d) => s + d.lengthM, 0);
+    // Candidats sûrs pour une fermeture dédiée (§ 53) : écart 1er/dernier
+    // sommet ≤ 2 m, sans toucher à `snapToleranceM` (donc sans risque de
+    // fusionner deux sommets cadastraux distincts ailleurs dans le fichier).
+    const nbEcartFaible = limitesNonRefermees.filter((d) => d.selfGapM <= 2).length;
+    // Type DXF source exact (`_dgid_source_entity`, "?" = pas de correspondance
+    // exacte — cf. `roundedLineKey`, polygonize.ts) plutôt qu'un proxy déduit
+    // du nombre de sommets.
+    const bySource = new Map<string, number>();
+    for (const d of limitesNonRefermees) bySource.set(d.sourceEntity, (bySource.get(d.sourceEntity) ?? 0) + 1);
+    const sourceBreakdown = [...bySource.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(", ");
+    warnings.push(
+      `${nbLimitesNonRefermees} segment(s) de limite resté(s) pendant(s) après raccord ` +
+        `(${totalLongueurM.toFixed(0)} m cumulés, comptage par tuile — surcompte possible en marge) : ` +
+        "aucune parcelle reconstruite pour ces segments (écart entre extrémités > tolérance de raccord). " +
+        `${nbEcartFaible} ont un écart 1er/dernier sommet ≤ 2 m (candidats probables à une fermeture dédiée). ` +
+        `Type source : ${sourceBreakdown}.`
     );
   }
   _t = phase(`polygonize (+${nbParcellesPolygonisees})`, _t);
@@ -2063,6 +2206,7 @@ export function buildParcellesFromFc32628(
       nbPiscines,
       nbParcellesPolygonisees,
       nbZonesPolygonisationEchouee,
+      nbLimitesNonRefermees,
       nbPolygonesEnveloppeIgnores: nbParcellesTropGrandes,
       nbHorsEmprise,
       nbPolylignesOuvertesIgnorees,

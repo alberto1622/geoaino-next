@@ -72,6 +72,25 @@ export interface PolygonizeOptions {
    * (serveur) signalait la perte : invisible depuis le navigateur (§ 28).
    */
   droppedRegions?: Array<{ x0: number; y0: number; x1: number; y1: number; segments: number }>;
+  /**
+   * Rempli (si fourni) par les segments de limite restés PENDANTS après
+   * `healUndershoots` (extrémité à plus de `snapToleranceM` de tout autre
+   * sommet/segment) : le `Polygonizer` JSTS les exclut silencieusement de
+   * `getPolygons()` (`this._dangles = this._graph.deleteDangles()`), sans
+   * qu'aucun autre compteur du pipeline ne les recense — contrairement à
+   * `droppedRegions` (région entière abandonnée) ou aux entités de type non
+   * géré (§ 50-52), ce cas correspond à une entité BIEN émise, sur un calque
+   * polygonisable, juste jamais refermée en anneau. Cf. § 53,
+   * docs/CONCEPTS-TRAITEMENT-DXF.md.
+   */
+  dangles?: Array<{ x0: number; y0: number; x1: number; y1: number; lengthM: number; selfGapM: number; numVertices: number; sourceEntity: string }>;
+  /**
+   * Type DXF source (`_dgid_source_entity`) de chaque ligne de `lines`, MÊME
+   * INDEX/ORDRE (cf. `parcelle-ingestion.ts` · `boundarySourceEntityByClass`).
+   * Utilisé UNIQUEMENT pour retrouver le type exact d'un dangle isolé après
+   * raccord (§ 53) — ne participe à aucun calcul géométrique.
+   */
+  lineSourceEntities?: string[];
 }
 
 const TILE_THRESHOLD = Number(process.env.DXF_POLYGONIZE_TILE_THRESHOLD || 20000);
@@ -101,11 +120,20 @@ const TILE_MIN_SIZE_M = Number(process.env.DXF_POLYGONIZE_TILE_MIN_SIZE_M || 500
 // SANS tenter le noding au-delà de ce seuil transforme un blocage de plusieurs
 // heures en une zone perdue mais comptée (même mécanique que `droppedRegions`).
 const TILE_HARD_DROP_SEGMENTS = Number(process.env.DXF_POLYGONIZE_TILE_HARD_DROP_SEGMENTS || 20000);
-// Tolérance de raccord des extrémités pendantes (cf. `healUndershoots`). Une
-// vraie limite de parcelle s'arrête rarement à > 25 cm de sa voisine, et deux
-// sommets cadastraux distincts sont à plusieurs mètres l'un de l'autre : 25 cm
-// referme les trous de numérisation sans fusionner de sommets légitimes.
-const SNAP_TOLERANCE_M = Number(process.env.DXF_POLYGONIZE_SNAP_TOLERANCE_M ?? 0.25);
+// Tolérance de raccord des extrémités pendantes (cf. `healUndershoots`). Deux
+// sommets cadastraux distincts sont à plusieurs mètres l'un de l'autre (le
+// plus petit écartement observé sur les limites de refend, § 53, est de
+// l'ordre de 10 m) : 1 m referme les trous de numérisation sans risquer de
+// fusionner deux sommets légitimes. Valeur alignée sur `SECTION_SNAP_TOLERANCE_M`
+// (parcelle-ingestion.ts), déjà utilisée en production pour le réseau sections
+// sans problème observé. Relevée de 25 cm à 1 m (§ 53, patron « presque
+// fermable ») après mesure sur ZIG.dxf : sur les dangles à distance mini
+// 0,25-1 m d'un autre dangle (≈14 % des 33 134 dangles distincts du réseau
+// parcelles), la quasi-totalité correspond à un vrai écart de numérisation,
+// pas à deux sommets distincts rapprochés par coïncidence. Le lot 1-2 m
+// (≈9 % de plus) reste hors de cette tolérance — laissé de côté par prudence,
+// non mesuré aussi finement.
+const SNAP_TOLERANCE_M = Number(process.env.DXF_POLYGONIZE_SNAP_TOLERANCE_M ?? 1);
 
 type LineBBox = [number, number, number, number]; // [minX, minY, maxX, maxY]
 
@@ -180,6 +208,8 @@ interface HealStats {
    * remonter jusqu'aux avertissements d'ingestion (§ 28).
    */
   droppedRegions: Array<{ x0: number; y0: number; x1: number; y1: number; segments: number }>;
+  /** Cf. `PolygonizeOptions.dangles`. */
+  dangles: Array<{ x0: number; y0: number; x1: number; y1: number; lengthM: number; selfGapM: number; numVertices: number; sourceEntity: string }>;
 }
 
 /**
@@ -439,17 +469,50 @@ function healUndershoots(lines: LineCoords[], tol: number, stats?: HealStats): L
   return out;
 }
 
+/**
+ * Clé canonique (orientation neutralisée, comme `canonicalLineKey`) mais
+ * arrondie au mm — tolère les micro-perturbations flottantes introduites par
+ * `GeometryPrecisionReducer`/`UnaryUnionOp` (§ 53). Sert UNIQUEMENT à retrouver
+ * le type source d'un dangle après noding, jamais à la déduplication
+ * géométrique (`canonicalLineKey`, qui doit rester une égalité stricte).
+ * Un dangle dont la clé ne trouve aucune correspondance (ex. tuile retombée
+ * sur une échelle de précision plus grossière que 1 mm, cf. `PRECISION_SCALES`)
+ * reste marqué "?" plutôt que de deviner — jamais de faux positif.
+ */
+function roundedLineKey(coords: Array<{ x: number; y: number }> | number[][]): string {
+  const round = (n: number) => Math.round(n * 1000) / 1000;
+  const pts = (coords as Array<{ x: number; y: number } | number[]>).map((c) => {
+    const [x, y] = Array.isArray(c) ? c : [c.x, c.y];
+    return `${round(x)},${round(y)}`;
+  });
+  const rev = pts.slice().reverse().join(";");
+  const fwd = pts.join(";");
+  return fwd < rev ? fwd : rev;
+}
+
 function polygonizeChunk(
   lines: LineCoords[],
   minArea: number,
   maxArea: number,
   ownsPolygon?: (cx: number, cy: number) => boolean,
   snapTol = 0,
-  stats?: HealStats
+  stats?: HealStats,
+  sourceEntities?: string[]
 ): GeoJSON.Polygon[] {
   // Raccord des micro-trous (undershoots/coins ouverts) avant noding : sans lui,
   // les limites mitoyennes pendantes font fusionner les parcelles voisines.
   const healed = healUndershoots(lines, snapTol, stats);
+
+  // Type source EXACT (§ 53) d'un dangle isolé : table de correspondance
+  // clé-arrondie(ligne après raccord) → `_dgid_source_entity`, construite AVANT
+  // le passage par `GeometryPrecisionReducer` (qui peut légèrement déplacer les
+  // coordonnées, cf. `roundedLineKey`) — `healed` est le dernier état des
+  // coordonnées encore indexé en lockstep avec `sourceEntities`.
+  let sourceByKey: Map<string, string> | null = null;
+  if (stats && sourceEntities) {
+    sourceByKey = new Map();
+    healed.forEach((l, i) => sourceByKey!.set(roundedLineKey(l), sourceEntities[i] ?? "?"));
+  }
 
   const gf = new jsts.geom.GeometryFactory();
   const jstsLines = healed
@@ -478,6 +541,46 @@ function polygonizeChunk(
     }
     result.push({ type: "Polygon", coordinates: jstsPolygonToCoordinates(poly) });
   }
+
+  // Segments restés pendants après `healUndershoots` (§ 53) : jamais dans
+  // `getPolygons()`, donc invisibles sans cet appel dédié. Diagnostic
+  // uniquement — ne change aucun comportement, juste le recensement.
+  if (stats) {
+    for (const dangle of polygonizer.getDangles().toArray()) {
+      const env = dangle.getEnvelopeInternal();
+      // Écart d'auto-fermeture : distance entre le PREMIER et le DERNIER
+      // sommet de ce dangle. Pour une entité isolée (aucune intersection
+      // avec une autre limite, donc jamais fragmentée par le noding — cas
+      // image-8.png), le dangle EST l'entité d'origine en entier : cette
+      // distance est alors l'écart réel entre son premier et son dernier
+      // sommet dessinés, indépendamment de tout autre segment du fichier.
+      // Un petit écart signale un candidat sûr pour une fermeture dédiée
+      // (ne touche PAS `snapToleranceM`, donc aucun risque de fusionner deux
+      // sommets cadastraux distincts ailleurs — cf. pièges § 53).
+      const coords = dangle.getCoordinates();
+      const first = coords[0];
+      const last = coords[coords.length - 1];
+      const dx = last.x - first.x;
+      const dy = last.y - first.y;
+      stats.dangles.push({
+        x0: env.getMinX(),
+        y0: env.getMinY(),
+        x1: env.getMaxX(),
+        y1: env.getMaxY(),
+        lengthM: dangle.getLength(),
+        selfGapM: Math.sqrt(dx * dx + dy * dy),
+        // Conservé à titre de recoupement (proxy géométrique) désormais
+        // doublé du VRAI type source ci-dessous — cf. § 53.
+        numVertices: coords.length,
+        // Type DXF source EXACT (`_dgid_source_entity`), retrouvé via la clé
+        // arrondie de ce dangle. "?" = pas de correspondance exacte (dangle
+        // né d'une fusion/fragmentation par le noding avec une autre ligne,
+        // ou tuile retombée sur une échelle de précision plus grossière que
+        // 1 mm) — jamais deviné, cf. `roundedLineKey`.
+        sourceEntity: sourceByKey?.get(roundedLineKey(coords)) ?? "?",
+      });
+    }
+  }
   return result;
 }
 
@@ -496,7 +599,8 @@ function polygonizeTiled(
   targetSegments: number,
   marginM: number,
   snapTol: number,
-  stats?: HealStats
+  stats?: HealStats,
+  sourceEntities?: string[]
 ): GeoJSON.Polygon[] {
   const bboxes = lines.map(lineBBox);
 
@@ -583,6 +687,7 @@ function polygonizeTiled(
     }
 
     const coords = idxs.map((i) => lines[i]);
+    const coordsSourceEntities = sourceEntities ? idxs.map((i) => sourceEntities[i]) : undefined;
     const owns = (cx: number, cy: number) =>
       cx >= rx0 && cx < rx1 && cy >= ry0 && cy < ry1;
     // Seuil purement diagnostique (pas de comportement changé) : un bloc de
@@ -598,7 +703,7 @@ function polygonizeTiled(
       );
     }
     try {
-      for (const poly of polygonizeChunk(coords, minArea, maxArea, owns, snapTol, stats)) {
+      for (const poly of polygonizeChunk(coords, minArea, maxArea, owns, snapTol, stats, coordsSourceEntities)) {
         result.push(poly);
       }
       if (isSlow) {
@@ -718,19 +823,23 @@ export function polygonizeLines(
   const tileThreshold = options.tileThreshold ?? TILE_THRESHOLD;
   const snapTol = options.snapToleranceM ?? SNAP_TOLERANCE_M;
 
+  const srcIn = options.lineSourceEntities;
   const seenKeys = new Set<string>();
   const usable: LineCoords[] = [];
+  // Lockstep avec `usable` (même index) — cf. § 53, `PolygonizeOptions.lineSourceEntities`.
+  const usableSourceEntities: string[] = [];
   let duplicates = 0;
-  for (const l of lines) {
-    if (!Array.isArray(l) || l.length < 2) continue;
+  lines.forEach((l, i) => {
+    if (!Array.isArray(l) || l.length < 2) return;
     const key = canonicalLineKey(l);
     if (seenKeys.has(key)) {
       duplicates++;
-      continue;
+      return;
     }
     seenKeys.add(key);
     usable.push(l);
-  }
+    if (srcIn) usableSourceEntities.push(srcIn[i] ?? "?");
+  });
   if (duplicates > 0) {
     console.info(`[polygonize] ${duplicates} ligne(s) dupliquée(s) écartée(s) avant noding.`);
   }
@@ -740,10 +849,12 @@ export function polygonizeLines(
     endpointsClustered: 0,
     endpointsSnapped: 0,
     droppedRegions: options.droppedRegions ?? [],
+    dangles: options.dangles ?? [],
   };
+  const usableSrc = srcIn ? usableSourceEntities : undefined;
   const result =
     usable.length <= tileThreshold
-      ? polygonizeChunk(usable, minArea, maxArea, undefined, snapTol, stats)
+      ? polygonizeChunk(usable, minArea, maxArea, undefined, snapTol, stats, usableSrc)
       : polygonizeTiled(
           usable,
           minArea,
@@ -751,7 +862,8 @@ export function polygonizeLines(
           options.tileTargetSegments ?? TILE_TARGET_SEGMENTS,
           options.tileMarginM ?? TILE_MARGIN_M,
           snapTol,
-          stats
+          stats,
+          usableSrc
         );
 
   if (stats.endpointsClustered > 0 || stats.endpointsSnapped > 0) {
@@ -760,6 +872,42 @@ export function polygonizeLines(
         `${stats.endpointsClustered} extrémité(s) regroupée(s), ` +
         `${stats.endpointsSnapped} raccrochée(s) à un segment/sommet` +
         (usable.length > tileThreshold ? " (occurrences par tuile, marges comprises)" : "")
+    );
+  }
+  if (stats.dangles.length > 0) {
+    const totalLengthM = stats.dangles.reduce((s, d) => s + d.lengthM, 0);
+    // Répartition par écart d'auto-fermeture (cf. commentaire `selfGapM` dans
+    // `polygonizeChunk`) : distingue les candidats sûrs pour une fermeture
+    // dédiée (petit écart, cf. § 53) du reste (chaînes réellement ouvertes,
+    // ou dangle né d'un fragment issu du noding avec d'autres lignes — pas
+    // un écart d'auto-fermeture significatif dans ce cas).
+    const buckets = [0.5, 1, 2, 5, 10, Infinity];
+    const labels = ["≤0.5m", "0.5-1m", "1-2m", "2-5m", "5-10m", ">10m"];
+    const counts = new Array(buckets.length).fill(0);
+    for (const d of stats.dangles) {
+      const i = buckets.findIndex((b) => d.selfGapM <= b);
+      counts[i >= 0 ? i : buckets.length - 1]++;
+    }
+    const histogram = labels.map((l, i) => `${l}=${counts[i]}`).join(", ");
+    // Type source EXACT (`_dgid_source_entity`, "?" = pas de correspondance
+    // exacte — cf. `roundedLineKey`) — remplace le proxy `numVertices` par un
+    // décompte par type réel, trié décroissant.
+    const bySource = new Map<string, number>();
+    for (const d of stats.dangles) bySource.set(d.sourceEntity, (bySource.get(d.sourceEntity) ?? 0) + 1);
+    const sourceBreakdown = [...bySource.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(", ");
+    // Même répartition, limitée aux candidats sûrs (écart ≤ 2 m).
+    const surs = stats.dangles.filter((d) => d.selfGapM <= 2);
+    const bySourceSurs = new Map<string, number>();
+    for (const d of surs) bySourceSurs.set(d.sourceEntity, (bySourceSurs.get(d.sourceEntity) ?? 0) + 1);
+    const sourceBreakdownSurs = [...bySourceSurs.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(", ");
+    console.warn(
+      `[polygonize] ${stats.dangles.length} segment(s) de limite resté(s) pendant(s) ` +
+        `après raccord (tol=${snapTol} m), ${totalLengthM.toFixed(0)} m cumulés — ` +
+        "aucun polygone reconstruit pour ces segments (§ 53)" +
+        (usable.length > tileThreshold ? " (occurrences par tuile, marges comprises — surcompte possible)." : ".") +
+        ` Écart 1er/dernier sommet : ${histogram}.` +
+        ` Type source exact : ${sourceBreakdown}.` +
+        ` Parmi les écarts ≤2m : ${sourceBreakdownSurs}.`
     );
   }
   return result;

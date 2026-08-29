@@ -53,3 +53,5 @@ ML/data/
 ML/models/
 __pycache__/
 *.pyc
+
+.mcp.json

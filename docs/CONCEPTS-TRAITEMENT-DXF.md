@@ -186,6 +186,27 @@ calque.
 
 Voir aussi le tuilage (pourquoi partitionner) : [support §6.3](./SUPPORT-COURS-GEOMATIQUE.md#6-polygonisation--de-segments-épars-à-des-parcelles).
 
+> **Question récurrente (image-14.png : trois parcelles 00239/00237/00235 en
+> rangée) : une ligne de façade qui court sur PLUSIEURS parcelles à la fois,
+> ou un côté de parcelle dessiné en PLUSIEURS segments bout à bout — est-ce
+> pris en compte ?** Oui, nativement, et ce n'est même pas un cas particulier
+> à gérer : le noding (ci-dessus) traite tout le calque comme un tas de
+> segments indifférencié, sans notion de « ceci est le côté de telle
+> parcelle ». Une ligne unique servant de façade à 3 parcelles est
+> **découpée automatiquement** à chaque point où une séparative la touche
+> (le noder insère un nœud à chaque intersection/contact, y compris un
+> contact en T) ; plusieurs segments collinéaires mis bout à bout pour UN
+> seul côté produisent juste un sommet intermédiaire de plus sur l'anneau
+> final, sans incidence sur l'aire ni la forme. Vérifié par un test
+> synthétique (`scripts/test-shared-line-tmp.ts`, supprimé après usage) :
+> une façade haute et une façade basse UNIQUES couvrant 3 parcelles de
+> 10×10 m, plus une séparative volontairement coupée en deux segments
+> bout à bout — les 3 polygones ressortent correctement, aire exacte
+> 100,0 m² chacun. **Le seul cas qui casse réellement la fermeture reste
+> celui déjà documenté ci-dessous (§ 4 bis, § 53) : un VRAI écart entre
+> deux extrémités qui devraient se toucher** (undershoot), pas la façon
+> dont le dessin répartit les segments entre parcelles/côtés.
+
 ---
 
 ## 4 bis. Raccord des micro-trous : parcelles voisines fusionnées (dangles)
@@ -4163,6 +4184,806 @@ déterministe simple l'a révélé alors que le modèle boosté le masquait.
 Second piège : ne jamais bannir catégoriquement un type d'entité sans seuil
 de secours — `ARC`/`SPLINE` portent aussi de vraies limites courbes, d'où un
 seuil plus haut plutôt qu'une exclusion totale.
+
+---
+
+## 50. Entités `SHAPE`/`MLINE` sur le calque « Limites Parcelles » : deux types DXF entièrement ignorés, jamais comptés parmi les causes de perte connues
+
+**Problème métier** : sur certains exports ZIG.dxf, une partie des parcelles
+du calque « Limites Parcelles » dessinées avec les types DXF `SHAPE`
+(contour fermé, souvent un équivalent DXF non standard de la forme DGN
+« Shape ») et `MLINE` (ligne parallèle multiple — équivalent DGN
+« Multi-line ») n'étaient jamais récupérées. Contrairement au HATCH (§ ce
+même besoin déjà anticipé par le commentaire de `emitGeometryFeatures`), ces
+deux types ne sont pas de simples remplissages redondants avec un contour
+déjà tracé en `LINE`/`LWPOLYLINE` ailleurs : ils PORTENT eux-mêmes les
+sommets de la limite.
+
+**Cause technique** : `emitGeometryFeatures` (`dxf-native.ts`) ne traitait
+explicitement que `INSERT`, `TEXT`/`MTEXT`/`ATTRIB`, `POINT`, `3DFACE`/`SOLID`,
+`LINE`/`LWPOLYLINE`/`POLYLINE`, `ARC`, `CIRCLE`, `ELLIPSE`, `SPLINE`. `SHAPE`
+et `MLINE` tombaient dans le bucket générique de fin de fonction
+(`type_non_gere_shape` / `type_non_gere_mline`) — comptés dans la
+réconciliation anti-perte (§28), donc jamais perdus *silencieusement*, mais
+jamais non plus convertis en géométrie. Une limite de parcelle dessinée en
+`SHAPE`/`MLINE` laissait donc un trou dans le réseau de segments fourni au
+`Polygonizer` (`polygonize.ts`) → anneau jamais fermé → parcelle absente,
+sans qu'aucun message d'erreur ne pointe vers la cause réelle (seul le
+compteur `skipReasons` du rapport de réconciliation, peu consulté en usage
+courant, la révélait).
+
+**Solution** (`dxf-native.ts` · `emitGeometryFeatures` / `parseEntities`) :
+- Le tokenizer accumulait déjà correctement les sommets de `SHAPE` et
+  `MLINE` dans `e.verts` SANS modification : le repli générique des codes
+  10/20 (`case "10"`/`case "20"`, hors `INSERT`/`LINE`) pousse un nouveau
+  sommet à chaque occurrence du code 10, quel que soit le type d'entité —
+  déjà vrai pour `LWPOLYLINE`. Les codes 11/21 (vecteur de direction de
+  segment MLINE) et 12/22 (vecteur de biseau) ne sont interceptés par aucune
+  branche `MLINE` du switch : ils restent donc ignorés sans corrompre
+  `e.verts`, comme pour tout type non `3DFACE`/`SOLID`/`ELLIPSE`/`TEXT`/`ATTRIB`.
+- Ajout d'un `case "71"` dédié : pour `MLINE`, le bit 0 (valeur 1) du drapeau
+  groupe 71 signifie « fermé » — À NE PAS CONFONDRE avec le groupe 70 de ce
+  même type, qui encode la justification (0/1/2) et non un état
+  fermé/ouvert. Le groupe 71 arrivant toujours après le 70 dans l'ordre DXF
+  de `MLINE`, il écrase sans risque la valeur transitoire (et non
+  pertinente) que le `case "70"` générique aurait pu écrire.
+- `SHAPE`/`MLINE` rejoignent la branche d'émission `LINE`/`LWPOLYLINE`/
+  `POLYLINE` (réutilisant `densifyPolyline`, sans effet ici car ni l'un ni
+  l'autre ne porte de renflement/bulge). Différence pour `SHAPE` : ce type
+  ne possède AUCUN drapeau « fermé » en DXF standard (il ne code qu'une
+  glyphe ponctuelle dans son usage officiel — 1 seul sommet) ; dès qu'un
+  export en fournit ≥ 3 sommets, il s'agit forcément d'un contour et non
+  d'un placement de symbole, donc traité comme TOUJOURS fermé
+  (`closed = e.type === "SHAPE" || e.closed`). Un `SHAPE` à 1 sommet (vrai
+  usage DXF officiel — placement de glyphe) reste écarté sans régression
+  (`polyligne_moins_2_sommets`), inchangé par rapport à avant.
+
+**Pourquoi (pièges inclus)** : le piège principal est le groupe 70 partagé
+entre plusieurs types d'entités DXF avec des sémantiques radicalement
+différentes selon le type — déjà rencontré pour TEXT/MTEXT au § 27 bis/28
+bis (codes 72/73/11/21). Pour `MLINE`, le groupe 70 (justification) *peut*
+accidentellement ressembler à un booléen (valeurs 0/1/2) et se faire lire à
+tort comme un drapeau « fermé » si on réutilise naïvement le `case "70"`
+générique qui sert déjà `LWPOLYLINE`/`POLYLINE`/`SPLINE` — d'où le `case
+"71"` séparé plutôt qu'une extension du `case "70"` existant. Second piège :
+un test unitaire avec la mauvaise valeur de bit (`71=2`, « suppress start
+caps », au lieu de `71=1`, « closed ») aurait laissé croire à un bug côté
+émission alors que la lecture du bit était correcte — vérifier la table de
+bits DXF officielle plutôt que deviner par analogie avec `LWPOLYLINE`
+(dont le bit « fermé » est aussi la valeur 1, par coïncidence, ce qui a
+initialement semblé confirmer un mauvais souvenir de la table `MLINE`).
+
+**Audit général (`scripts/audit-shapes-tmp.ts`, supprimé après usage) : les
+types DXF `SHAPE`/`MLINE` sont ABSENTS de ZIG.dxf.** Réconciliation
+lecteur : 0 occurrence de `SHAPE` ou `MLINE` dans `census.seen` sur
+l'ensemble des 906 114 entités du fichier — ce correctif, bien que
+nécessaire en général (un export ODA/MicroStation différent peut très bien
+produire ces types, cf. cause technique ci-dessus), n'est **jamais exercé
+sur ce jeu de données réel**. Quand MicroStation identifie un élément comme
+« Shape » (tooltip natif), l'export DXF de ZIG.dxf le matérialise en
+pratique via `LWPOLYLINE` fermée (43 940 anneaux sur « Limites Parcelles »)
+ou `HATCH` (39 069 anneaux, § 51) — jamais en `SHAPE` DXF littéral. À
+retenir pour tout diagnostic futur sur un « Shape » MicroStation non
+récupéré : chercher d'abord côté `LWPOLYLINE`/`HATCH` (§ 51), pas ce
+paragraphe, sauf sur un export DGN→DXF différent qui produirait
+effectivement des `SHAPE`/`MLINE` (à revérifier `census.seen` avant de
+conclure).
+
+---
+
+## 51. Entités `HATCH` sur le calque « Limites Parcelles » : le remplissage d'un Shape MicroStation exporté SANS contour séparé
+
+**Problème métier** : une capture MicroStation d'un élément de type natif
+`Shape` (rempli, `Level: Limites Parcelles`) a révélé qu'un Shape DGN n'est
+pas systématiquement exporté en DXF avec une polyligne de bord dédiée. Le
+remplissage plein visible à l'écran correspond, côté DXF, à une entité
+`HATCH` — et pour une partie d'entre elles, ce `HATCH` est la SEULE trace du
+contour de la parcelle dans le fichier (pas de `LINE`/`LWPOLYLINE` redondante
+ailleurs). Un diagnostic ciblé sur le calque « Limites Parcelles » du vrai
+ZIG.dxf (43 129 `HATCH`) a confirmé le phénomène : après reconstruction d'un
+point intérieur fiable par entité (voir piège ci-dessous) et comparaison aux
+anneaux déjà fermés du fichier, ~5,8 % des `HATCH` n'avaient AUCUN contour
+fermé existant à leur emplacement — donc, avant ce correctif, ~5,8 % des
+parcelles dessinées en Shape rempli disparaissaient silencieusement du
+recensement (comptées `type_non_gere_hatch`, jamais matérialisées).
+
+**Cause technique** : `emitGeometryFeatures` (`dxf-native.ts`) plaçait
+`HATCH` dans le bucket générique de fin de fonction, avec l'hypothèse
+(commentée dans le code, jamais vérifiée sur ce jeu de données réel) que son
+contour serait « quasi toujours » aussi dessiné en segments ailleurs. Cette
+hypothèse ne tient pas pour les Shapes MicroStation exportés directement en
+remplissage sans double capture du contour.
+
+**Solution** (`dxf-native.ts` · `parseHatchLoops` / `emitGeometryFeatures` /
+`parseEntities`) :
+- `HATCH` est court-circuité **avant** le switch générique code-10/20 de
+  `parseEntities` : contrairement à `LWPOLYLINE`/`MLINE`/`SHAPE`, les mêmes
+  codes de groupe (10/20/11/21/40/50/51/72/73) changent de sens à CHAQUE
+  étape du contour d'un `HATCH` (sommet de boucle polyligne, centre d'arc,
+  extrémité de segment, angles…) — les laisser passer par le repli générique
+  produirait un contour totalement faux (points mélangés sans rapport les
+  uns aux autres), pas juste un contour manquant.
+- `parseHatchLoops` lit séquentiellement les groupes bruts de l'entité avec
+  un état de position (boucle courante, sommet/edge courant) :
+  - groupe 91 = nombre de boucles (« boundary paths ») ;
+  - groupe 92 = type de boucle — bit 2 = polyligne (72=bulge, 73=fermé,
+    93=nb sommets, puis 10/20[/42] répétés) ; sinon suite d'« edges »
+    (93=nb edges, puis 72=type d'edge + champs spécifiques : Ligne
+    (1) = 10/20/11/21, Arc (2) = 10/20/40/50/51/73, Ellipse
+    (3) = 10/20/11/21/40/50/51/73) ;
+  - les arcs (circulaires et elliptiques) sont densifiés via les mêmes
+    `arcPoints`/`ellipsePoints` que les entités `ARC`/`ELLIPSE` autonomes,
+    en respectant le sens CCW/CW du drapeau 73 pour ne pas inverser le
+    contour ;
+  - une edge Spline (type 4) rend le curseur non fiable au-delà (structure à
+    longueur variable) : l'entité est alors abandonnée (boucles déjà lues
+    conservées) plutôt que de produire un contour erroné — comptée
+    `hatch_contour_non_analyse`, jamais silencieuse ;
+  - le bloc optionnel d'associativité (97 = nombre d'objets source, puis
+    330 répétés) est consommé pour garder le curseur aligné sur la boucle
+    suivante, sans être interprété (le contour dérivé de la géométrie prime
+    sur toute référence associative).
+- Une entité `HATCH` peut porter plusieurs boucles (îlots) : toutes émises
+  en `Polygon` séparés (pas de fusion en `Polygon` à trous), mais comptées
+  **une seule fois** côté réconciliation (`census.emitted`/`skipped` restent
+  par ENTITÉ, pas par boucle produite) — sinon `seen = emitted + skipped`
+  ne tiendrait plus dès qu'un `HATCH` produit 2+ features.
+- Validé sur le vrai ZIG.dxf : 41 369/43 129 `HATCH` convertis en géométrie
+  (95,9 %), dont 39 069 polygones sur le seul calque « Limites Parcelles » ;
+  1 760 écartés proprement (`hatch_contour_non_analyse`, essentiellement des
+  edges Spline).
+- **Effet net sur le total de parcelles (pipeline complet, pas le diagnostic
+  isolé)** : `ingestDxfToParcelles` rejoué de bout en bout sur le vrai
+  ZIG.dxf passe de 59 012 → **59 735 parcelles (+723, +1,2 %)**. Le gain
+  brut de 39 069 polygones `HATCH` n'apparaît PAS au même ordre de grandeur
+  dans le total final : `Doublons recouvrement` (42 189) et `Enveloppes
+  supprimées` (19 385) absorbent la quasi-totalité du surplus, exactement
+  comme l'annonçait le diagnostic ci-dessus (~94 % de ces `HATCH`
+  redondants avec un contour déjà polygonisé). Un +1,2 % sur ~59 000
+  parcelles peut sembler visuellement « pas de changement » en comparant
+  seulement le total affiché dans l'UI — toujours comparer le chiffre exact
+  (ou rejouer `scripts/test-zig.ts`) avant de conclure qu'un correctif de ce
+  type n'a aucun effet.
+
+**Pourquoi (pièges inclus)** :
+- Le point de semence DXF officiel d'un `HATCH` (groupe 98/10/20,
+  « garanti intérieur » par la norme) s'est révélé **`(0,0)` littéral** pour
+  une majorité des `HATCH` associatifs de ce jeu de données réel — un champ
+  manifestement jamais recalculé par l'outil d'export, PAS un bug de
+  lecture. Un diagnostic qui privilégie naïvement ce point plutôt que le
+  contour lui-même donne un faux ~96 % de « parcelles perdues » (au lieu de
+  ~5,8 %) : toujours dériver un point de contrôle depuis la géométrie
+  reconstruite (centroïde de boucle), jamais depuis la semence seule.
+- Piège de couplage avec le catch-all générique : `HATCH` doit être exclu
+  du repli code-10/20 (contrairement à `SHAPE`/`MLINE`, § 50, qui s'en
+  accommodent très bien) car pour `HATCH` ce repli ne produit pas une
+  géométrie *incomplète* mais une géométrie *fausse* — un piège plus
+  dangereux qu'un simple oubli, car silencieusement plausible (un polygone
+  est bien émis, juste avec des sommets sans rapport entre eux).
+- Ne pas confondre ce document avec le § 50 (`SHAPE`/`MLINE`) : les deux
+  partagent le même symptôme (« Shape » MicroStation dessiné dans le calque
+  Limites Parcelles, absent au recensement) mais deux causes DXF disjointes
+  — un Shape DGN peut s'exporter en `SHAPE` DXF (rare, glyphe à 1 sommet
+  dans son usage officiel, § 50), en contour fermé classique
+  (`LWPOLYLINE`/`POLYLINE`), ou en remplissage `HATCH` sans contour propre
+  (ce paragraphe) selon les réglages de l'export ODA/MicroStation.
+
+**Cas concret vérifié : « Associative Region » MicroStation, contour vs fond
+(imges/image-1.png, image-2.png, parcelle 00002)** — l'utilisateur a
+identifié, au clic MicroStation sur la MÊME parcelle, deux tooltips
+distincts : « Associative Region \ Complex Shape » (le fond rempli) et
+« Associative Region \ Line String » (le contour source), avec l'hypothèse
+que le contour (`Line String`) devrait être privilégié pour la
+polygonisation plutôt que le fond. Vérification sur les coordonnées réelles
+(`scripts/investigate-assoc-region-tmp.ts`, supprimé après usage), ancrée
+sur le libellé exact « 00002 » : à cet endroit, le calque « Limites
+Parcelles » ne porte QUE deux boucles `HATCH` adjacentes (le fond — donc le
+« Complex Shape ») et un unique fragment `LINE` isolé — **aucune
+`LWPOLYLINE`/contour fermé correspondant au « Line String » n'existe à cet
+endroit**. Le fond (`HATCH`) est ici la SEULE source exploitable, pas une
+option secondaire — cohérent avec le mécanisme déjà documenté plus haut dans
+cette section (Shape MicroStation exporté sans contour séparé). Vérification
+sur le pipeline complet (`ingestDxfToParcelles`, ZIG.dxf réel, 60 081
+parcelles) : **aucune parcelle ne sort à cet emplacement** (la parcelle
+« 00002 » la plus proche dans le résultat final est à 592 m — donc une autre
+section, sans rapport) : malgré une géométrie `HATCH` bien extraite en amont
+(`parseHatchLoops` réussit), la parcelle se perd EN AVAL. Piste la plus
+probable, non confirmée à ce stade : l'une des deux boucles `HATCH`
+adjacentes porte deux sommets quasi confondus (~1,5 m d'écart) hérités d'un
+raccord d'arc avec un contour bien plus grand situé ailleurs — plausible
+cause de rejet en validation géométrique (`nbPolygonesInvalidesRejetes`)
+plutôt qu'un problème de type d'entité. **Conclusion sur l'hypothèse de
+l'utilisateur** : privilégier systématiquement le « Line String » associatif
+plutôt que le « Complex Shape »/fond serait une régression sur ce cas précis
+— le fond est parfois la SEULE limite disponible. Le bon principe reste
+celui déjà validé plus haut dans ce document (§ « une ligne peut couvrir
+plusieurs parcelles ») : utiliser TOUTE géométrie de limite disponible,
+quel que soit son type source, et laisser le noding/la validation trancher —
+pas privilégier un type au détriment d'un autre.
+
+---
+
+## 52. Entités `REGION` (« Associative Region » MicroStation) : solide ACIS chiffré, non géré — mais impact réel négligeable après diagnostic
+
+**Problème métier** : une capture MicroStation d'un élément
+« Associative Region \ Complex Shape » (et sa variante « \ Line String »),
+`Level: Limites Parcelles`, a révélé un troisième type d'élément DGN
+susceptible de porter une limite de parcelle sans être reconnu par le
+lecteur natif. Les deux variantes MicroStation ("\ Complex Shape" et "\ Line
+String" ne décrivent que la courbe génératrice côté DGN) s'exportent vers le
+**même** type DXF : `REGION`. Sur le vrai ZIG.dxf : 89 `REGION` au total,
+dont **70 sur le calque « Limites Parcelles »**.
+
+**Cause technique** : `emitGeometryFeatures` (`dxf-native.ts`) place `REGION`
+dans le bucket générique de fin de fonction (comptée
+`type_non_gere_region`, jamais silencieuse, mais jamais convertie en
+géométrie). Contrairement à `HATCH` (§ 51), qui expose son contour via des
+groupes DXF ordinaires (91/92/93/10/20…), `REGION` encapsule un solide
+**ACIS** (représentation B-Rep : faces/boucles/arêtes/sommets) dans un flux
+de texte **« chiffré »** stocké en rafale de groupes 1 (`AcDbModelerGeometry`,
+groupe 70 = 1) — aucune coordonnée n'est lisible directement dans les
+groupes DXF eux-mêmes.
+
+**Diagnostic (pas d'implémentation en production — décision explicite,
+impact réel trop faible)** :
+- Le « chiffrement » ACIS n'est PAS une vraie protection : c'est une
+  substitution simple documentée par la bibliothèque open-source `ezdxf`
+  (`ezdxf/tools/crypt.py`, licence MIT) — XOR `0x5F` sur chaque octet, avec
+  quelques exceptions pour rester imprimable (espace inchangé, `@`↔`_`, et
+  les caractères `0x41`-`0x5E` mappés en miroir plutôt que XORés, pour ne
+  jamais produire de caractère de contrôle). Une fois déchiffré, le flux est
+  du texte ACIS SAT lisible (`21500 114 2 24`, `body $-1 -1 $-1 $2 …`,
+  `plane-surface …`, `edge …`, `point $-1 -1 $-1 <x> <y> <z> #`…).
+- Reconstruire le contour exact demanderait un vrai parseur topologique
+  B-Rep (faces → boucles → coedges → edges → vertices, dans le bon ordre de
+  parcours) — un chantier disproportionné pour ce volume. **Raccourci
+  choisi** : ne PAS reconstruire la topologie, seulement extraire tous les
+  records `point $<a> <b> $<c> <x> <y> <z> #` du flux déchiffré (regex sur
+  texte déjà lisible, aucune compréhension de la structure B-Rep requise) et
+  calculer leur **centroïde** — un point de contrôle approximatif mais
+  suffisant pour un test de redondance, pas pour produire une vraie
+  géométrie de parcelle.
+- Comparaison de ces 70 centroïdes aux 86 787 polygones déjà fermés du
+  fichier (mêmes anneaux « déjà fermés » que pour le diagnostic HATCH, § 51,
+  via `readDxfWorldFeatures` + test point-en-polygone sur grille 200 m) :
+  **61/70 (87 %) sont redondantes** — leur courbe génératrice existe déjà
+  ailleurs sous forme de contour fermé classique, même schéma que 94 % des
+  `HATCH`. **9/70 (13 %) n'ont aucun polygone existant à leur emplacement**
+  — soit ~0,015 % du total des parcelles du fichier (9 sur ~59 000),
+  regroupées en 2-3 foyers géographiques plutôt que dispersées.
+- **Décision** : ne pas implémenter de parseur ACIS/B-Rep en production.
+  Le ratio effort (déchiffrement + reconstruction topologique complète d'un
+  noyau CAD) / impact (9 parcelles sur ~59 000) ne le justifie pas — à
+  reconsidérer seulement si un futur DXF affiche un volume de `REGION`
+  bien plus élevé sur ce calque.
+
+**Pourquoi (pièges inclus)** :
+- Ne pas confondre « chiffré » (terme DXF officiel, groupe `AcDbModelerGeometry`)
+  avec un vrai chiffrement cryptographique : c'est une simple obfuscation
+  réversible sans clé secrète — un piège si on se laisse décourager par le
+  mot « encrypted » de la doc DXF officielle avant de vérifier la nature
+  réelle de la transformation.
+- Le format du record `point` n'a PAS d'identifiant entier en tête de ligne
+  quand l'historique ACIS est désactivé (`point $-1 -1 $-1 x y z #`, pas
+  `<id> point $... x y z`) — un premier essai de regex supposant un préfixe
+  numérique (calqué à tort sur d'autres records comme `edge`/`vertex`, qui
+  eux commencent bien par un identifiant) ne matchait RIEN (0/70 centroïdes
+  extraits) alors que le déchiffrement lui-même était déjà correct :
+  toujours valider un parseur de format texte sur un dump réel avant de
+  conclure à un échec de la couche en amont (ici le déchiffrement, qui
+  n'était pas en cause).
+- Ne pas confondre avec le § 50/§ 51 : trois causes DXF disjointes pour un
+  même symptôme visuel côté MicroStation (élément rempli/associatif sur
+  Limites Parcelles absent du recensement) — `SHAPE` (glyphe, rare), `HATCH`
+  (remplissage à boucles lisibles), `REGION` (solide ACIS chiffré). Le
+  diagnostic de redondance (point représentatif vs anneaux déjà fermés) est
+  réutilisé à l'identique pour `HATCH` et `REGION`, mais l'origine du point
+  diffère totalement (centroïde de boucle DXF ordinaire vs centroïde de
+  points B-Rep déchiffrés).
+
+---
+
+## 53. Limites `LWPOLYLINE`/`LINE` bien émises, mais jamais refermées en anneau : le « dangle » JSTS, angle mort de toute la réconciliation
+
+**Problème métier** : une capture MicroStation d'un élément natif « Line String »
+simple (PAS « Associative Region \ » — Level: Limites Parcelles, image jointe)
+a montré une parcelle absente de l'import alors que son type DXF sous-jacent
+(`LWPOLYLINE`/`LINE`) est déjà géré depuis longtemps et apparaît bien dans la
+réconciliation `seen=emitted+skipped` (§ 1-3). Contrairement à `SHAPE`/`MLINE`
+(§ 50), `HATCH` (§ 51) et `REGION` (§ 52), ce n'est donc PAS un type d'entité
+non géré : l'entité est lue, émise, routée vers le bon calque — et pourtant la
+parcelle n'existe pas dans le résultat final.
+
+**Cause technique** : la polygonisation par segments (`polygonize.ts`) node
+le réseau de limites puis appelle `polygonizer.getPolygons()` (JSTS). Une
+`LWPOLYLINE` visuellement fermée mais dont le premier et le dernier sommet
+sont à plus de `snapToleranceM` l'un de l'autre (25 cm parcelles, 1 m
+sections — `healUndershoots`, § 32/§ 44) reste, après raccord, un segment aux
+deux extrémités non connectées. En interne, JSTS classe un tel segment en
+*dangle* (`this._dangles = this._graph.deleteDangles()`, `jsts.es6.js`) et
+**l'exclut silencieusement** de `getPolygons()` — sans lever d'erreur, sans
+avertissement, sans qu'aucun compteur existant ne le voie : cette perte se
+produit APRÈS l'émission de l'entité (donc invisible à la réconciliation du
+lecteur DXF, § 1-3) et dans une région qui a par ailleurs très bien nodé
+(donc invisible à `nbZonesPolygonisationEchouee`/`droppedRegions`, § 28, qui
+ne traquent que l'échec du noding lui-même, pas le devenir de chaque anneau
+une fois le noding réussi).
+
+**Solution (diagnostic implémenté ; correctif de comportement partiel — voir
+« Correctif appliqué » plus bas)** (`polygonize.ts` ·
+`polygonizeChunk`/`polygonizeLines` ; `parcelle-ingestion.ts` ·
+`polygonizeBoundaries`) :
+- `polygonizeChunk` interroge désormais `polygonizer.getDangles()` (en plus
+  de `getPolygons()`, déjà appelé) et pousse, pour chaque dangle, sa bbox et
+  sa longueur dans `stats.dangles` — un tableau `HealStats`/`PolygonizeOptions`
+  suivant exactement le pattern déjà en place pour `droppedRegions` (§ 28) :
+  fourni par le tableau appelant, rempli par référence à travers tuilage et
+  réseaux successifs (parcelles/sections/piscines), aucune copie.
+- `polygonizeBoundaries` agrège ce tableau sur les trois réseaux polygonisés
+  et l'expose comme nouveau champ de rapport `nbLimitesNonRefermees`, avec un
+  avertissement utilisateur dédié — même traitement que tous les autres
+  compteurs de perte du pipeline (§ 1-3, § 28, etc.).
+- **Aucun comportement changé** : `getPolygons()` reste la seule source des
+  polygones produits ; l'appel à `getDangles()` est un ajout de comptage pur,
+  sans effet sur la géométrie construite.
+- Mesuré sur le vrai ZIG.dxf (pipeline complet, 629,5 s) : **62 553 segments
+  de limite jamais refermés** (`nbLimitesNonRefermees`), 2 492 266 m cumulés
+  — décomposés en 61 938 sur le réseau parcelles unifié (tuilé, tol 25 cm) et
+  615 sur le réseau sections (non tuilé, tol 1 m), contre 44 362 parcelles
+  effectivement polygonisées. Ordre de grandeur très supérieur aux gaps déjà
+  quantifiés (`REGION` : 9/70 anneaux absents, § 52 ; `HATCH` génuinement
+  inédit : ~2 266/39 069, § 51) — la plus grosse source de perte identifiée à
+  ce jour dans ce pipeline, mais encore non corrigée.
+- **Répartition par écart d'auto-fermeture** (distance entre le premier et le
+  dernier sommet du dangle — cf. `selfGapM`, significative seulement pour une
+  entité isolée jamais fragmentée par le noding, cas image-8.png) mesurée sur
+  le réseau parcelles (62 004 dangles ce run) : ≤0,5 m = 6 517 ; 0,5-1 m =
+  1 592 ; 1-2 m = 2 627 ; 2-5 m = 13 483 ; 5-10 m = 7 662 ; **>10 m = 30 123**.
+  Seuls ~17 % (≤2 m, 10 736) sont des candidats sûrs pour une fermeture
+  dédiée limitée à l'auto-fermeture (sans toucher `snapToleranceM`, donc sans
+  risque de fusion de sommets distincts ailleurs). La moitié (>10 m) ne
+  ressemble PAS à un simple écart de numérisation : plutôt des tracés
+  réellement incomplets, des amorces de construction, ou des limites
+  mitoyennes dont le segment voisin attendu manque entièrement du dessin —
+  une fermeture automatique n'y serait pas fiable. **Aucun correctif choisi
+  à ce stade** : élargir `snapToleranceM` globalement, ajouter une passe
+  d'auto-fermeture ciblée (≤2 m) uniquement, ou ne rien changer et documenter
+  la limite sont trois options encore ouvertes.
+- **Répartition par type source EXACT** (`dxf-native.ts` tague déjà chaque
+  feature `_dgid_source_entity`, § 49 ; `parcelle-ingestion.ts` ·
+  `boundarySourceEntityByClass` le fait désormais suivre en lockstep avec
+  `boundaryLinesByClass` jusqu'à `polygonize.ts`, qui retrouve le type d'un
+  dangle isolé — jamais touché par le noding — via une clé canonique arrondie
+  au mm (`roundedLineKey`), tolérante aux micro-perturbations flottantes de
+  `GeometryPrecisionReducer` sans jamais deviner : pas de correspondance
+  exacte → `"?"`, pas d'attribution approximative). Mesuré sur le réseau
+  parcelles (61 938 dangles) : `?`=32 156 (51,9 %), **`LINE`=27 863 (45,0 %)**,
+  **`LWPOLYLINE`=1 747 (2,8 %)**, `ARC`=135, `SPLINE`=37. **En ne comptant que
+  les cas résolus avec certitude (29 782, hors `?`) : `LINE` = 93,6 % contre
+  `LWPOLYLINE` = 5,9 %** — confirme, avec des données exactes plutôt qu'un
+  proxy, que `LINE` domine très largement sur « Line String », contrairement
+  à un retour de terrain (captures MicroStation montrant des parcelles
+  manquantes de type « Line String » — probable biais d'observation :
+  l'élément visuellement sélectionné sur une parcelle manquante n'est pas
+  nécessairement celui dont l'extrémité est déconnectée).
+- **Découverte du test synthétique (`scripts/test-source-entity-tmp.ts`,
+  supprimé après usage) : le lot « écart ≤ 2 m » n'est PAS majoritairement
+  fait de parcelles presque récupérables.** Parmi ce sous-groupe (10 735
+  dangles), **99,4 % sont `?`** (10 667) — pas parce que leur type est
+  indéterminable en général, mais parce que ce sont très souvent des
+  **résidus produits par `healUndershoots` lui-même** : un « Line String »
+  presque fermé (test : écart 0,3 m) se fait refermer AVEC SUCCÈS par le
+  raccord au segment le plus proche (Pass 2, insertion d'un sommet sur le
+  segment incident) — la parcelle est déjà construite — mais laisse derrière
+  un minuscule bout de segment orphelin (entre le vrai premier sommet et le
+  point d'insertion), qui ressort comme un dangle « à faible écart » sans
+  qu'aucune parcelle ne soit réellement perdue à cet endroit. **Conclusion
+  révisée par rapport à la mesure précédente** : le chiffre de « ~17 % de
+  candidats sûrs pour une fermeture dédiée » (basé sur `selfGapM` seul,
+  ci-dessus) était probablement surestimé — une bonne partie de ce lot est du
+  bruit inoffensif de l'algorithme de raccord, pas des parcelles manquantes.
+  Départager les deux (résidu vs vraie parcelle jamais construite) demande de
+  croiser chaque dangle `?` à faible écart avec le résultat final
+  (`getPolygons()`) — savoir si une face existe déjà à proximité immédiate —
+  non fait à ce stade.
+- **Vérification terrain (captures MicroStation image-9 à image-12.png,
+  parcelle non récupérée près de « Espace Vert » dans un îlot dense) : le
+  mélange `LINE`/`LWPOLYLINE` (« Line String ») visible au clic sur DEUX
+  segments voisins du MÊME contour n'est pas la cause de la non-fermeture.**
+  JSTS node par coordonnées et ignore totalement le type d'entité source (déjà
+  établi plus haut) : deux segments d'un même anneau peuvent être l'un une
+  `LINE`, l'autre une `LWPOLYLINE`, sans que cela gêne la fermeture — à
+  condition que leurs extrémités coïncident. Vérification directe
+  (`scripts/investigate-espace-vert7-tmp.ts`, supprimé après usage) sur
+  l'îlot dense identifié par le tuilage adaptatif (région
+  357982,1384364 → 365485,1391959, profondeur 5-6, § 32) : les segments
+  `Limites Parcelles` dans un rayon de 200 m autour d'un repère « Espace
+  Vert » comptent des dizaines d'extrémités dont la plus proche voisine
+  (tous types confondus) est à **6 à 25 m** — p. ex. trois lignes verticales
+  parallèles (`LINE`, espacées d'≈10,7 m, largeur de parcelle typique)
+  s'arrêtent à (359886.79/897.54/908.29, 1385521.37) sans qu'aucune autre
+  extrémité ne se trouve à moins de 10,7 m. Ce sont des **limites de
+  refend** (divisions internes entre parcelles voisines) tracées comme des
+  segments courts qui n'atteignent jamais la limite d'îlot englobante — un
+  écart réel du dessin source, pas un artefact de notre appariement : à ces
+  distances (très supérieures aux tolérances 0,25 m/1 m de
+  `healUndershoots`), le raccord actuel les laisse à raison non fermés (cf.
+  piège `SECTION_SNAP_TOLERANCE_M`, § 44, sur le risque d'un raccord trop
+  large). Ce cas concret est un exemple réel et vérifié d'anneau incomplet
+  dans le dessin — mais l'analyse ci-dessous montre qu'il ne généralise PAS
+  à la majorité des dangles : ce n'est qu'un des trois patrons distincts.
+- **Généralisation à l'échelle des dangles (pas seulement l'exemple ponctuel) :
+  dump complet (`DXF_DUMP_DANGLES_PATH`, instrumentation temporaire retirée
+  après usage) + script `scripts/analyze-dangles-tmp.ts` (supprimé après
+  usage), mesurant pour CHAQUE dangle la distance à l'extrémité — d'un AUTRE
+  dangle — la plus proche (au lieu du `selfGapM`, qui ne mesure que l'écart
+  entre les deux bouts d'un même dangle).** Deux découvertes majeures :
+  1. **Le total de 61 938/62 553 était fortement gonflé par le doublonnage de
+     marge de tuile déjà documenté comme risque théorique ci-dessus (§ 53,
+     caveat 1)** — sur un run comparable (57 802 dangles bruts, réseau
+     parcelles), le dédoublonnage par clé de coordonnées arrondie au cm ramène
+     le total à **33 134 dangles distincts, soit 42,7 % de doublons de marge
+     retirés**. Le problème réel est donc significativement plus petit que le
+     chiffre brut ne le laissait penser — à corriger dans toute lecture future
+     de ces compteurs.
+  2. **Sur les dangles distincts, la distance à l'extrémité la plus proche
+     (tous types confondus) se répartit en (au moins) trois patrons, pas un
+     seul** :
+     - **`<0,25 m` (32,9 %, 10 905) : chaînes longues déjà connectées, jamais
+       bouclées.** Vérification sur échantillon (12 paires) : la « voisine la
+       plus proche » d'un dangle est presque toujours un AUTRE dangle dont une
+       extrémité coïncide EXACTEMENT (`dist=0.000m`) avec l'une des siennes —
+       p. ex. un dangle de 652,9 m se poursuit par un dangle de 383,9 m qui se
+       poursuit par un dangle de 13,8 m, chacun démarrant exactement où le
+       précédent s'arrête. Ce ne sont PAS des extrémités à rapprocher : elles
+       sont déjà nodées ensemble (JSTS l'a fait correctement). Le vrai
+       problème est que la chaîne entière — souvent longue de plusieurs
+       centaines de mètres (395 m, 514 m, 653 m, 1 732 m dans l'échantillon,
+       bien au-delà d'un côté de parcelle) — ne reboucle jamais sur
+       elle-même. `Polygonizer.deleteDangles()` élague RÉCURSIVEMENT tout
+       arbre pendant : chaque arête d'une chaîne ouverte ressort comme un
+       dangle séparé, même si toutes sont mutuellement bien connectées.
+       Plausible pour ce sous-groupe : des entités hors parcelle individuelle
+       (voie, limite communale/d'îlot) routées dans le même réseau que
+       `Limites Parcelles`, ou un côté d'îlot entier jamais tracé — élargir
+       `snapToleranceM` n'aurait ici aucun effet (rien à rapprocher, la
+       chaîne est déjà connectée).
+       **Vérification faite sur les 15 chaînes les plus longues (> 150 m,
+       espacées ≥ 500 m pour la diversité spatiale)** :
+       retrouver la couche DXF RÉELLE de chaque extrémité (recherche du
+       sommet source le plus proche, indépendamment de la classe
+       `boundaryLinesByClass`) donne, sur 13 correspondances trouvées,
+       **8 sur la couche `Limites Sections`** (ex. 2 904 m, 2 497 m,
+       2 464 m, 2 453 m, 2 450 m — un libellé « 023 » à proximité de l'une
+       d'elles, cohérent avec un numéro de section), 3 sur `Limites
+       Parcelles` (3 456 m, 3 177 m, 2 768 m, aucun libellé numéro à
+       proximité), et 2 non retrouvées (probables fragments composites
+       produits par le noding, cohérent avec leur `sourceEntity` = `?`).
+       **Conclusion** : la majorité des chaînes les PLUS longues ne sont pas
+       des limites de parcelle du tout — ce sont des limites de SECTION
+       (grande subdivision administrative, plusieurs km de côté normalement),
+       injectées dans le réseau parcelles comme arêtes d'appui pour le
+       clipping (cf. `authoredSectionEdges`/`sectionLines` ajoutées à
+       `parcelLines`, plus haut dans ce document). Une section non refermée
+       n'est PAS une parcelle perdue — c'est un problème de couche
+       administrative, d'enjeu bien moindre.
+       **Les 3 chaînes réellement sur `Limites Parcelles` (2,7-3,5 km),
+       inspectées individuellement (contexte élargi à 300 m : libellés,
+       densité de couches `limites*`, bâti), ne sont PAS non plus des
+       parcelles :**
+       - A (3 456 m) et B (3 177 m) : `numVertices=2` (simple segment
+         `LINE` isolé, aucun sommet intermédiaire). Dans un rayon de 300 m,
+         **aucune** autre entité `Limites Parcelles`/`Limites TF`, **aucun**
+         bâtiment — seules des entités **`Limites communes`** (3, couche
+         différente) et des libellés de type « B25 »/« B34 »/« B35 »/« B18 »/
+         « B37 » (codes de bloc/commune, pas des numéros de parcelle). Zone
+         cadastralement vide.
+       - C (2 768 m) : les SEULS libellés à moins de 300 m sont littéralement
+         le texte `"X=360860.0000^JY=1396273.0000"` et
+         `"X=359100.0000^JY=1394136.0000"` — des annotations de coordonnées
+         de POINT, situées exactement (0 m) sur chacune des deux extrémités
+         du segment. Densité de couches `limites*` alentour : 0. Aucun bâti.
+       **Conclusion** : les 3 sont des artefacts de tracé (ligne de référence/
+       construction reliant deux repères, probablement un contrôle
+       topographique) mal classés sur la couche `Limites Parcelles` — pas des
+       parcelles manquantes. Combiné à la vérification précédente (8/13
+       chaînes = `Limites Sections`), **11 des 13 chaînes les plus longues
+       identifiées ne représentent aucune parcelle perdue** ; seules les 2
+       non retrouvées (`sourceEntity=?`) restent de nature incertaine. Le
+       patron « chaîne longue déjà connectée » (32,9 % des dangles
+       distincts) a donc, à son extrémité la plus longue, un enjeu réel très
+       inférieur à sa part brute dans le total — l'essentiel du bruit
+       « manque de parcelles » de ce jeu de données se trouve probablement
+       ailleurs (patrons « presque fermable » et « refend court isolé »,
+       ci-dessous).
+     - **`0,25-2 m` (22,9 %, 7 588) : candidats plausibles à un raccord plus
+       généreux** — juste hors de la tolérance actuelle (0,25 m parcelles),
+       mais pas assez pour risquer une fusion erronée à cette échelle.
+     - **`refend court isolé` (longueur 4-20 m ET distance mini > 2 m,
+       15,7 %, 5 200) : le patron confirmé par l'exemple « Espace Vert »**
+       ci-dessus — une limite de refend courte, réellement isolée à
+       plusieurs mètres de tout autre segment. Une vraie lacune du dessin
+       source.
+     - **Reste (~28 %) : écarts intermédiaires ou longs (2-100+ m) sur des
+       segments plus longs** — mélange non caractérisé plus finement à ce
+       stade (buckets 2-5 m=9,9 % ; 5-10 m=10,6 % ; 10-25 m=16,5 % ;
+       25-50 m=4,1 % ; 50-100 m=1,8 % ; >100 m=1,2 %).
+  **Conclusion révisée** : le lien fait plus haut entre l'exemple « Espace
+  Vert » et « la majorité des 61 938 dangles » (buckets `selfGapM` 5-10 m/
+  >10 m) était une généralisation prématurée à partir d'un seul cas — la
+  bonne mesure de « fermable ou non » est la distance à l'AUTRE extrémité la
+  plus proche, pas l'écart interne au dangle lui-même, et cette mesure révèle
+  au moins trois causes distinctes de non-fermeture (chaîne ouverte connectée,
+  presque-fermable, vraie lacune isolée) qu'un correctif unique (élargir
+  `snapToleranceM`) ne traiterait pas de la même façon — voire pas du tout
+  pour le premier patron, qui est le plus fréquent.
+
+**Pourquoi (pièges inclus)** :
+- Ne pas confondre avec le filtre `MIN_BOUNDARY_LINE_LENGTH_M`/
+  `MIN_BOUNDARY_ARC_SPLINE_LENGTH_M` (§ 47-49) : ce filtre agit AVANT
+  polygonisation, sur la bbox de l'entité brute (élimine les artefacts trop
+  petits pour être une vraie limite). Le dangle agit APRÈS noding, sur la
+  CONNECTIVITÉ du graphe : une limite largement assez grande pour passer ce
+  filtre (comme une parcelle entière, cf. image-8.png) peut quand même finir
+  en dangle si son propre contour ne se referme pas — deux mécanismes de
+  perte totalement indépendants, l'un géométrique (taille), l'autre
+  topologique (connexité).
+- Ne pas confondre non plus avec `nbZonesPolygonisationEchouee`/
+  `droppedRegions` (§ 28) : ce compteur signale une RÉGION entière abandonnée
+  faute de noding possible (des dizaines de milliers de segments perdus d'un
+  coup, région dense). Un dangle, lui, survient dans une région qui a très
+  bien nodé — c'est un seul anneau isolé, ailleurs le réseau fonctionne
+  normalement. Deux échelles de panne totalement différentes, à ne pas
+  confondre dans un diagnostic.
+- `nbLimitesNonRefermees` compte des **segments**, pas des « parcelles
+  manquantes » au sens strict — deux biais à garder en tête avant de
+  l'interpréter comme un nombre de parcelles perdues :
+  1. le composant tuilé (61 938, réseau parcelles) peut compter un même
+     dangle deux fois s'il tombe dans la marge de recouvrement de deux tuiles
+     adjacentes (même limite déjà documentée pour `endpointsClustered`/
+     `endpointsSnapped`, § 32) — le total exact de segments *distincts* est
+     donc ≤ 62 553 ;
+  2. un dangle n'est pas forcément une parcelle légitime : un trait de
+     construction ou une amorce de tracé inachevée sur le calque Limites
+     Parcelles, assez longue pour passer le filtre de taille (§ 47-49), sort
+     aussi en dangle sans jamais avoir été une vraie limite — même biais que
+     celui déjà documenté pour ce filtre lui-même.
+- **Correctif appliqué** (`SNAP_TOLERANCE_M`, `polygonize.ts`) : tolérance de
+  raccord des extrémités pendantes (réseau parcelles) relevée de **25 cm à
+  1 m** — `DXF_POLYGONIZE_SNAP_TOLERANCE_M` reste configurable par variable
+  d'environnement pour revenir en arrière si besoin. Portée volontairement
+  **limitée au patron « presque fermable »** identifié ci-dessus (0,25-2 m ;
+  seule la moitié basse, 0,25-1 m, ≈14 % des dangles distincts, est
+  effectivement couverte par ce relèvement) :
+  - **Choix de la valeur** : alignée sur `SECTION_SNAP_TOLERANCE_M`
+    (parcelle-ingestion.ts), déjà utilisée en production pour le réseau
+    sections sans problème observé — pas une valeur arbitraire. Le patron
+    « refend court isolé » (écarts de 6 à 25 m, exemple « Espace Vert »)
+    reste hors de portée : à cette échelle, un raccord automatique risquerait
+    de fusionner deux sommets cadastraux réellement distincts (même risque
+    déjà documenté pour `SECTION_SNAP_TOLERANCE_M`, § 44) — corriger ce
+    patron demanderait une heuristique dédiée, pas un simple changement de
+    constante.
+  - **Validation synthétique** (`scripts/test-snap-bump-tmp.ts`, supprimé
+    après usage) : (1) un anneau avec un undershoot de 0,7 m, qui échouait à
+    se refermer avec l'ancienne tolérance (25 cm) — confirmé, `0 polygone`
+    reconstruit puis `1 dangle` recensé — se referme correctement avec la
+    nouvelle (`1 polygone`, 5 sommets) ; (2) deux carrés DISTINCTS, déjà
+    fermés individuellement, aux coins les plus proches à 0,9 m l'un de
+    l'autre : restent 2 polygones séparés de largeur ≈10 m chacun (pas de
+    fusion en un seul polygone ≈21 m) — `healUndershoots` ne touche que les
+    extrémités PENDANTES, jamais un sommet déjà connecté dans un anneau
+    fermé, donc une géométrie déjà correcte n'est jamais perturbée par la
+    seule proximité d'une autre géométrie.
+  - **Effet mesuré (pipeline complet, méthodologie § 51 — deux runs ZIG.dxf,
+    seule variable changée : `SNAP_TOLERANCE_M`, 0,25 m puis 1 m)** :
+
+    | | avant (0,25 m) | après (1 m) | Δ |
+    |---|---|---|---|
+    | Parcelles construites | 59 735 | 60 081 | **+346 (+0,58 %)** |
+    | Dangles réseau parcelles (comptage tuilé, brut) | 57 187 | 45 722 | −11 465 (−20,0 %) |
+    | Doublons recouvrement | 42 189 | 42 169 | −20 |
+    | Enveloppes supprimées | 19 385 | 19 448 | +63 |
+    | Textes hors parcelle | 6 376 | 6 013 | **−363 (−5,7 %)** |
+    | Surface totale (m²) | 62 147 547 | 62 835 525 | +687 978 |
+
+    Cohérent avec l'analyse par patron ci-dessus : la baisse de dangles
+    (−20 %) correspond à la portion 0,25-1 m nouvellement couverte par la
+    tolérance (≈14 % des dangles distincts), le gain net de parcelles
+    (+346, plus petit que la baisse de dangles) s'expliquant par le fait
+    qu'un dangle refermé ne devient pas toujours une parcelle VALIDE
+    (aire > `POLYGONIZE_MIN_AREA_M2`, anneau topologiquement correct) —
+    et par la légère hausse des enveloppes supprimées (une parcelle
+    nouvellement refermée peut elle-même englober un autre polygone déjà
+    construit). La baisse notable des textes hors parcelle (−5,7 %) est un
+    signal indépendant et cohérent : plus de numéros de parcelle retrouvent
+    désormais une géométrie à laquelle s'attacher. Le lot 1-2 m
+    (≈9 % de dangles supplémentaires) reste hors de la tolérance actuelle,
+    laissé de côté par prudence en l'absence de mesure plus fine sur ce
+    sous-groupe.
+
+**Nouveau patron identifié : extraction partielle par fenêtre MicroStation
+(« fence select ») — un taux de dangle massivement amplifié, pas une
+régression du pipeline (imges/image-4.png, ZIG-test.dxf, commune
+d'Oussouye)**. L'utilisateur a sélectionné une zone à la souris dans
+MicroStation et exporté ce seul sous-ensemble (`ZIG-test.dxf`, 143,7 Mo,
+contre 318,7 Mo pour le fichier complet ZIG.dxf). Rejoué de bout en bout
+(`ingestDxfToParcelles`, 17,2 s — fichier réduit) :
+- `1151` parcelles construites, `1148` enveloppes supprimées (quasi 1:1 avec
+  les parcelles conservées — bien plus élevé que sur ZIG.dxf complet, où ce
+  ratio est de l'ordre de 19 448/60 081 ≈ 32 %), `732` hors emprise UTM28N,
+  `62 883` textes hors parcelle (contre 6 013 sur ZIG.dxf complet — un
+  ordre de grandeur d'écart, alors que le fichier réduit ne porte que
+  `63 434` `numero_lot` + `1 613` `numero_parcelle` détectés, essentiellement
+  un calque bâti/lots, pas un export cadastral classique).
+- Sur les `1883` dangles du réseau parcelles, **88,8 % ont un écart >10 m**
+  (contre ~57 % sur ZIG.dxf complet, § histogramme ci-dessus) — une
+  proportion de « vraie lacune isolée » anormalement élevée.
+- **Explication la plus probable, cohérente avec le mécanisme même du
+  dangle déjà établi dans cette section** : une sélection par fenêtre
+  MicroStation (« fence select ») coupe, par défaut, toute limite qui
+  TRAVERSE le bord de la fenêtre — chaque limite ainsi coupée ressort comme
+  un segment qui s'arrête net à la frontière de sélection, sans nul autre
+  segment pour continuer de l'autre côté (puisque l'autre côté n'a jamais
+  été exporté). C'est un dangle par construction, à la bordure de
+  l'extraction — pas un défaut du fichier source ni du pipeline. Cela
+  explique aussi la proportion écrasante d'écarts >10 m (une coupure nette
+  laisse un vrai grand vide, pas un micro-trou de numérisation) et le volume
+  disproportionné de `textes hors parcelle` (les libellés proches du bord,
+  eux, restent dans la sélection même quand la géométrie de la parcelle
+  qu'ils annotent est tronquée ou absente).
+- **Conséquence pratique** : sur un extrait obtenu par sélection manuelle,
+  s'attendre à un taux de dangle élevé CONCENTRÉ sur le pourtour de la zone
+  sélectionnée — ne pas le comparer aux mêmes seuils qu'un fichier communal
+  complet. Pour un diagnostic représentatif de la qualité réelle du dessin
+  source, importer le fichier communal complet plutôt qu'un extrait
+  fenêtré ; si seul l'extrait est disponible, ignorer les dangles
+  strictement en bordure de son emprise avant de conclure à un problème de
+  dessin.
+
+**Correctif à l'explication ci-dessus, après audit des calques RÉELS de
+ZIG-test.dxf** (`scripts/audit-layers-zigtest-tmp.ts`, supprimé après
+usage) : le « fence select » n'explique qu'une partie du symptôme —
+l'essentiel des 62 883 textes hors parcelle vient d'une **donnée encore
+brute, non harmonisée**, pas d'une coupure de géométrie. Le calque
+`« Numéro  lots »` (double espace — dénomination NON harmonisée au sens du
+protocole DGID, cf. `Etapes de travail sur Microstation.md` à la racine du
+projet, étape 4 : « Vérifier et harmoniser les dénominations des niveaux »)
+porte **63 018 textes mélangés** : de vrais numéros de lot (« lot 23 »)
+CÔTOIENT des annotations de toponymie et de terrain sans rapport
+(« VERS DIEMBERING », « POINTS DENSIFIES ») sur le MÊME calque. Notre
+classification de calque (`cadastral-filter.ts`) associe tout texte de ce
+calque à un candidat `numero_lot`, sans distinguer un vrai numéro d'une
+annotation de direction — ces dernières sont donc, à raison, comptées
+« hors parcelle » (aucune géométrie ne leur correspond, et il ne devrait
+pas y en avoir). Le fichier correspond très exactement au stade
+« DONNEES BRUTES » du protocole DGID, AVANT les étapes 3-4 (harmonisation
+des calques) et 9-11 (fermeture des limites, correction topologique) —
+pas au stade « DONNEES NETTOYEES » attendu en entrée du pipeline. **À
+retenir** : un taux de perte extrême sur un extrait ne prouve pas un défaut
+du pipeline — vérifier D'ABORD si le fichier a été nettoyé selon le
+protocole DGID (calques harmonisés, limites fermées) avant de chercher une
+cause côté code.
+
+**Vérification demandée : taux de fermeture du calque « Limites Parcelles »
+SEUL** (en écartant tout le bruit « Numéro  lots » ci-dessus). Polygonisé
+isolément (`polygonizeLines` appelé directement sur les seules lignes de ce
+calque, hors pipeline complet) :
+- **2 033 anneaux déjà fermés à l'origine** (LWPOLYLINE close / HATCH) —
+  232,4 ha, une base saine.
+- Sur les **1 805 lignes ouvertes** restantes (1 306 utiles après
+  dédoublonnage), seulement **237 polygones reconstruits** contre
+  **1 646 segments jamais refermés — 91,2 % de perte**, dont 86,7 % à un
+  écart >10 m (vraie lacune, pas un micro-trou de numérisation) et 82 % de
+  type source non identifiable (`?`, fragments de noding). **Un taux
+  d'échec largement supérieur à celui mesuré sur ZIG.dxf complet** (§
+  ci-dessus, ~57 % des dangles à >10 m sur l'ensemble du réseau parcelles).
+  **Conclusion : la portion « limites ouvertes » du dessin d'Oussouye dans
+  cet extrait est réellement, sévèrement non fermée — un problème de
+  dessin source, pas un artefact de découpe par fenêtre ni un bug de
+  classification de calque.** Cohérent avec l'étape 9 du protocole DGID
+  (« Polygoniser ou fermer les limites de parcelles ») : ce fichier n'a
+  manifestement pas encore reçu cette passe de fermeture manuelle.
+
+---
+
+## 53 bis. Un grand `Shape` déjà fermé englobant des `LINE` intérieures : les subdivisions ne peuvent structurellement jamais se raccrocher à son bord
+
+**Problème métier** (imges/image-6.png) : un bloc/îlot est tracé comme UN
+grand rectangle déjà fermé (« Shape », calque Limites Parcelles), et les
+parcelles individuelles à l'intérieur (00255, 00257, 00258…) sont
+subdivisées par de simples `LINE` qui rejoignent le bord de ce rectangle.
+Question posée : est-ce que cette combinaison — grand contour fermé +
+subdivisions intérieures ouvertes — peut, à elle seule, causer la perte de
+ces parcelles ?
+
+**Réponse : oui, structurellement, et c'est vérifié dans le code, pas
+seulement observé.** `parcelle-ingestion.ts` route toute géométrie déjà
+refermée (`Polygon`, y compris une `LineString` dont le premier et dernier
+sommet coïncident) directement vers `parcelPolygons` via `routePolygon` —
+**sans jamais passer par `addOpenLine`/`boundaryLinesByClass`**, le tableau
+qui alimente le réseau de noding (`polygonizeLines`). Le grand rectangle
+devient donc un polygone « authored » autonome, et ses coordonnées de bord
+ne sont TOUT SIMPLEMENT PAS DISPONIBLES pour que les `LINE` intérieures
+s'y raccrochent — même si l'extrémité d'une subdivision tombe exactement
+(0,000 m) sur ce bord. Ce n'est pas un problème de tolérance de raccord
+(§ 53) : aucun raccord n'est même tenté, les deux jeux de géométrie ne se
+rencontrent jamais dans le même graphe.
+
+**Vérification générale sur ZIG-test.dxf** (`scripts/check-big-shape-tmp.ts`,
+supprimé après usage) : sur les 231 grands anneaux déjà fermés du calque
+Limites Parcelles (aire > 2 000 m², donc plausiblement un bloc plutôt
+qu'une parcelle unique — une parcelle individuelle de ce fichier fait
+~400-450 m²), **69 (30 %) ont au moins une extrémité de ligne ouverte qui
+touche exactement leur bord** (tolérance 0,3 m), pour un total de **231
+extrémités structurellement bloquées**. Ce patron n'est donc pas une
+anecdote isolée sur ce fichier — c'est un mécanisme reproductible et
+mesurable, distinct des causes déjà documentées § 53 (undershoot, chaîne
+longue non bouclée, refend court isolé) : ici, même à écart nul, la
+fermeture est impossible par construction du pipeline.
+
+**Pourquoi (pièges inclus)** :
+- Ne pas confondre avec un simple dangle « écart trop grand » (§ 53) : ici
+  l'écart mesuré peut être 0,000 m — le problème n'est PAS géométrique
+  (deux points proches à rapprocher), il est **topologique/architectural**
+  (deux ensembles de lignes qui ne partagent jamais le même graphe de
+  noding). Élargir `SNAP_TOLERANCE_M` n'aurait strictement aucun effet ici.
+- Cohérent avec — et sans doute une des explications concrètes de —
+  l'observation § 4 (« une ligne peut couvrir plusieurs parcelles, le
+  noding la découpe automatiquement ») : ce mécanisme marche bien pour des
+  lignes OUVERTES qui se croisent, mais suppose que TOUTES les lignes
+  concernées passent par le même noding. Un contour déjà refermé en amont
+  (routé directement comme polygone) est exactement le cas qui échappe à
+  cette garantie.
+- **Correctif appliqué** (`parcelle-ingestion.ts` · `polygonizeBoundaries`) :
+  avant construction du réseau `parcelLines`, détection (via `BBoxGridIndex`
+  + `pointToPolygonBoundaryDistanceM`, déjà utilisés ailleurs dans ce
+  fichier pour la jointure numéro↔parcelle) de tout anneau `authored` dont
+  le bord passe à ≤ `DXF_RING_TOUCH_TOLERANCE_M` (1 m par défaut) d'une
+  extrémité de ligne ouverte du réseau parcelles. Un anneau touché est
+  retiré de `parcelPolygons` et ses arêtes réinjectées dans `parcelLines`
+  (taguées `RING_EDGE`, même mécanisme que `authoredSectionEdges`
+  ci-dessus) — SÉLECTIF, pas systématique (69/231 anneaux concernés sur le
+  cas de mesure), pour ne pas payer le coût du noding sur la majorité des
+  blocs sans subdivision intérieure.
+- **Validé par un test synthétique** (`scripts/test-big-shape-fix-tmp.ts`,
+  supprimé après usage) : un rectangle 40×20 subdivisé par une `LINE`
+  intérieure touchant exactement son bord (écart 0 m) donne, après
+  correctif, 2 parcelles de 400 m² avec chacune SON numéro — au lieu d'une
+  face fusionnée de 800 m² portant 2 numéros candidats. Un second bloc
+  témoin, fermé et SANS subdivision intérieure, ressort inchangé (aucune
+  sur-correction).
+- **Effet mesuré, pipeline complet, deux fichiers réels** :
+
+  | | ZIG-test.dxf (Oussouye, avant) | ZIG-test.dxf (après) | ZIG.dxf complet (avant) | ZIG.dxf complet (après) |
+  |---|---|---|---|---|
+  | Parcelles construites | 1 151 | **1 874 (+62,8 %)** | 60 081 | **62 079 (+3,3 %)** |
+  | Doublons recouvrement | 525 | 450 | 42 169 | **10 413 (−75 %)** |
+  | Enveloppes supprimées | 1 148 | 122 | 19 448 | **3 825 (−80 %)** |
+  | Dangles réseau parcelles (tol=1 m) | 1 883 | 283 | 46 337 | 40 581 |
+  | Durée du run complet | — | — | ~5 min | **~30 min (×6)** |
+  | Régions irrécupérables (`droppedRegions`) | 0 | 0 | 0 | **35 (148 110 segments)** |
+  | Textes hors parcelle | 62 883 | 62 068 | 6 013 | 14 099 (+8 086) |
+
+  **Le gain net est réel et confirmé sur les deux fichiers**, mais avec un
+  coût sérieux sur ZIG.dxf complet, absent sur l'extrait plus petit : dans
+  UNE zone déjà connue comme pathologique (îlot dense « Espace Vert », § 53
+  ci-dessus), réinjecter les arêtes de plusieurs gros anneaux simultanément
+  y densifie encore le réseau de noding déjà fragile — JSTS échoue à noder
+  certaines tuiles même après subdivision maximale (`found non-noded
+  intersection`, quelques couples de segments quasi parallèles précis,
+  répétés sur les tuiles en marge) et la région entière est abandonnée
+  (mécanisme déjà existant, § 28 `droppedRegions` — pas un crash, mais une
+  perte totale de cette zone). Cela explique aussi la hausse des textes
+  orphelins (+8 086 : les libellés des zones abandonnées n'ont plus aucune
+  géométrie, même fusionnée, à laquelle s'attacher) et le ×6 sur la durée.
+  **Décision non tranchée à ce stade** : le gain nominal (+1 998 parcelles)
+  dépasse largement la perte des zones abandonnées, mais le coût en durée
+  d'exécution est significatif pour un pipeline interactif — reste à
+  décider si c'est un compromis acceptable tel quel, ou si le correctif
+  doit être rendu plus prudent (ex. dédoublonner plus agressivement les
+  arêtes injectées avant noding, ou exclure les zones déjà signalées
+  denses/pathologiques de la réinjection).
 
 ---
 

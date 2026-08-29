@@ -4,7 +4,8 @@ import RMap, {
 } from "react-map-gl/maplibre";
 import type { MapRef, MapLayerMouseEvent } from "react-map-gl/maplibre";
 import type { StyleSpecification } from "maplibre-gl";
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { Component, useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
+import { AlertTriangle, RefreshCw } from "lucide-react";
 import { errorTypeColor } from "@/lib/utils";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -132,6 +133,48 @@ const ADMIN_STYLES: Record<
 };
 interface AdminLabel { lng: number; lat: number; nom: string }
 interface AdminData { boundaries: GeoJSON.FeatureCollection; labels: AdminLabel[] }
+
+/**
+ * Filet de sécurité pour l'échec de création du contexte WebGL
+ * (`webglcontextcreationerror`, ex. process GPU Chromium/driver Intel en
+ * panne — pas un bug applicatif). `new maplibregl.Map(...)` LÈVE une
+ * exception synchrone dans ce cas (`throw new Error("Failed to initialize
+ * WebGL")`, `maplibre-gl/dist/maplibre-gl.js`) plutôt que d'émettre un
+ * évènement `error` — le prop `onError` de `<RMap>` ne la voit donc JAMAIS.
+ * Seule une Error Boundary React (classe, seule API capable d'intercepter un
+ * throw pendant le rendu/effet d'un enfant) peut l'attraper ; sans elle,
+ * l'utilisateur n'avait qu'une carte vide/cassée, sans aucun message.
+ */
+class MapErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+  state = { hasError: false };
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error: Error) {
+    console.error("[MapLibreMap] échec de rendu de la carte :", error);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-center px-4 bg-muted/30">
+          <AlertTriangle className="w-8 h-8 text-orange-400" />
+          <p className="text-sm text-muted-foreground max-w-xs">
+            Carte indisponible — réessayez ou vérifiez l&apos;accélération
+            matérielle du navigateur.
+          </p>
+          <button
+            type="button"
+            onClick={() => this.setState({ hasError: false })}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md border border-border hover:bg-accent"
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> Réessayer
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 interface PopupState { lng: number; lat: number; html: string }
 
@@ -456,6 +499,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
 
   return (
     <div className="w-full h-full relative">
+    <MapErrorBoundary>
       <RMap
         ref={mapRef}
         initialViewState={INITIAL_VIEW}
@@ -795,6 +839,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
           </Popup>
         )}
       </RMap>
+    </MapErrorBoundary>
 
       {/* ── Légende (petite, dynamique) ── */}
       <div className="pointer-events-none absolute bottom-3 right-3 z-10 max-w-[180px] rounded-lg border border-border/60 bg-background/90 p-2 text-[11px] shadow-md backdrop-blur">

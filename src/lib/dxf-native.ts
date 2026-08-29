@@ -68,6 +68,15 @@ interface RawEntity {
   // les lecteurs ne comprenant pas la justification, pas la position de rendu
   // réelle) — cf. § 27 bis, docs/CONCEPTS-TRAITEMENT-DXF.md.
   textAlign2: Pt | null;
+  // HATCH : boucles de contour (« boundary paths ») déjà densifiées, une par
+  // boucle (polyligne ou suite d'edges Line/Arc/Ellipse). `null` tant que non
+  // analysé, `[]` si l'analyse a échoué (ex. edge Spline — curseur non fiable
+  // au-delà, cf. § 51, docs/CONCEPTS-TRAITEMENT-DXF.md). Les groupes 10/20
+  // d'un HATCH ont un sens différent selon la position dans le contour, donc
+  // ce champ est peuplé par un parseur dédié (`parseHatchLoops`), PAS par le
+  // repli générique code 10/20 utilisé pour LWPOLYLINE/MLINE/SHAPE — ce repli
+  // est explicitement contourné pour HATCH (cf. `parseEntities`).
+  hatchLoops: Pt[][] | null;
 }
 
 interface BlockDef {
@@ -127,6 +136,7 @@ function newEntity(type: string): RawEntity {
     textHJustify: 0,
     textVJustify: 0,
     textAlign2: null,
+    hatchLoops: null,
   };
 }
 
@@ -182,6 +192,21 @@ function parseEntities(pairs: Pair[], start: number, end: number): RawEntity[] {
     }
 
     const e = newEntity(type);
+
+    if (type === "HATCH") {
+      // Les groupes 10/20/11/21/40/50/51/72/73 d'un HATCH ont un sens
+      // différent à chaque étape du contour (sommet de boucle, centre
+      // d'arc, extrémité de ligne…) — le repli générique code 10/20 du
+      // switch ci-dessous (pensé pour LWPOLYLINE/MLINE/SHAPE) les
+      // interpréterait tous comme des sommets et produirait un contour
+      // faux. Analyse dédiée, à l'écart du switch générique — cf. § 51,
+      // docs/CONCEPTS-TRAITEMENT-DXF.md.
+      e.layer = groups.find((g) => g[0] === "8")?.[1]?.trim() ?? null;
+      e.hatchLoops = parseHatchLoops(groups);
+      ents.push(e);
+      continue;
+    }
+
     mtextChunks = [];
     let curX: number | null = null;
     let endX: number | null = null;
@@ -270,6 +295,16 @@ function parseEntities(pairs: Pair[], start: number, end: number): RawEntity[] {
           break;
         case "51":
           if (type === "ARC") e.angleEnd = parseFloat(v); // degrés
+          break;
+        case "71":
+          // MLINE : drapeau de forme (bit 1 = fermé). Le groupe 70 de MLINE
+          // porte la justification (0/1/2), PAS un état fermé/ouvert — ne
+          // jamais réutiliser `e.closed` déjà positionné par le cas "70"
+          // générique pour ce type (cf. § SHAPE/MLINE,
+          // docs/CONCEPTS-TRAITEMENT-DXF.md). Le groupe 71 arrive toujours
+          // après le 70 dans l'ordre DXF de MLINE, donc écrase sans risque
+          // toute valeur transitoire erronée.
+          if (type === "MLINE") e.closed = (parseInt(v, 10) & 1) === 1;
           break;
         case "72":
           // Justification horizontale TEXT/ATTRIB (§ 27) — absent du fichier
@@ -488,6 +523,141 @@ function densifyPolyline(verts: Pt[], bulges: number[], closed: boolean): Pt[] {
   return out;
 }
 
+// ───────────────────────────── Contours HATCH ─────────────────────────────
+//
+// Un HATCH « hérite » d'un Shape MicroStation rempli exporté sans polyligne
+// de bord séparée : sans cette analyse, son contour n'existe nulle part
+// ailleurs dans le DXF et la parcelle disparaît (cf. § 51,
+// docs/CONCEPTS-TRAITEMENT-DXF.md). Lecture séquentielle avec état (et non le
+// repli générique code 10/20) car les mêmes codes de groupe changent de sens
+// selon la position dans le contour (sommet de polyligne, centre d'arc,
+// extrémité de segment…).
+
+/**
+ * Parse les boucles de contour (« boundary paths ») d'une entité HATCH.
+ * 91 = nombre de boucles ; pour chacune, 92 = type (bit 2 = polyligne, sinon
+ * suite d'edges Line/Arc/Ellipse/Spline). Une boucle Spline rend le curseur
+ * non fiable au-delà (structure de longueur variable, trop complexe pour
+ * une lecture sûre ici) : on abandonne alors l'entité plutôt que produire un
+ * contour erroné — les boucles déjà lues avant elle restent valides.
+ */
+function parseHatchLoops(groups: Pair[]): Pt[][] {
+  let idx = 0;
+  const at = (): Pair | undefined => groups[idx];
+  const code = (): string | undefined => groups[idx]?.[0];
+
+  while (idx < groups.length && code() !== "91") idx++;
+  if (idx >= groups.length) return [];
+  const nPaths = parseInt(at()![1], 10) || 0;
+  idx++;
+
+  const loops: Pt[][] = [];
+
+  for (let p = 0; p < nPaths; p++) {
+    while (idx < groups.length && code() !== "92") idx++;
+    if (idx >= groups.length) break;
+    const pathFlags = parseInt(at()![1], 10) || 0;
+    idx++;
+    const isPolyline = (pathFlags & 2) !== 0;
+
+    if (isPolyline) {
+      let hasBulge = false;
+      let nVerts = 0;
+      while (idx < groups.length) {
+        const c = code();
+        if (c === "72") { hasBulge = parseInt(at()![1], 10) === 1; idx++; }
+        else if (c === "73") { idx++; } // "fermé" — une boucle HATCH est toujours refermée
+        else if (c === "93") { nVerts = parseInt(at()![1], 10) || 0; idx++; break; }
+        else break;
+      }
+      const verts: Pt[] = [];
+      const bulges: number[] = [];
+      for (let v = 0; v < nVerts && idx < groups.length; v++) {
+        let x: number | null = null, y: number | null = null, b = 0;
+        if (code() === "10") { x = parseFloat(at()![1]); idx++; }
+        if (code() === "20") { y = parseFloat(at()![1]); idx++; }
+        if (hasBulge && code() === "42") { b = parseFloat(at()![1]); idx++; }
+        if (x != null && y != null) { verts.push([x, y]); bulges.push(b); }
+      }
+      const densified = densifyPolyline(verts, bulges, true);
+      if (densified.length >= 3) loops.push(densified);
+    } else {
+      while (idx < groups.length && code() !== "93") idx++;
+      if (idx >= groups.length) break;
+      const nEdges = parseInt(at()![1], 10) || 0;
+      idx++;
+      const pts: Pt[] = [];
+      let bail = false;
+      for (let e = 0; e < nEdges && !bail; e++) {
+        while (idx < groups.length && code() !== "72") idx++;
+        if (idx >= groups.length) { bail = true; break; }
+        const edgeType = parseInt(at()![1], 10);
+        idx++;
+        if (edgeType === 1) {
+          // Ligne : 10,20 (début), 11,21 (fin).
+          let x1 = NaN, y1 = NaN, x2 = NaN, y2 = NaN;
+          if (code() === "10") { x1 = parseFloat(at()![1]); idx++; }
+          if (code() === "20") { y1 = parseFloat(at()![1]); idx++; }
+          if (code() === "11") { x2 = parseFloat(at()![1]); idx++; }
+          if (code() === "21") { y2 = parseFloat(at()![1]); idx++; }
+          if (Number.isFinite(x1) && Number.isFinite(y1)) pts.push([x1, y1]);
+          if (Number.isFinite(x2) && Number.isFinite(y2)) pts.push([x2, y2]);
+        } else if (edgeType === 2) {
+          // Arc circulaire : 10,20 (centre), 40 (rayon), 50,51 (angles, degrés), 73 (sens CCW).
+          let cx = NaN, cy = NaN, r = NaN, a0 = 0, a1 = 0, ccw = true;
+          if (code() === "10") { cx = parseFloat(at()![1]); idx++; }
+          if (code() === "20") { cy = parseFloat(at()![1]); idx++; }
+          if (code() === "40") { r = parseFloat(at()![1]); idx++; }
+          if (code() === "50") { a0 = parseFloat(at()![1]); idx++; }
+          if (code() === "51") { a1 = parseFloat(at()![1]); idx++; }
+          if (code() === "73") { ccw = at()![1].trim() !== "0"; idx++; }
+          if (Number.isFinite(cx) && Number.isFinite(cy) && Number.isFinite(r) && r > 0) {
+            const start = ccw ? a0 : a1;
+            const end = ccw ? a1 : a0;
+            const arc = arcPoints(cx, cy, r, (start * Math.PI) / 180, (end * Math.PI) / 180);
+            pts.push(...(ccw ? arc : arc.slice().reverse()));
+          }
+        } else if (edgeType === 3) {
+          // Arc elliptique : 10,20 (centre), 11,21 (extrémité grand axe, relative),
+          // 40 (ratio petit/grand), 50,51 (paramètres, degrés), 73 (sens CCW).
+          let cx = NaN, cy = NaN, mx = NaN, my = NaN, ratio = 1, a0 = 0, a1 = 360, ccw = true;
+          if (code() === "10") { cx = parseFloat(at()![1]); idx++; }
+          if (code() === "20") { cy = parseFloat(at()![1]); idx++; }
+          if (code() === "11") { mx = parseFloat(at()![1]); idx++; }
+          if (code() === "21") { my = parseFloat(at()![1]); idx++; }
+          if (code() === "40") { ratio = parseFloat(at()![1]); idx++; }
+          if (code() === "50") { a0 = parseFloat(at()![1]); idx++; }
+          if (code() === "51") { a1 = parseFloat(at()![1]); idx++; }
+          if (code() === "73") { ccw = at()![1].trim() !== "0"; idx++; }
+          if (Number.isFinite(cx) && Number.isFinite(cy) && Number.isFinite(mx) && Number.isFinite(my)) {
+            const start = ((ccw ? a0 : a1) * Math.PI) / 180;
+            const end = ((ccw ? a1 : a0) * Math.PI) / 180;
+            const arc = ellipsePoints([cx, cy], [mx, my], ratio, start, end);
+            pts.push(...(ccw ? arc : arc.slice().reverse()));
+          }
+        } else {
+          // Spline (4) ou type inconnu : longueur de champs variable, curseur
+          // non fiable au-delà — on abandonne cette entité (boucles déjà
+          // lues conservées) plutôt que produire un contour faux.
+          bail = true;
+        }
+      }
+      if (bail) return loops;
+      if (pts.length >= 3) loops.push([...pts, pts[0]]);
+    }
+
+    // Objets source (associativité) : optionnels, à sauter pour garder le
+    // curseur aligné sur la boucle suivante.
+    if (code() === "97") {
+      const nSrc = parseInt(at()![1], 10) || 0;
+      idx++;
+      for (let s = 0; s < nSrc && code() === "330"; s++) idx++;
+    }
+  }
+
+  return loops;
+}
+
 /** Points d'une ellipse (centre c, grand axe `major` relatif à c, ratio, params). */
 function ellipsePoints(c: Pt, major: Pt, ratio: number, p0: number, p1: number): Pt[] {
   const ax = major[0], ay = major[1];
@@ -596,14 +766,27 @@ function emitGeometryFeatures(
       continue;
     }
 
-    if (e.type === "LINE" || e.type === "LWPOLYLINE" || e.type === "POLYLINE") {
+    if (
+      e.type === "LINE" ||
+      e.type === "LWPOLYLINE" ||
+      e.type === "POLYLINE" ||
+      e.type === "MLINE" ||
+      e.type === "SHAPE"
+    ) {
+      // MLINE (ligne parallèle multiple) et SHAPE (contour DGN "Shape" fermé
+      // par nature — cf. § SHAPE/MLINE, docs/CONCEPTS-TRAITEMENT-DXF.md) sont
+      // parsés par le même repli générique code 10/20 que LWPOLYLINE : leurs
+      // sommets sont déjà dans `e.verts`. SHAPE n'a pas de drapeau "fermé" en
+      // DXF — un contour ≥ 3 sommets est TOUJOURS traité comme un anneau.
+      //
       // Densifie d'abord les arcs de renflement (bulge) pour que les bords courbes
       // se referment avec les segments droits voisins à la polygonisation.
       const densified = densifyPolyline(e.verts, e.bulges, e.closed);
       const verts = densified.filter((p) => p && Number.isFinite(p[0]) && Number.isFinite(p[1]));
       if (verts.length < 2) { skip("polyligne_moins_2_sommets"); continue; }
       const world = verts.map(xform);
-      if (e.closed && world.length >= 3) {
+      const closed = e.type === "SHAPE" || e.closed;
+      if (closed && world.length >= 3) {
         emit({ type: "Polygon", coordinates: [[...world, world[0]]] });
       } else {
         emit({ type: "LineString", coordinates: world });
@@ -658,10 +841,28 @@ function emitGeometryFeatures(
       continue;
     }
 
-    // Tout autre type (HATCH, MESH, …) : non émis mais COMPTÉ (jamais silencieux).
-    // Les parcelles remplies par HATCH ont quasi toujours leur contour aussi
-    // dessiné en segments (LINE) → récupérées par ailleurs ; la réconciliation
-    // rend visible toute exception.
+    if (e.type === "HATCH") {
+      // Un Shape MicroStation rempli exporté SANS polyligne de bord séparée
+      // n'a que ce contour comme trace de la parcelle (cf. § 51,
+      // docs/CONCEPTS-TRAITEMENT-DXF.md) — à ne pas laisser dans le
+      // catch-all générique ci-dessous, sous peine de perdre ces parcelles.
+      // Une entité peut produire plusieurs boucles (îlots) : toutes émises
+      // en Polygon séparés, mais comptées UNE fois côté réconciliation
+      // (`emitted`/`skipped` restent par ENTITÉ, pas par feature produite).
+      const loops = e.hatchLoops ?? [];
+      if (!loops.length) { skip("hatch_contour_non_analyse"); continue; }
+      for (const loop of loops) {
+        out.push({
+          type: "Feature",
+          geometry: { type: "Polygon", coordinates: [loop.map(xform)] },
+          properties: { Layer: layer, _dgid_source_entity: e.type },
+        });
+      }
+      if (census) bump(census.emitted, e.type);
+      continue;
+    }
+
+    // Tout autre type (MESH, …) : non émis mais COMPTÉ (jamais silencieux).
     skip(`type_non_gere_${e.type.toLowerCase()}`);
   }
 }

@@ -6,7 +6,7 @@ import {
   BarChart2,
   History,
   FileText,
-  MapPin,
+  // MapPin,
   LogOut,
   LogIn,
   Landmark,
@@ -20,7 +20,7 @@ import {
   SheetClose,
   SheetContent,
 } from "@/components/ui/sheet";
-import { ThemeToggle } from "@/components/ThemeToggle";
+// import { ThemeToggle } from "@/components/ThemeToggle";
 import { signOutAction } from "@/app/_actions/auth";
 import { cn } from "@/lib/utils";
 
