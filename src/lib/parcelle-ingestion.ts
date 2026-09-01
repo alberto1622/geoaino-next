@@ -49,7 +49,10 @@ import {
 } from "./cadastral-filter";
 import { normalizeNumeroParcelle, normalizeSection } from "./nicad";
 import { readDxfWorldFeatures, decodeMText, type Census } from "./dxf-native";
-import { polygonizeLines } from "./polygonize";
+import { polygonizeLines, type PolygonizeOptions } from "./polygonize";
+
+/** Un dangle unique (cf. `PolygonizeOptions.dangles`) — type dérivé pour éviter la duplication/dérive entre les deux fichiers. */
+type DangleInfo = NonNullable<PolygonizeOptions["dangles"]>[number];
 
 const execFileAsync = promisify(execFile);
 
@@ -1128,12 +1131,12 @@ function polygonizeBoundaries(
   oversized: number;
   droppedRegions: Array<{ x0: number; y0: number; x1: number; y1: number; segments: number }>;
   /** Cf. § 53, docs/CONCEPTS-TRAITEMENT-DXF.md — segments restés pendants après raccord. */
-  dangles: Array<{ x0: number; y0: number; x1: number; y1: number; lengthM: number; selfGapM: number; numVertices: number; sourceEntity: string }>;
+  dangles: DangleInfo[];
 } {
   let reconstructed = 0;
   let oversized = 0;
   const droppedRegions: Array<{ x0: number; y0: number; x1: number; y1: number; segments: number }> = [];
-  const dangles: Array<{ x0: number; y0: number; x1: number; y1: number; lengthM: number; selfGapM: number; numVertices: number; sourceEntity: string }> = [];
+  const dangles: DangleInfo[] = [];
 
   // Arêtes des polygones de section « authored » (polylignes fermées/3DFACE du
   // calque sections, routés en polygones AVANT cet appel) : une limite mitoyenne
@@ -1152,66 +1155,6 @@ function polygonizeBoundaries(
         authoredSectionEdges.push(ring as number[][]);
         authoredSectionEdgeSourceEntities.push("RING_EDGE");
       }
-    }
-  }
-
-  // Anneaux "authored" (déjà fermés — ex. grand `Shape` MicroStation
-  // englobant un îlot) touchés par une ligne ouverte du réseau parcelles à
-  // proximité immédiate de leur bord : § 53 bis, docs/CONCEPTS-TRAITEMENT-DXF.md.
-  // Un tel anneau routé tel quel (comportement d'origine) empêche
-  // STRUCTURELLEMENT ses subdivisions intérieures de jamais se fermer — son
-  // bord n'entre jamais dans le graphe de noding, même à écart nul, car
-  // `routePolygon` (extractPolygonsAndLabels) le sort du circuit avant même
-  // la construction de `boundaryLinesByClass`. Détection SÉLECTIVE, pas
-  // systématique comme pour les sections ci-dessus (bien plus nombreux —
-  // réinjecter tous les anneaux coûterait cher en noding pour un gain
-  // marginal sur la majorité qui n'a aucune subdivision intérieure ; mesuré
-  // à 69/231 anneaux concernés sur un cas réel, § 53 bis).
-  const RING_TOUCH_TOLERANCE_M = Number(process.env.DXF_RING_TOUCH_TOLERANCE_M || 1);
-  const ringEdgeLines: number[][][] = [];
-  const ringEdgeSourceEntities: string[] = [];
-  if (parcelPolygons.length > 0) {
-    const ringIndex = new BBoxGridIndex(parcelPolygons.map((p) => geometryBBox(p.geom)));
-    const touchedRingIdx = new Set<number>();
-    for (const [layerClass, lines] of Object.entries(boundaryLinesByClass)) {
-      if (layerClass === SECTION_BOUNDARY_CLASS || layerClass === PISCINE_CLASS) continue;
-      for (const line of lines) {
-        for (const endpoint of [line[0], line[line.length - 1]] as [number, number][]) {
-          const queryBox: BBox = [
-            endpoint[0] - RING_TOUCH_TOLERANCE_M,
-            endpoint[1] - RING_TOUCH_TOLERANCE_M,
-            endpoint[0] + RING_TOUCH_TOLERANCE_M,
-            endpoint[1] + RING_TOUCH_TOLERANCE_M,
-          ];
-          for (const idx of ringIndex.queryRange(queryBox)) {
-            if (touchedRingIdx.has(idx)) continue;
-            if (pointToPolygonBoundaryDistanceM(endpoint, parcelPolygons[idx].geom) <= RING_TOUCH_TOLERANCE_M) {
-              touchedRingIdx.add(idx);
-            }
-          }
-        }
-      }
-    }
-    if (touchedRingIdx.size > 0) {
-      const kept: RawPolygon[] = [];
-      parcelPolygons.forEach((p, idx) => {
-        if (!touchedRingIdx.has(idx)) {
-          kept.push(p);
-          return;
-        }
-        const polys = p.geom.type === "Polygon" ? [p.geom.coordinates] : p.geom.coordinates;
-        for (const rings of polys) {
-          for (const ring of rings) {
-            ringEdgeLines.push(ring as number[][]);
-            ringEdgeSourceEntities.push("RING_EDGE");
-          }
-        }
-      });
-      // Mutation en place : `parcelPolygons` est la MÊME référence détenue par
-      // l'appelant (buildParcellesFromFc32628) — cf. `net.target.push(...)`
-      // plus bas, qui repose déjà sur cette mutation partagée.
-      parcelPolygons.length = 0;
-      parcelPolygons.push(...kept);
     }
   }
 
@@ -1234,6 +1177,9 @@ function polygonizeBoundaries(
   }
   const piscineLines = boundaryLinesByClass[PISCINE_CLASS] ?? [];
   const piscineLineSourceEntities = boundarySourceEntityByClass[PISCINE_CLASS] ?? [];
+  // Réseau de BASE (sans arêtes d'anneau "authored" réinjectées) — construit
+  // AVANT la détection § 53 bis ci-dessous, qui en a besoin pour son passage
+  // à blanc.
   const parcelLines: number[][][] = [];
   const parcelLineSourceEntities: string[] = [];
   for (const [layerClass, lines] of Object.entries(boundaryLinesByClass)) {
@@ -1248,6 +1194,97 @@ function polygonizeBoundaries(
     parcelLines.push(sectionLines[i]);
     parcelLineSourceEntities.push(sectionLineSourceEntities[i]);
   }
+
+  // Anneaux "authored" (déjà fermés — ex. grand `Shape` MicroStation
+  // englobant un îlot) dont le bord referme un VRAI dangle du réseau
+  // parcelles : § 53 bis, docs/CONCEPTS-TRAITEMENT-DXF.md. Un tel anneau
+  // routé tel quel (comportement d'origine) empêche STRUCTURELLEMENT ses
+  // subdivisions intérieures de jamais se fermer — son bord n'entre jamais
+  // dans le graphe de noding, même à écart nul, car `routePolygon`
+  // (extractPolygonsAndLabels) le sort du circuit avant même la
+  // construction de `boundaryLinesByClass`.
+  //
+  // Détection par DANGLE RÉEL, pas par simple proximité de N'IMPORTE
+  // QUELLE ligne ouverte (v1, abandonnée) : un passage à blanc du réseau
+  // `parcelLines` SANS aucune arête d'anneau donne les vrais segments qui
+  // échouent structurellement à se refermer (`polygonizer.getDangles()`,
+  // même mécanisme que § 53) ; seuls LEURS extrémités libres (p0/p1, pas
+  // l'enveloppe) sont testées contre le bord des anneaux `authored`. Une
+  // parcelle ordinaire dont les voisines se referment déjà normalement ne
+  // produit jamais un tel dangle — donc jamais candidate, quelle que soit
+  // sa proximité avec un anneau voisin. Mesuré sur ZIG.dxf complet
+  // (production, `layerMapping` réel) : la détection par proximité SEULE
+  // (v1) marquait 55 431/89 142 anneaux (62 %, médiane d'aire 300 m² — des
+  // parcelles ordinaires) et provoquait 1 152 zones de polygonisation
+  // perdues (segments quasi-dupliqués à grande échelle, § 4/« Espace
+  // Vert ») ; un filtre de taille seul (v2, > `POLYGONIZE_MAX_AREA_M2`) les
+  // ramenait à 97 mais ratait les petits îlots à quelques parcelles. La
+  // détection par dangle réel (v3) est à la fois plus SÛRE (ne réagit qu'à
+  // un échec de fermeture avéré, jamais à une simple mitoyenneté) et plus
+  // COMPLÈTE (aucune restriction de taille) — combine les deux garanties.
+  const RING_TOUCH_TOLERANCE_M = Number(process.env.DXF_RING_TOUCH_TOLERANCE_M || 1);
+  const ringEdgeLines: number[][][] = [];
+  const ringEdgeSourceEntities: string[] = [];
+  if (parcelPolygons.length > 0 && parcelLines.length > 0) {
+    const dryDangles: DangleInfo[] = [];
+    try {
+      // Résultat ignoré : seul `dryDangles` nous intéresse ici. `droppedRegions`
+      // isolé dans un tableau jetable — ce passage à blanc ne doit pas polluer
+      // le compteur final (§ 28), le VRAI passage plus bas le renseignera.
+      polygonizeLines(parcelLines, {
+        minAreaM2: POLYGONIZE_MIN_AREA_M2,
+        droppedRegions: [],
+        dangles: dryDangles,
+        lineSourceEntities: parcelLineSourceEntities,
+      });
+    } catch (err) {
+      console.warn("[parcelle-ingestion] passage à blanc § 53 bis échoué (ignoré) :", err);
+    }
+
+    if (dryDangles.length > 0) {
+      const ringIndex = new BBoxGridIndex(parcelPolygons.map((p) => geometryBBox(p.geom)));
+      const touchedRingIdx = new Set<number>();
+      for (const dangle of dryDangles) {
+        for (const endpoint of [dangle.p0, dangle.p1]) {
+          const queryBox: BBox = [
+            endpoint[0] - RING_TOUCH_TOLERANCE_M,
+            endpoint[1] - RING_TOUCH_TOLERANCE_M,
+            endpoint[0] + RING_TOUCH_TOLERANCE_M,
+            endpoint[1] + RING_TOUCH_TOLERANCE_M,
+          ];
+          for (const idx of ringIndex.queryRange(queryBox)) {
+            if (touchedRingIdx.has(idx)) continue;
+            if (pointToPolygonBoundaryDistanceM(endpoint, parcelPolygons[idx].geom) <= RING_TOUCH_TOLERANCE_M) {
+              touchedRingIdx.add(idx);
+            }
+          }
+        }
+      }
+
+      if (touchedRingIdx.size > 0) {
+        const kept: RawPolygon[] = [];
+        parcelPolygons.forEach((p, idx) => {
+          if (!touchedRingIdx.has(idx)) {
+            kept.push(p);
+            return;
+          }
+          const polys = p.geom.type === "Polygon" ? [p.geom.coordinates] : p.geom.coordinates;
+          for (const rings of polys) {
+            for (const ring of rings) {
+              ringEdgeLines.push(ring as number[][]);
+              ringEdgeSourceEntities.push("RING_EDGE");
+            }
+          }
+        });
+        // Mutation en place : `parcelPolygons` est la MÊME référence détenue par
+        // l'appelant (buildParcellesFromFc32628) — cf. `net.target.push(...)`
+        // plus bas, qui repose déjà sur cette mutation partagée.
+        parcelPolygons.length = 0;
+        parcelPolygons.push(...kept);
+      }
+    }
+  }
+
   // Arêtes des anneaux "authored" touchés (§ 53 bis, ci-dessus) — réinjectées
   // dans le MÊME réseau que les limites ouvertes pour que noding/polygonizer
   // puisse enfin raccorder leurs subdivisions intérieures à leur bord.

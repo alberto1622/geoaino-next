@@ -4935,7 +4935,7 @@ fermeture est impossible par construction du pipeline.
   concernées passent par le même noding. Un contour déjà refermé en amont
   (routé directement comme polygone) est exactement le cas qui échappe à
   cette garantie.
-- **Correctif appliqué** (`parcelle-ingestion.ts` · `polygonizeBoundaries`) :
+- **Correctif appliqué, v1** (`parcelle-ingestion.ts` · `polygonizeBoundaries`) :
   avant construction du réseau `parcelLines`, détection (via `BBoxGridIndex`
   + `pointToPolygonBoundaryDistanceM`, déjà utilisés ailleurs dans ce
   fichier pour la jointure numéro↔parcelle) de tout anneau `authored` dont
@@ -4943,9 +4943,8 @@ fermeture est impossible par construction du pipeline.
   extrémité de ligne ouverte du réseau parcelles. Un anneau touché est
   retiré de `parcelPolygons` et ses arêtes réinjectées dans `parcelLines`
   (taguées `RING_EDGE`, même mécanisme que `authoredSectionEdges`
-  ci-dessus) — SÉLECTIF, pas systématique (69/231 anneaux concernés sur le
-  cas de mesure), pour ne pas payer le coût du noding sur la majorité des
-  blocs sans subdivision intérieure.
+  ci-dessus) — SÉLECTIF, pas systématique, pour ne pas payer le coût du
+  noding sur la majorité des blocs sans subdivision intérieure.
 - **Validé par un test synthétique** (`scripts/test-big-shape-fix-tmp.ts`,
   supprimé après usage) : un rectangle 40×20 subdivisé par une `LINE`
   intérieure touchant exactement son bord (écart 0 m) donne, après
@@ -4953,37 +4952,91 @@ fermeture est impossible par construction du pipeline.
   face fusionnée de 800 m² portant 2 numéros candidats. Un second bloc
   témoin, fermé et SANS subdivision intérieure, ressort inchangé (aucune
   sur-correction).
-- **Effet mesuré, pipeline complet, deux fichiers réels** :
+- **Régression découverte en production (v1)** : le job réel sur ZIG.dxf
+  complet (61 471 parcelles construites) a signalé **1 152 zones de
+  polygonisation échouée (3 280 883 segments)** — 33× pire que le run CLI
+  de mesure ci-dessous, qui ne passait pas le `layerMapping` réel du job.
+  Diagnostic concret sur un cas cité par l'utilisateur (NICAD
+  `0231010000900732`, section 009) : ce point tombe en plein dans l'îlot
+  dense « Espace Vert » (§ 53), et **182 des 350 numéros de parcelle du DXF
+  brut dans un rayon de 400 m (52 %) étaient absents du résultat final**.
+- **Root cause de la régression, confirmée par instrumentation** (dump
+  temporaire dans `polygonizeBoundaries`, rejoué avec le `layerMapping`
+  EXACT du job de production, script supprimé après usage) : le critère de
+  détection ci-dessus (« une extrémité de ligne ouverte touche le bord d'un
+  anneau fermé à ≤ 1 m ») ne distingue PAS *« ce grand rectangle a une
+  subdivision intérieure qui doit s'y raccrocher »* (le vrai cas image-6)
+  de *« cette parcelle ordinaire touche simplement sa voisine au coin,
+  comme n'importe quelle mitoyenneté »*. Sur ZIG.dxf complet, avec le
+  `layerMapping` réel : **55 431 des 89 142 anneaux `authored` (62 %)**
+  étaient marqués « touchés » — aire médiane **300 m²** (une parcelle
+  ordinaire), 91,7 % sous 50 m de diagonale de bbox ; seuls **97 anneaux
+  (0,18 %)** dépassent 50 000 m², la poignée de vrais îlots-enveloppe.
+  Réinjecter le contour ENTIER de ces 55 431 parcelles ordinaires dans le
+  réseau de noding global créait des paires de segments quasi-dupliqués/
+  quasi-parallèles à grande échelle (une parcelle a très souvent DEUX
+  représentations dans le DXF — contour fermé ET limites ouvertes
+  redondantes, cf. `nbDoublonsRecouvrement` ci-dessous) — d'où les échecs
+  « found non-noded intersection » massifs, concentrés dans les zones déjà
+  denses où cette redondance est la plus fréquente.
+- **Correctif intermédiaire (v2)** : n'éligibiliser à la réinjection que les
+  anneaux dont l'aire dépasse `POLYGONIZE_MAX_AREA_M2` (50 000 m² par
+  défaut, seuil DÉJÀ utilisé plus bas dans ce même fichier pour distinguer
+  une parcelle réelle d'une enveloppe/îlot). Ramène les candidats de
+  55 431 à 97 sur ZIG.dxf complet — élimine totalement la régression, mais
+  au prix d'un plafond arbitraire : un petit îlot de 2-3 parcelles (image-6
+  à l'échelle réduite) sous 50 000 m² reste raté, comme avant tout
+  correctif.
+- **Correctif final (v3, détection par dangle réel)** — remplace le filtre
+  de taille par un critère plus précis ET plus complet : le réseau
+  `parcelLines` est d'abord polygonisé **à blanc**, SANS aucun anneau
+  réinjecté (mêmes lignes, mêmes tolérances — résultat jeté, seul le
+  tableau `dangles` nous intéresse, cf. `polygonizer.getDangles()` § 53).
+  Seules les extrémités RÉELLES (`p0`/`p1`, pas l'enveloppe) de ces vrais
+  dangles sont ensuite testées contre le bord des anneaux `authored`, sans
+  aucune restriction de taille. Une parcelle ordinaire dont les voisines se
+  referment déjà normalement ne produit jamais un tel dangle — donc jamais
+  candidate, quelle que soit sa proximité avec un anneau voisin. Combine la
+  sûreté de v2 (ne réagit qu'à un échec de fermeture avéré) avec la
+  couverture de v1 (aucun plancher de taille, capture aussi les petits
+  îlots). Coût : un passage à blanc supplémentaire du réseau parcelles —
+  rapide (~10-15 s de plus sur ZIG.dxf complet, la partie noding elle-même
+  étant courte face à la lecture/classification du DXF).
+- **Effet mesuré, pipeline complet, ZIG.dxf complet (`layerMapping` réel du
+  job de production)** — quatre runs CLI comparables (mêmes entités lues) :
 
-  | | ZIG-test.dxf (Oussouye, avant) | ZIG-test.dxf (après) | ZIG.dxf complet (avant) | ZIG.dxf complet (après) |
+  | | Sans correctif (référence) | v1 — proximité seule | v2 — filtre de taille | **v3 — dangle réel** |
   |---|---|---|---|---|
-  | Parcelles construites | 1 151 | **1 874 (+62,8 %)** | 60 081 | **62 079 (+3,3 %)** |
-  | Doublons recouvrement | 525 | 450 | 42 169 | **10 413 (−75 %)** |
-  | Enveloppes supprimées | 1 148 | 122 | 19 448 | **3 825 (−80 %)** |
-  | Dangles réseau parcelles (tol=1 m) | 1 883 | 283 | 46 337 | 40 581 |
-  | Durée du run complet | — | — | ~5 min | **~30 min (×6)** |
-  | Régions irrécupérables (`droppedRegions`) | 0 | 0 | 0 | **35 (148 110 segments)** |
-  | Textes hors parcelle | 62 883 | 62 068 | 6 013 | 14 099 (+8 086) |
+  | Anneaux `authored` réinjectés | 0 | 55 431 (62 %) | 97 (0,18 %) | qq. centaines (dangle-driven) |
+  | Parcelles construites | 58 765 | 61 471 | 58 837 | **62 386** |
+  | Gain vs référence | — | +2 706 (trompeur) | +72 | **+3 621 (+6,2 %)** |
+  | Zones polygonisation échouée (`droppedRegions`) | 0 | **1 152 (3 280 883 seg.)** | 0 | **1 (4 039 seg.)** |
+  | Limites non refermées (dangles restants) | 44 446 | 62 110 | 44 205 | **28 349 (−16 097)** |
+  | Doublons recouvrement | 42 127 | 10 455 | 42 090 | 35 099 |
+  | Enveloppes supprimées | 18 435 | 3 676 | 18 582 | 11 507 |
+  | Durée du run complet | 169,5 s | ~30-60 min | 178,3 s | **273,9 s (~4,6 min)** |
 
-  **Le gain net est réel et confirmé sur les deux fichiers**, mais avec un
-  coût sérieux sur ZIG.dxf complet, absent sur l'extrait plus petit : dans
-  UNE zone déjà connue comme pathologique (îlot dense « Espace Vert », § 53
-  ci-dessus), réinjecter les arêtes de plusieurs gros anneaux simultanément
-  y densifie encore le réseau de noding déjà fragile — JSTS échoue à noder
-  certaines tuiles même après subdivision maximale (`found non-noded
-  intersection`, quelques couples de segments quasi parallèles précis,
-  répétés sur les tuiles en marge) et la région entière est abandonnée
-  (mécanisme déjà existant, § 28 `droppedRegions` — pas un crash, mais une
-  perte totale de cette zone). Cela explique aussi la hausse des textes
-  orphelins (+8 086 : les libellés des zones abandonnées n'ont plus aucune
-  géométrie, même fusionnée, à laquelle s'attacher) et le ×6 sur la durée.
-  **Décision non tranchée à ce stade** : le gain nominal (+1 998 parcelles)
-  dépasse largement la perte des zones abandonnées, mais le coût en durée
-  d'exécution est significatif pour un pipeline interactif — reste à
-  décider si c'est un compromis acceptable tel quel, ou si le correctif
-  doit être rendu plus prudent (ex. dédoublonner plus agressivement les
-  arêtes injectées avant noding, ou exclure les zones déjà signalées
-  denses/pathologiques de la réinjection).
+  Le run v1 (production) affiche un total de parcelles trompeusement élevé :
+  la réinjection massive de 55 431 anneaux ordinaires fait aussi baisser
+  artificiellement `Doublons recouvrement`/`Enveloppes supprimées`
+  (redistribution de la même donnée, pas un vrai gain) tout en détruisant
+  intégralement 1 152 zones. v2 élimine la régression mais son plafond de
+  taille laisse la majorité des petits îlots hors de portée (+72
+  seulement). **v3 résout 16 097 dangles supplémentaires** (contre 241 pour
+  v2) — preuve directe que la détection par dangle réel couvre bien les
+  petits blocs à quelques parcelles que v2 ratait — pour un gain net de
+  **+3 621 parcelles, honnête et vérifiable** (pas un artefact de
+  redistribution). Le prix : **une seule zone isolée** (4 039 segments sur
+  ~130 000, ≈ 3 %, dans « Espace Vert ») entre en conflit de noding
+  (« found non-noded intersection » entre deux segments distincts à moins
+  de 15 m l'un de l'autre) et reste abandonnée après subdivision maximale —
+  signalée dans les warnings comme n'importe quelle zone perdue (§ 28), pas
+  silencieuse. **Décision : correctif v3 conservé** — le rapport gain/coût
+  (+3 621 parcelles pour 1 zone de 4 039 segments, contre 1 152 zones pour
+  v1) est sans commune mesure avec la régression initiale, et la détection
+  par dangle réel est structurellement plus sûre que par simple proximité :
+  elle ne réagit qu'à un échec de fermeture avéré, jamais à une mitoyenneté
+  ordinaire.
 
 ---
 

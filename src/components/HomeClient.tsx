@@ -662,10 +662,10 @@ export default function HomeClient({ user, stats }: Props) {
               Fiabilisation des données cadastrales — Sénégal
             </div>
 
-            <h1 className="text-5xl md:text-6xl font-bold tracking-tight mb-6 leading-tight">
+            <h1 className="text-4xl md:text-5xl font-bold tracking-tight mb-6 leading-tight">
               Fiabiliser les données cadastrales
               <br />
-              <span className="text-primary">
+              <span className="text-primary text-3xl md:text-4xl">
                 détection, correction et traçabilité
               </span>
             </h1>

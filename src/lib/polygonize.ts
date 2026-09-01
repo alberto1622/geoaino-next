@@ -83,7 +83,12 @@ export interface PolygonizeOptions {
    * polygonisable, juste jamais refermée en anneau. Cf. § 53,
    * docs/CONCEPTS-TRAITEMENT-DXF.md.
    */
-  dangles?: Array<{ x0: number; y0: number; x1: number; y1: number; lengthM: number; selfGapM: number; numVertices: number; sourceEntity: string }>;
+  dangles?: Array<{
+    x0: number; y0: number; x1: number; y1: number;
+    /** Extrémités réelles (premier/dernier sommet), pas l'enveloppe — cf. § 53 bis. */
+    p0: [number, number]; p1: [number, number];
+    lengthM: number; selfGapM: number; numVertices: number; sourceEntity: string;
+  }>;
   /**
    * Type DXF source (`_dgid_source_entity`) de chaque ligne de `lines`, MÊME
    * INDEX/ORDRE (cf. `parcelle-ingestion.ts` · `boundarySourceEntityByClass`).
@@ -209,7 +214,11 @@ interface HealStats {
    */
   droppedRegions: Array<{ x0: number; y0: number; x1: number; y1: number; segments: number }>;
   /** Cf. `PolygonizeOptions.dangles`. */
-  dangles: Array<{ x0: number; y0: number; x1: number; y1: number; lengthM: number; selfGapM: number; numVertices: number; sourceEntity: string }>;
+  dangles: Array<{
+    x0: number; y0: number; x1: number; y1: number;
+    p0: [number, number]; p1: [number, number];
+    lengthM: number; selfGapM: number; numVertices: number; sourceEntity: string;
+  }>;
 }
 
 /**
@@ -567,6 +576,12 @@ function polygonizeChunk(
         y0: env.getMinY(),
         x1: env.getMaxX(),
         y1: env.getMaxY(),
+        // Extrémités RÉELLES (pas l'enveloppe, qui ne coïncide avec aucun
+        // sommet dès que le dangle a plus de 2 points) — cf. § 53 bis,
+        // détection des anneaux "authored" à réinjecter par dangle réel
+        // plutôt que par simple proximité de n'importe quelle ligne.
+        p0: [first.x, first.y],
+        p1: [last.x, last.y],
         lengthM: dangle.getLength(),
         selfGapM: Math.sqrt(dx * dx + dy * dy),
         // Conservé à titre de recoupement (proxy géométrique) désormais
