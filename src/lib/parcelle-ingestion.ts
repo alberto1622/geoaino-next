@@ -54,6 +54,8 @@ import { polygonizeLines, type PolygonizeOptions } from "./polygonize";
 
 /** Un dangle unique (cf. `PolygonizeOptions.dangles`) — type dérivé pour éviter la duplication/dérive entre les deux fichiers. */
 type DangleInfo = NonNullable<PolygonizeOptions["dangles"]>[number];
+/** Une paire quasi-doublon réconciliée (cf. `PolygonizeOptions.nearDuplicateEdges`, § 53 ter). */
+type NearDuplicateEdgeInfo = NonNullable<PolygonizeOptions["nearDuplicateEdges"]>[number];
 
 const execFileAsync = promisify(execFile);
 
@@ -154,6 +156,11 @@ export interface DxfIngestionReport {
    *  anneau, donc jamais construits en parcelle. Diagnostic (comptage par tuile,
    *  surcompte possible en marge), n'écarte rien de nouveau. */
   nbLimitesNonRefermees: number;
+  /** Cf. § 53 ter — paires de lignes quasi-doublons (extrémité libre différente
+   *  de quelques mètres, sommet quasi partagé) réconciliées AVANT noding.
+   *  Sans ce contrôle, chacune finissait comptée dans `nbLimitesNonRefermees`
+   *  et la subdivision qu'elles dessinaient disparaissait. */
+  nbAretesQuasiDoublonsReconciliees: number;
   /** Parcelle nettement plus grande (≥ `DXF_OUTLIER_AREA_RATIO`, défaut 3×) que
    *  la médiane de ses voisines spatiales immédiates — signe probable d'une
    *  limite interne restée pendante (§ 53 bis) : plusieurs parcelles fusionnées
@@ -1162,11 +1169,14 @@ function polygonizeBoundaries(
   droppedRegions: Array<{ x0: number; y0: number; x1: number; y1: number; segments: number }>;
   /** Cf. § 53, docs/CONCEPTS-TRAITEMENT-DXF.md — segments restés pendants après raccord. */
   dangles: DangleInfo[];
+  /** Cf. § 53 ter — quasi-doublons réconciliés avant noding. */
+  nearDuplicateEdges: NearDuplicateEdgeInfo[];
 } {
   let reconstructed = 0;
   let oversized = 0;
   const droppedRegions: Array<{ x0: number; y0: number; x1: number; y1: number; segments: number }> = [];
   const dangles: DangleInfo[] = [];
+  const nearDuplicateEdges: NearDuplicateEdgeInfo[] = [];
 
   // Arêtes des polygones de section « authored » (polylignes fermées/3DFACE du
   // calque sections, routés en polygones AVANT cet appel) : une limite mitoyenne
@@ -1355,6 +1365,7 @@ function polygonizeBoundaries(
         ...(net.snapTol != null ? { snapToleranceM: net.snapTol } : {}),
         droppedRegions,
         dangles,
+        nearDuplicateEdges,
         lineSourceEntities: net.sourceEntities,
       });
     } catch (err) {
@@ -1378,7 +1389,7 @@ function polygonizeBoundaries(
     }
   }
 
-  return { reconstructed, oversized, droppedRegions, dangles };
+  return { reconstructed, oversized, droppedRegions, dangles, nearDuplicateEdges };
 }
 
 /** Point représentatif garanti à l'intérieur de la géométrie (pour les jointures). */
@@ -1726,7 +1737,7 @@ function blankIngestionReport(warnings: string[] = []): DxfIngestionReport {
     nbParcelles: 0, nbSansNumero: 0, nbSansDenomination: 0, nbSansProprietaire: 0,
     nbSansSection: 0, nbSansCommune2026: 0, nbCommune2026Approx: 0,
     nbSectionDepuisTableSections: 0, nbSectionApprox: 0, nbNumeroNonConforme: 0,
-    nbPiscines: 0, nbParcellesPolygonisees: 0, nbZonesPolygonisationEchouee: 0, nbLimitesNonRefermees: 0, nbParcellesSuspectesFusion: 0, nbPolygonesEnveloppeIgnores: 0, nbHorsEmprise: 0,
+    nbPiscines: 0, nbParcellesPolygonisees: 0, nbZonesPolygonisationEchouee: 0, nbLimitesNonRefermees: 0, nbAretesQuasiDoublonsReconciliees: 0, nbParcellesSuspectesFusion: 0, nbPolygonesEnveloppeIgnores: 0, nbHorsEmprise: 0,
     nbPolylignesOuvertesIgnorees: 0, nbLignesTropCourtesIgnorees: 0, nbArcsSplinesCourtsIgnores: 0, nbTextesHorsParcelle: 0, nbNumerosRecuperesParDebordement: 0,
     nbParcellesMultiNumeros: 0,
     nbPolygonesInvalidesRejetes: 0,
@@ -1777,6 +1788,7 @@ export function buildParcellesFromFc32628(
     oversized: nbPolygonesEnveloppeIgnores,
     droppedRegions: nbParcellesZonesIrrecuperablesRegions,
     dangles: limitesNonRefermees,
+    nearDuplicateEdges: aretesQuasiDoublonsReconciliees,
   } = polygonizeBoundaries(boundaryLinesByClass, boundarySourceEntityByClass, parcelPolygons, sectionPolygons, piscinePolygons);
   const nbZonesPolygonisationEchouee = nbParcellesZonesIrrecuperablesRegions.length;
   if (nbZonesPolygonisationEchouee > 0) {
@@ -1816,6 +1828,18 @@ export function buildParcellesFromFc32628(
         "aucune parcelle reconstruite pour ces segments (écart entre extrémités > tolérance de raccord). " +
         `${nbEcartFaible} ont un écart 1er/dernier sommet ≤ 2 m (candidats probables à une fermeture dédiée). ` +
         `Type source : ${sourceBreakdown}.`
+    );
+  }
+  // Cf. § 53 ter : quasi-doublons AVANT noding (extrémité libre différente de
+  // quelques mètres, distincts des doublons EXACTS) — réconciliés, pas
+  // rejetés : sans ce contrôle, chacune des deux lignes finissait exclue comme
+  // dangle (cf. ci-dessus) et la subdivision qu'elles dessinaient disparaissait.
+  const nbAretesQuasiDoublonsReconciliees = aretesQuasiDoublonsReconciliees.length;
+  if (nbAretesQuasiDoublonsReconciliees > 0) {
+    warnings.push(
+      `${nbAretesQuasiDoublonsReconciliees} arête(s) quasi-doublon(s) réconciliée(s) avant polygonisation ` +
+        "(même limite dessinée deux fois avec une imprécision de digitalisation, sommet quasi partagé) — " +
+        "une seule conservée par paire, aucune parcelle rejetée."
     );
   }
   _t = phase(`polygonize (+${nbParcellesPolygonisees})`, _t);
@@ -2310,6 +2334,7 @@ export function buildParcellesFromFc32628(
       nbParcellesPolygonisees,
       nbZonesPolygonisationEchouee,
       nbLimitesNonRefermees,
+      nbAretesQuasiDoublonsReconciliees,
       nbParcellesSuspectesFusion,
       nbPolygonesEnveloppeIgnores: nbParcellesTropGrandes,
       nbHorsEmprise,

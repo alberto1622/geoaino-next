@@ -5169,6 +5169,70 @@ tort deux sommets cadastraux distincts ailleurs dans un fichier de 100 Mo+.
 
 ---
 
+## 53 quater. Réconcilier les arêtes quasi-doublons AVANT noding : récupérer le cas signalé au § 53 ter sans relâcher `SNAP_TOLERANCE_M`
+
+**Problème métier** : le § 53 ter se contentait de SIGNALER le cas
+Matam_Ourossogui (2000 m² au lieu de ~500 m²) sans le corriger. L'utilisateur
+a demandé une vraie récupération. Hypothèse écartée d'emblée : relâcher
+`SNAP_TOLERANCE_M` (testé jusqu'à 5-6 m sur les vraies coordonnées, aucun
+effet — les segments en cause n'ont, à AUCUN de leurs deux bouts, de
+partenaire net dans le réseau environnant).
+
+**Cause technique** : la limite interne qui aurait dû séparer les deux
+étiquettes est dessinée DEUX FOIS avec une imprécision de digitalisation —
+même sommet de départ (quasi exact), bout libre différent de 2 à 5 m. Ni
+`canonicalLineKey` (doublon EXACT, chaîne strictement identique) ni
+`healUndershoots` (§ 53, raccorde une extrémité PENDANTE isolée) ne
+couvrent ce patron : les DEUX tracés restent des dangles, aucune parcelle
+n'est reconstruite pour la subdivision qu'ils dessinaient.
+
+**Solution** (`src/lib/polygonize.ts · reconcileNearDuplicateEdges`) : nouvelle
+étape AVANT noding, après le dédoublonnage exact. Pour chaque sommet
+(quasi-)exactement partagé (`DUPLICATE_EDGE_VERTEX_EPS_M`, 2 cm — bruit
+d'export, pas une coïncidence de voisinage) par ≥ 2 lignes, teste les paires
+colinéaires depuis ce sommet (`DUPLICATE_EDGE_MAX_ANGLE_DEG`, 12° — mesuré à
+0,0° sur les vraies paires du cas réel) dont le bout libre est à
+`DUPLICATE_EDGE_MAX_GAP_M` (5 m, `DXF_DUPLICATE_EDGE_MAX_GAP_M`) au plus
+l'une de l'autre. Ne garde qu'UNE ligne par paire : celle dont le bout libre
+est déjà ancré ailleurs dans le réseau l'emporte (indice de tracé
+correctement raccordé) ; à égalité, la plus longue. Compté dans
+`nbAretesQuasiDoublonsReconciliees` (`parcelle-ingestion.ts`), avertissement
+agrégé séparé de `nbLimitesNonRefermees`.
+
+**Validé à l'échelle réelle** : rejoué sur les 231 lignes `LIMITE PARCELLE`
+du voisinage signalé (43→46 polygones, le bloc de 2000 m² disparaît, 0 nouvel
+outlier), PUIS sur l'intégralité du réseau `LIMITE PARCELLE` de
+Matam_Ourossogui.dxf (27 498 lignes) : 9124→9183 polygones, dangles
+9229→9040, outliers ≥3× 302→299, aire totale quasi inchangée (+0,06 %).
+Régression nette : aucune — le fichier reste très imparfait par ailleurs
+(299 outliers résiduels, hors du patron ciblé ici), mais rien n'empire.
+
+**Pourquoi (pièges inclus) — le vrai piège n'était pas géométrique** : le test
+à l'échelle réelle a révélé un problème INDÉPENDANT de cette réconciliation.
+Le réseau complet (27 498 lignes) passe de ~20 027 à ~19 531 lignes utiles
+après dédoublonnage exact + quasi-doublons — **juste sous** `tileThreshold`
+(20 000, § 4/§ 5). Avant ce correctif, le fichier restait juste AU-DESSUS du
+seuil → protégé par `polygonizeTiled` (retente/subdivise sur tout échec de
+noding). En retirant ~500 lignes de plus, la réconciliation le fait passer
+SOUS le seuil → voie directe `polygonizeChunk`, appelée UNE fois, SANS filet
+de rattrapage — qui plantait (`TopologyException: found non-noded
+intersection`) sur une intersection non nodée déjà présente dans le fichier,
+sans rapport avec le dédoublonnage. En production, cette exception aurait été
+attrapée par le `try/catch` de `parcelle-ingestion.ts` autour de la boucle
+`networks` — mais en abandonnant TOUT le réseau limites de parcelles, donc
+TOUTES les parcelles de l'import, un dégât sans commune mesure avec le bug
+d'origine. **Corrigé en amont** : la voie directe retente désormais sur
+`polygonizeTiled` (qui traite alors tout l'ensemble comme une seule région et
+la subdivise déjà en cas d'échec) plutôt que de laisser planter l'appel —
+aligne sa robustesse sur la voie tuilée au lieu de relever `tileThreshold`
+(qui n'aurait fait que déplacer la même faille vers un fichier un peu plus
+gros). Deuxième garde-fou ajouté après coup : un sommet portant plus de 20
+lignes (`MAX_CLUSTER_SIZE`) est exclu de la comparaison par paires — jamais
+une vraie topologie cadastrale (angle mort MTEXT/point dégénéré, § 28 bis),
+juste un risque de coût quadratique local pour zéro doublon plausible.
+
+---
+
 ## 54. Numéro de Titre Foncier fondu dans le numéro de parcelle : le calque `numero_tf` alimentait le NICAD
 
 **Problème métier** : sur les DXF où les parcelles sont annotées à la fois par

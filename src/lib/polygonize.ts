@@ -96,6 +96,19 @@ export interface PolygonizeOptions {
    * raccord (§ 53) — ne participe à aucun calcul géométrique.
    */
   lineSourceEntities?: string[];
+  /**
+   * Rempli (si fourni) par les paires de lignes quasi-doublons réconciliées
+   * AVANT noding (§ 53 ter) : même limite dessinée deux fois avec une
+   * imprécision de digitalisation (sommet quasi partagé, colinéaire, bout
+   * libre à ≤ `DUPLICATE_EDGE_MAX_GAP_M`) — une seule conservée. Purement
+   * diagnostique, ne change pas le comportement de la réconciliation elle-même.
+   */
+  nearDuplicateEdges?: Array<{
+    keptIndex: number;
+    droppedIndex: number;
+    farGapM: number;
+    angleDeg: number;
+  }>;
 }
 
 const TILE_THRESHOLD = Number(process.env.DXF_POLYGONIZE_TILE_THRESHOLD || 20000);
@@ -139,6 +152,38 @@ const TILE_HARD_DROP_SEGMENTS = Number(process.env.DXF_POLYGONIZE_TILE_HARD_DROP
 // (≈9 % de plus) reste hors de cette tolérance — laissé de côté par prudence,
 // non mesuré aussi finement.
 const SNAP_TOLERANCE_M = Number(process.env.DXF_POLYGONIZE_SNAP_TOLERANCE_M ?? 1);
+
+// ── Réconciliation des arêtes quasi-doublons (§ 53 ter) ─────────────────────
+// Cas réel Matam_Ourossogui.dxf (signalé par l'utilisateur) : une limite
+// interne dessinée DEUX FOIS avec une imprécision de digitalisation — même
+// sommet de départ, bout libre différent de quelques mètres — n'a NI l'une
+// NI l'autre extrémité libre à portée de `healUndershoots` (§ 53 : 3-25 m,
+// hors de portée d'une tolérance de raccord raisonnable). Le Polygonizer JSTS
+// exclut les DEUX comme dangles ; le contour extérieur se referme quand même,
+// fusionnant plusieurs parcelles en une (confirmé : 2 étiquettes distinctes
+// retrouvées dans un même polygone de 2000 m² contre ~500 m² pour ses
+// voisines). Traiter ceci comme un dédoublonnage AVANT noding — pas comme un
+// relâchement de `SNAP_TOLERANCE_M`, qui ne referme rien ici (testé jusqu'à
+// 5-6 m sans effet) et risquerait de souder deux sommets cadastraux distincts
+// ailleurs dans le fichier (le plus petit écartement observé entre deux
+// sommets distincts est de l'ordre de 10 m, cf. commentaire SNAP_TOLERANCE_M).
+//
+// Sommet "presque exact" : bruit d'arrondi à l'export, pas une coïncidence de
+// voisinage — nettement plus strict que SNAP_TOLERANCE_M.
+const DUPLICATE_EDGE_VERTEX_EPS_M = 0.02;
+// Angle max (°) entre les deux segments depuis leur sommet (quasi-)partagé.
+// Deux limites RÉELLEMENT distinctes qui partent du même coin divergent
+// nettement (mesuré sur le cas réel : les vraies paires quasi-doublons sont
+// à 0,0°, marge généreuse ici pour absorber le bruit de digitalisation).
+const DUPLICATE_EDGE_MAX_ANGLE_DEG = 12;
+// Écart max (m) au bout LIBRE (non partagé) pour rester la MÊME limite
+// esquissée deux fois. Au-delà, deux tracés colinéaires partant du même point
+// sont plus probablement deux limites distinctes en enfilade (mitoyennes
+// successives) qu'un doublon. Distinct de SNAP_TOLERANCE_M : ceci n'est PAS
+// un raccord d'extrémité pendante, c'est une réconciliation de doublon AVANT
+// même le raccord — testé et validé (43→46 polygones, 0 nouvel outlier) sur
+// les vraies coordonnées du cas Matam_Ourossogui avant d'être intégré ici.
+const DUPLICATE_EDGE_MAX_GAP_M = Number(process.env.DXF_DUPLICATE_EDGE_MAX_GAP_M ?? 5);
 
 type LineBBox = [number, number, number, number]; // [minX, minY, maxX, maxY]
 
@@ -829,6 +874,126 @@ function canonicalLineKey(line: LineCoords): string {
   return fwd < rev ? fwd : rev;
 }
 
+/**
+ * Réconcilie les paires de lignes quasi-doublons AVANT noding (§ 53 ter) :
+ * même limite dessinée deux fois avec une imprécision de digitalisation —
+ * sommet de départ (quasi-)partagé (`DUPLICATE_EDGE_VERTEX_EPS_M`), colinéaire
+ * depuis ce sommet (`DUPLICATE_EDGE_MAX_ANGLE_DEG`), bout libre à
+ * `DUPLICATE_EDGE_MAX_GAP_M` au plus de son homologue. Contrairement à
+ * `canonicalLineKey` (doublon EXACT, chaîne identique), ceci couvre les
+ * quasi-doublons dont l'extrémité libre diffère de quelques mètres — sans
+ * réconciliation, aucune des deux extrémités libres n'a de partenaire net,
+ * `healUndershoots` (§ 53) ne les raccorde pas (hors de portée d'une
+ * tolérance raisonnable), et le Polygonizer JSTS exclut les DEUX comme
+ * dangles : la subdivision qu'elles dessinaient disparaît silencieusement.
+ *
+ * Ne garde qu'UNE ligne par paire : celle dont le bout libre est déjà ancré
+ * ailleurs dans le réseau (partagé avec une AUTRE ligne) l'emporte sur une
+ * extrémité isolée — un ancrage est un indice direct de tracé correctement
+ * raccordé ; à égalité, la plus longue (esquisse la plus aboutie).
+ */
+function reconcileNearDuplicateEdges(
+  lines: LineCoords[],
+  sourceEntities: string[] | undefined,
+  info: NonNullable<PolygonizeOptions["nearDuplicateEdges"]> | undefined
+): { lines: LineCoords[]; sourceEntities: string[] | undefined } {
+  if (lines.length < 2) return { lines, sourceEntities };
+
+  const keyOf = (x: number, y: number) =>
+    Math.round(x / DUPLICATE_EDGE_VERTEX_EPS_M) + ":" + Math.round(y / DUPLICATE_EDGE_VERTEX_EPS_M);
+
+  interface Endpoint {
+    line: number;
+    self: [number, number];
+    other: [number, number];
+  }
+  const byVertex = new Map<string, Endpoint[]>();
+  const addEndpoint = (line: number, self: number[], other: number[]) => {
+    const k = keyOf(self[0], self[1]);
+    const rec: Endpoint = { line, self: [self[0], self[1]], other: [other[0], other[1]] };
+    const arr = byVertex.get(k);
+    if (arr) arr.push(rec);
+    else byVertex.set(k, [rec]);
+  };
+  lines.forEach((l, i) => {
+    if (l.length < 2) return;
+    addEndpoint(i, l[0], l[l.length - 1]);
+    addEndpoint(i, l[l.length - 1], l[0]);
+  });
+
+  // Un point est "ancré" s'il coïncide (même clé) avec l'extrémité d'une AUTRE ligne.
+  const isAnchored = (pt: [number, number], excludeLine: number): boolean =>
+    (byVertex.get(keyOf(pt[0], pt[1])) ?? []).some((e) => e.line !== excludeLine);
+
+  const lineLength = (i: number): number => {
+    const l = lines[i];
+    const a = l[0], b = l[l.length - 1];
+    return Math.hypot(b[0] - a[0], b[1] - a[1]);
+  };
+
+  // Garde-fou : un sommet portant des dizaines de lignes n'est jamais une
+  // vraie topologie cadastrale (angle mort MTEXT/point dégénéré, § 28 bis) —
+  // la comparaison par paires y explique une part disproportionnée du coût
+  // pour zéro doublon plausible. Écarté du dédoublonnage, pas du réseau.
+  const MAX_CLUSTER_SIZE = 20;
+
+  const drop = new Set<number>();
+  const decidedPairs = new Set<string>();
+  for (const entries of byVertex.values()) {
+    if (entries.length < 2 || entries.length > MAX_CLUSTER_SIZE) continue;
+    for (let a = 0; a < entries.length; a++) {
+      if (drop.has(entries[a].line)) continue;
+      for (let b = a + 1; b < entries.length; b++) {
+        const A = entries[a], B = entries[b];
+        if (A.line === B.line || drop.has(B.line)) continue;
+        const pairKey = A.line < B.line ? `${A.line}_${B.line}` : `${B.line}_${A.line}`;
+        if (decidedPairs.has(pairKey)) continue;
+
+        const dx = A.other[0] - B.other[0];
+        const dy = A.other[1] - B.other[1];
+        const gap = Math.sqrt(dx * dx + dy * dy);
+        if (gap <= 0 || gap > DUPLICATE_EDGE_MAX_GAP_M) continue;
+
+        const vx1 = A.other[0] - A.self[0], vy1 = A.other[1] - A.self[1];
+        const vx2 = B.other[0] - B.self[0], vy2 = B.other[1] - B.self[1];
+        const n1 = Math.hypot(vx1, vy1), n2 = Math.hypot(vx2, vy2);
+        if (n1 === 0 || n2 === 0) continue;
+        const cos = Math.min(1, Math.max(-1, (vx1 * vx2 + vy1 * vy2) / (n1 * n2)));
+        const angleDeg = (Math.acos(cos) * 180) / Math.PI;
+        if (angleDeg > DUPLICATE_EDGE_MAX_ANGLE_DEG) continue;
+
+        decidedPairs.add(pairKey);
+        const aAnchored = isAnchored(A.other, A.line);
+        const bAnchored = isAnchored(B.other, B.line);
+        const toDrop =
+          aAnchored !== bAnchored
+            ? aAnchored ? B.line : A.line
+            : lineLength(A.line) >= lineLength(B.line) ? B.line : A.line;
+        drop.add(toDrop);
+        if (info) {
+          info.push({
+            keptIndex: toDrop === A.line ? B.line : A.line,
+            droppedIndex: toDrop,
+            farGapM: gap,
+            angleDeg,
+          });
+        }
+      }
+    }
+  }
+
+  if (drop.size === 0) return { lines, sourceEntities };
+  console.info(`[polygonize] ${drop.size} arête(s) quasi-doublon(s) réconciliée(s) avant noding (§ 53 ter).`);
+  const outLines: LineCoords[] = [];
+  const outSrc: string[] | undefined = sourceEntities ? [] : undefined;
+  lines.forEach((l, i) => {
+    if (drop.has(i)) return;
+    outLines.push(l);
+    if (outSrc && sourceEntities) outSrc.push(sourceEntities[i]);
+  });
+  return { lines: outLines, sourceEntities: outSrc };
+}
+
 export function polygonizeLines(
   lines: LineCoords[],
   options: PolygonizeOptions = {}
@@ -860,33 +1025,66 @@ export function polygonizeLines(
   }
   if (usable.length === 0) return [];
 
+  // § 53 ter : quasi-doublons (extrémité libre différente de quelques mètres),
+  // distincts des doublons EXACTS déjà écartés ci-dessus.
+  const reconciled = reconcileNearDuplicateEdges(
+    usable,
+    srcIn ? usableSourceEntities : undefined,
+    options.nearDuplicateEdges
+  );
+
   const stats: HealStats = {
     endpointsClustered: 0,
     endpointsSnapped: 0,
     droppedRegions: options.droppedRegions ?? [],
     dangles: options.dangles ?? [],
   };
-  const usableSrc = srcIn ? usableSourceEntities : undefined;
-  const result =
-    usable.length <= tileThreshold
-      ? polygonizeChunk(usable, minArea, maxArea, undefined, snapTol, stats, usableSrc)
-      : polygonizeTiled(
-          usable,
-          minArea,
-          maxArea,
-          options.tileTargetSegments ?? TILE_TARGET_SEGMENTS,
-          options.tileMarginM ?? TILE_MARGIN_M,
-          snapTol,
-          stats,
-          usableSrc
-        );
+  const finalLines = reconciled.lines;
+  const finalSrc = reconciled.sourceEntities;
+  const runTiled = () =>
+    polygonizeTiled(
+      finalLines,
+      minArea,
+      maxArea,
+      options.tileTargetSegments ?? TILE_TARGET_SEGMENTS,
+      options.tileMarginM ?? TILE_MARGIN_M,
+      snapTol,
+      stats,
+      finalSrc
+    );
+  // La voie directe (≤ tileThreshold) n'a, contrairement à `polygonizeTiled`,
+  // AUCUN filet de rattrapage (subdivision + retentative) sur un échec de
+  // noding — un jeu de lignes fragile en dessous du seuil de tuilage faisait
+  // planter tout l'appel plutôt que de dégrader proprement. Révélé en testant
+  // § 53 ter à l'échelle réelle : le dédoublonnage AVANT noding retire assez
+  // de lignes pour repasser sous `tileThreshold` sur certains fichiers
+  // (Matam_Ourossogui.dxf, réseau limites de parcelles : 27 498 → 19 531
+  // lignes), faisant basculer un fichier auparavant protégé par le tuilage
+  // vers la voie directe non protégée, qui plantait sur une intersection non
+  // nodée préexistante dans le fichier (sans rapport avec le dédoublonnage
+  // lui-même). Repli sur `polygonizeTiled` — qui traite alors tout l'ensemble
+  // comme une seule région et la subdivise déjà en cas d'échec — plutôt que de
+  // relever `tileThreshold` (qui ne ferait que déplacer la même faille vers un
+  // fichier un peu plus gros).
+  const result = (() => {
+    if (finalLines.length > tileThreshold) return runTiled();
+    try {
+      return polygonizeChunk(finalLines, minArea, maxArea, undefined, snapTol, stats, finalSrc);
+    } catch (err) {
+      console.warn(
+        `[polygonize] union directe échouée (${finalLines.length} lignes) — repli sur le tuilage/subdivision robuste :`,
+        err
+      );
+      return runTiled();
+    }
+  })();
 
   if (stats.endpointsClustered > 0 || stats.endpointsSnapped > 0) {
     console.info(
       `[polygonize] micro-trous raccordés (tol=${snapTol} m) : ` +
         `${stats.endpointsClustered} extrémité(s) regroupée(s), ` +
         `${stats.endpointsSnapped} raccrochée(s) à un segment/sommet` +
-        (usable.length > tileThreshold ? " (occurrences par tuile, marges comprises)" : "")
+        (finalLines.length > tileThreshold ? " (occurrences par tuile, marges comprises)" : "")
     );
   }
   if (stats.dangles.length > 0) {
@@ -919,7 +1117,7 @@ export function polygonizeLines(
       `[polygonize] ${stats.dangles.length} segment(s) de limite resté(s) pendant(s) ` +
         `après raccord (tol=${snapTol} m), ${totalLengthM.toFixed(0)} m cumulés — ` +
         "aucun polygone reconstruit pour ces segments (§ 53)" +
-        (usable.length > tileThreshold ? " (occurrences par tuile, marges comprises — surcompte possible)." : ".") +
+        (finalLines.length > tileThreshold ? " (occurrences par tuile, marges comprises — surcompte possible)." : ".") +
         ` Écart 1er/dernier sommet : ${histogram}.` +
         ` Type source exact : ${sourceBreakdown}.` +
         ` Parmi les écarts ≤2m : ${sourceBreakdownSurs}.`
