@@ -3605,6 +3605,11 @@ invisible tant que la liste ne changeait pas (couches empilées identiques),
 mais le bouton laissait alors les polygones commune de l'ancienne couche
 affichés sur la carte alors que panneau et compteur étaient à jour. Corrigé
 par un `removeLayer` en tête d'effet, aligné sur les deux autres couches.
+Deuxième piège d'empilement, sur le passage au `DropdownMenu` : son contenu
+Radix est portalé avec `z-50`, or il s'ouvre depuis le panneau flottant qui
+monte volontairement à `z-1000` (pour dominer les contrôles Leaflet) — le menu
+passait donc DERRIÈRE le panneau. Résolu en forçant `z-[1100]` sur le
+`DropdownMenuContent`, même convention que `sheet.tsx`.
 
 ---
 

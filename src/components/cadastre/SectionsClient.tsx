@@ -2800,7 +2800,10 @@ export default function SectionsClient() {
                               <ChevronDown className="h-3 w-3 opacity-60" />
                             </button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
+                          {/* z-[1100] : ce menu s'ouvre depuis le panneau
+                              flottant à z-1000 — sans ça il passe derrière
+                              (cf. sheet.tsx, même convention). */}
+                          <DropdownMenuContent align="end" className="z-[1100]">
                             {ADMIN_MISMATCH_LEVELS.map((lvl) => (
                               <DropdownMenuCheckboxItem
                                 key={lvl}
