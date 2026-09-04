@@ -5116,6 +5116,59 @@ fermeture est impossible par construction du pipeline.
 
 ---
 
+## 53 ter. Signaler une parcelle anormalement grande vs. ses voisines : rendre visible, sans corriger, une fusion de dangles déjà documentée
+
+**Problème métier** : le § 53/53 bis documentent COMMENT un dangle disparaît
+silencieusement (le contour extérieur se referme, la subdivision interne
+non) — mais rien ne signale le SYMPTÔME côté utilisateur : une parcelle
+résultante nettement trop grande, qui avale plusieurs parcelles voisines en
+une seule. Cas réel confirmé sur `Matam_Ourossogui.dxf` (signalé par
+l'utilisateur, capture MicroStation à l'appui) : deux étiquettes distinctes
+« 001-00817 » retrouvées toutes les deux **dans le même polygone
+reconstruit de 2000 m²**, alors que ses voisines immédiates font ~500 m²
+(cohérent avec des lots de 20×25 m). Cause : les lignes internes de
+séparation ont des extrémités à 3-25 m de tout point du réseau environnant —
+`healUndershoots` (§ 53) ne les raccorde pas (hors de portée d'une tolérance
+raisonnable, testé jusqu'à 5-6 m sans effet sur ce cas), le `Polygonizer`
+JSTS les exclut donc de tout anneau (`nbLimitesNonRefermees` compte bien ces
+segments, mais ce compteur ne dit pas QUELLE parcelle a hérité de la zone
+non subdivisée).
+
+**Cause technique** : aucune vérification post-polygonisation ne compare la
+taille d'une parcelle reconstruite à celle de son voisinage — seul un
+plafond ABSOLU existe (`POLYGONIZE_MAX_AREA_M2`, § anneau enveloppe global),
+bien trop haut pour attraper un « ×4 la médiane locale » comme ce cas.
+
+**Solution** (`src/lib/parcelle-ingestion.ts`) : après construction finale de
+`parcelles` (post-dédoublonnage), pour chaque parcelle, requête
+`BBoxGridIndex.queryRange` sur une marge locale
+(`max(30 m, √surface × 4)` — plafonne la comparaison à l'échelle du
+quartier immédiat même sur un fichier à densité très hétérogène) pour
+retrouver ses voisines spatiales. Si ≥ `OUTLIER_MIN_NEIGHBORS` (4, seuil
+d'échantillon minimal pour une médiane fiable) sont trouvées et que l'aire
+de la parcelle est ≥ `OUTLIER_AREA_RATIO` (3×, `DXF_OUTLIER_AREA_RATIO`)
+fois leur aire médiane → comptée dans `nbParcellesSuspectesFusion`, un
+avertissement agrégé (même forme que `nbLimitesNonRefermees` : pas de
+marqueur carte, pas de type d'erreur dédié — juste visible dans le rapport
+d'import). **Ne modifie ni ne rejette rien** : diagnostic pur.
+
+**Pourquoi (pièges inclus)** : validé sur les VRAIES coordonnées du cas
+Matam — en rejouant `polygonizeLines` puis l'algorithme de détection sur le
+réseau réel (43 polygones reconstruits localement), le polygone de 2000 m²
+est signalé seul (ratio 4,0×, 42 voisines), aucun faux positif parmi les
+autres polygones plus grands que la médiane globale mais pas de leur
+voisinage immédiat (1000 m² notamment, resté sous le seuil ×3 localement).
+Piège évité : comparer à une médiane GLOBALE (toute la commune) aurait
+noyé le signal (mélange rural/urbain) ou déclenché en masse sur un lot
+rural homogène à grandes parcelles — la comparaison DOIT rester locale
+(voisinage spatial, pas administratif). Deuxième piège : ce contrôle ne
+répare rien — une limite interne à 20 m de son point de raccord attendu
+reste un problème de PRÉCISION DU LEVÉ/DIGITALISATION source, pas quelque
+chose qu'une tolérance de raccord peut corriger sans risquer de souder à
+tort deux sommets cadastraux distincts ailleurs dans un fichier de 100 Mo+.
+
+---
+
 ## 54. Numéro de Titre Foncier fondu dans le numéro de parcelle : le calque `numero_tf` alimentait le NICAD
 
 **Problème métier** : sur les DXF où les parcelles sont annotées à la fois par

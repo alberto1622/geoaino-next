@@ -154,6 +154,11 @@ export interface DxfIngestionReport {
    *  anneau, donc jamais construits en parcelle. Diagnostic (comptage par tuile,
    *  surcompte possible en marge), n'écarte rien de nouveau. */
   nbLimitesNonRefermees: number;
+  /** Parcelle nettement plus grande (≥ `DXF_OUTLIER_AREA_RATIO`, défaut 3×) que
+   *  la médiane de ses voisines spatiales immédiates — signe probable d'une
+   *  limite interne restée pendante (§ 53 bis) : plusieurs parcelles fusionnées
+   *  en une. Diagnostic pur, ne modifie ni ne rejette rien. */
+  nbParcellesSuspectesFusion: number;
   /** Chevauchements erronés (intersection > DXF_OVERLAP_FIX_MIN_M2) détectés entre parcelles. */
   nbChevauchements: number;
   /** Parcelles retaillées (soustraction de la parcelle prioritaire) pour résorber ces chevauchements. */
@@ -210,6 +215,17 @@ const CLOSE_SNAP_TOLERANCE_M = Number(process.env.DXF_CLOSE_SNAP_TOLERANCE_M || 
 // global produit par la polygonisation (la zone entière du lotissement).
 const POLYGONIZE_MIN_AREA_M2 = Number(process.env.DXF_POLYGONIZE_MIN_AREA_M2 || 5);
 const POLYGONIZE_MAX_AREA_M2 = Number(process.env.DXF_POLYGONIZE_MAX_AREA_M2 || 50000);
+// Détection d'anomalie POST-polygonisation (§ 53 bis, cas Matam_Ourossogui —
+// 2 étiquettes distinctes retrouvées dans UN même polygone de 2000 m² alors que
+// ses voisines font ~500 m²) : une parcelle ≥ OUTLIER_AREA_RATIO fois la
+// médiane de ses voisines spatiales immédiates est un signe probable de limite
+// interne restée pendante (§ 53) — le contour extérieur se referme, la
+// subdivision interne non. Purement diagnostique : ne modifie ni ne rejette
+// rien, juste un avertissement (même esprit que nbLimitesNonRefermees).
+// `OUTLIER_MIN_NEIGHBORS` évite un faux positif sur un échantillon local trop
+// petit pour qu'une médiane soit significative (parcelle isolée en bord de lot).
+const OUTLIER_AREA_RATIO = Number(process.env.DXF_OUTLIER_AREA_RATIO || 3);
+const OUTLIER_MIN_NEIGHBORS = 4;
 // Longueur mini (diagonale de la bbox, pas la somme des segments) d'une
 // polyligne ouverte pour être retenue comme limite de parcelle. Certains DXF
 // mélangent, sur le calque des limites, de véritables limites ET des artefacts
@@ -1710,7 +1726,7 @@ function blankIngestionReport(warnings: string[] = []): DxfIngestionReport {
     nbParcelles: 0, nbSansNumero: 0, nbSansDenomination: 0, nbSansProprietaire: 0,
     nbSansSection: 0, nbSansCommune2026: 0, nbCommune2026Approx: 0,
     nbSectionDepuisTableSections: 0, nbSectionApprox: 0, nbNumeroNonConforme: 0,
-    nbPiscines: 0, nbParcellesPolygonisees: 0, nbZonesPolygonisationEchouee: 0, nbLimitesNonRefermees: 0, nbPolygonesEnveloppeIgnores: 0, nbHorsEmprise: 0,
+    nbPiscines: 0, nbParcellesPolygonisees: 0, nbZonesPolygonisationEchouee: 0, nbLimitesNonRefermees: 0, nbParcellesSuspectesFusion: 0, nbPolygonesEnveloppeIgnores: 0, nbHorsEmprise: 0,
     nbPolylignesOuvertesIgnorees: 0, nbLignesTropCourtesIgnorees: 0, nbArcsSplinesCourtsIgnores: 0, nbTextesHorsParcelle: 0, nbNumerosRecuperesParDebordement: 0,
     nbParcellesMultiNumeros: 0,
     nbPolygonesInvalidesRejetes: 0,
@@ -2126,6 +2142,39 @@ export function buildParcellesFromFc32628(
 
   _t = phase("joins+compose", _t);
 
+  // Détection d'anomalie post-polygonisation (§ 53 bis) : une parcelle
+  // nettement plus grande que ses voisines spatiales immédiates. `validPolygons`
+  // et `parcelles` restent au même index (une entrée par itération du `forEach`
+  // ci-dessus) — bbox prise sur `validPolygons`, jamais recalculée.
+  let nbParcellesSuspectesFusion = 0;
+  if (parcelles.length > OUTLIER_MIN_NEIGHBORS) {
+    const outlierIndex = new BBoxGridIndex(validPolygons.map((p) => p.bbox));
+    parcelles.forEach((p, i) => {
+      const [bx0, by0, bx1, by1] = validPolygons[i].bbox;
+      // Marge locale (échelle du quartier immédiat) : plancher 30 m pour les
+      // très petites parcelles, sinon proportionnelle à la taille propre —
+      // évite de comparer une parcelle urbaine dense à un hameau lointain sur
+      // un fichier à densité très hétérogène.
+      const margin = Math.max(30, Math.sqrt(p.surfaceM2) * 4);
+      const neighborIdx = outlierIndex
+        .queryRange([bx0 - margin, by0 - margin, bx1 + margin, by1 + margin])
+        .filter((j) => j !== i);
+      if (neighborIdx.length < OUTLIER_MIN_NEIGHBORS) return;
+      const neighborAreas = neighborIdx.map((j) => parcelles[j].surfaceM2).sort((a, b) => a - b);
+      const medianArea = neighborAreas[Math.floor(neighborAreas.length / 2)];
+      if (medianArea > 0 && p.surfaceM2 >= medianArea * OUTLIER_AREA_RATIO) {
+        nbParcellesSuspectesFusion++;
+      }
+    });
+  }
+  if (nbParcellesSuspectesFusion > 0) {
+    warnings.push(
+      `${nbParcellesSuspectesFusion} parcelle(s) nettement plus grande(s) que leurs voisines ` +
+        `immédiates (≥ ${OUTLIER_AREA_RATIO}× la médiane locale) — signe probable d'une limite ` +
+        "interne restée pendante (§ 53) : plusieurs parcelles fusionnées en une, à relire manuellement."
+    );
+  }
+
   const nbPiscines = validPiscines.length;
 
   if (nbParcellesPolygonisees > 0) {
@@ -2261,6 +2310,7 @@ export function buildParcellesFromFc32628(
       nbParcellesPolygonisees,
       nbZonesPolygonisationEchouee,
       nbLimitesNonRefermees,
+      nbParcellesSuspectesFusion,
       nbPolygonesEnveloppeIgnores: nbParcellesTropGrandes,
       nbHorsEmprise,
       nbPolylignesOuvertesIgnorees,
