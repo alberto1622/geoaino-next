@@ -1061,6 +1061,13 @@ export default function SectionsClient() {
       map.removeLayer(overlapsLayerRef.current);
       overlapsLayerRef.current = null;
     }
+    // Sans ce retrait, chaque passage empile un nouveau groupe fuchsia sans
+    // défaire le précédent — invisible tant que la liste ne change pas, mais
+    // le filtre « masquer commune » laisse alors l'ancienne couche visible.
+    if (adminMismatchesLayerRef.current) {
+      map.removeLayer(adminMismatchesLayerRef.current);
+      adminMismatchesLayerRef.current = null;
+    }
 
     const secGroup = L.featureGroup();
     sectionLayersRef.current.clear();

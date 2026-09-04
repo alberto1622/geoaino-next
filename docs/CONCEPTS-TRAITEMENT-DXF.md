@@ -3595,7 +3595,14 @@ un `useMemo` (pas un `.filter()` inline) pour garder une référence stable —
 trois effets carte l'ont en dépendance, un nouveau tableau à chaque rendu
 relancerait le `setInterval` du clignotement. La préférence n'est PAS un
 réglage serveur : c'est un confort d'affichage propre à chaque opérateur, pas
-une décision métier sur les données.
+une décision métier sur les données. **Bug révélé par ce filtre** : l'effet de
+redessin recréait le `L.featureGroup` fuchsia des débordements à chaque passage
+SANS retirer le précédent (`adminMismatchesLayerRef` n'était jamais
+`map.removeLayer`é, contrairement aux sections et aux chevauchements) —
+invisible tant que la liste ne changeait pas (couches empilées identiques),
+mais le bouton laissait alors les polygones commune de l'ancienne couche
+affichés sur la carte alors que panneau et compteur étaient à jour. Corrigé
+par un `removeLayer` en tête d'effet, aligné sur les deux autres couches.
 
 ---
 
