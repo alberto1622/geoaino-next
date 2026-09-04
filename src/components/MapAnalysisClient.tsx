@@ -27,6 +27,7 @@ import {
   Redo2,
   ChevronLeft,
   Upload,
+  Combine,
 } from "lucide-react";
 import { useUndoHistory, useUndoRedoShortcuts } from "@/hooks/use-undo-history";
 import { Button } from "@/components/ui/button";
@@ -195,7 +196,7 @@ type MapSnapshot = {
   deletedNicads: string[];
 };
 type MapHistoryEntry = {
-  kind: "delete" | "rename";
+  kind: "delete" | "rename" | "merge";
   before: MapSnapshot;
   after: MapSnapshot;
 };
@@ -494,6 +495,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     run: () => void;
   } | null>(null);
   const [deletingRows, setDeletingRows] = useState(false);
+  const [mergingRows, setMergingRows] = useState(false);
   const [selectedParcel, setSelectedParcel] = useState<Record<
     string,
     unknown
@@ -1264,6 +1266,137 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     [deleteRows, selectedRows],
   );
 
+  // Fusionne les lignes `indices` (ordre = ordre de sélection) : la PREMIÈRE
+  // conserve ses attributs (NICAD, numéro, commune…), sa géométrie devient
+  // l'union de l'ensemble ; les autres sont retirées. Recoller une parcelle
+  // scindée à tort — PAS destiné à fusionner deux parcelles réellement
+  // distinctes. Même flux que performDeleteRows (localisateurs, correctedData,
+  // historique annulable Ctrl+Z) — cf. /api/analyses/[id]/features/merge.
+  const performMergeRows = useCallback(
+    async (indices: number[]) => {
+      const rows = indices.map((i) => tableRows[i]).filter(Boolean);
+      if (rows.length < 2) return;
+
+      const locators = rows.map((r) => ({
+        point: Array.isArray(r._point)
+          ? (r._point as [number, number])
+          : undefined,
+        bbox:
+          Array.isArray(r._bbox) && r._bbox.length === 4
+            ? (r._bbox as [number, number, number, number])
+            : undefined,
+        nicad:
+          String(r.NICAD ?? r.nicad ?? r.NIC ?? r.Nicad ?? "").trim() ||
+          undefined,
+      }));
+      const errorIds = rows
+        .map((r) => (typeof r._errorId === "number" ? r._errorId : null))
+        .filter((x): x is number => x !== null);
+
+      setMergingRows(true);
+      const toastId = toast.loading(
+        `Fusion de ${rows.length} parcelles en cours…`,
+      );
+      try {
+        const res = await fetch(
+          `/api/analyses/${analysis.id}/features/merge`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ locators, errorIds }),
+          },
+        );
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Fusion échouée");
+        const beforeSnapshot: MapSnapshot = {
+          correctedGeoJson:
+            data.previousCorrectedGeoJson ?? correctedData ?? "",
+          errorPatches: errorIds.map((eid) => ({
+            errorId: eid,
+            corrected: correctedErrorIds.has(eid),
+          })),
+          tableRows,
+          selectedRows: new Set(selectedRows),
+          deletedNicads,
+        };
+        if (data.correctedGeoJson) setCorrectedData(data.correctedGeoJson);
+        setTileVersion((v) => v + 1); // rafraîchit les tuiles (parcelles fusionnées)
+        for (const eid of errorIds)
+          setCorrectedErrorIds((prev) => new Set(prev).add(eid));
+        // La table ne référence plus des parcelles distinctes une fois
+        // fusionnées (indices caducs) — vidée, comme « Tout effacer ».
+        setTableRows([]);
+        setSelectedRows(new Set());
+        mapHistory.push({
+          kind: "merge",
+          before: beforeSnapshot,
+          after: {
+            correctedGeoJson:
+              data.correctedGeoJson ?? beforeSnapshot.correctedGeoJson,
+            errorPatches: errorIds.map((eid) => ({
+              errorId: eid,
+              corrected: true,
+            })),
+            tableRows: [],
+            selectedRows: new Set(),
+            deletedNicads,
+          },
+        });
+        toast.success(`${data.merged} parcelle(s) fusionnée(s)`, {
+          id: toastId,
+          action: {
+            label: "Annuler",
+            onClick: () => void performUndoRef.current(),
+          },
+        });
+        if (data.notFound > 0)
+          toast.warning(
+            `${data.notFound} parcelle(s) non localisée(s) — ignorée(s)`,
+          );
+      } catch (err) {
+        toast.error(String(err), { id: toastId });
+      } finally {
+        setMergingRows(false);
+      }
+    },
+    [
+      tableRows,
+      analysis.id,
+      correctedData,
+      correctedErrorIds,
+      selectedRows,
+      deletedNicads,
+      mapHistory,
+    ],
+  );
+
+  const mergeRows = useCallback(
+    (indices: number[]) => {
+      const rows = indices.map((i) => tableRows[i]).filter(Boolean);
+      if (rows.length < 2) return;
+      const nicads = new Set(rows.map((r) => rowNicad(r)).filter(Boolean));
+      const nicadWarning =
+        nicads.size > 1
+          ? "\n⚠ Ces parcelles n'ont pas le même NICAD — la fusion ne conservera que celui de la première sélectionnée."
+          : "";
+      setConfirmState({
+        title: "Fusionner des parcelles",
+        description:
+          `Fusionner ${rows.length} parcelles en une seule ? La première sélectionnée conserve ses attributs (NICAD, numéro…).` +
+          nicadWarning +
+          "\nCette action modifie les données de l'analyse (annulable avec Ctrl+Z).",
+        confirmLabel: "Fusionner",
+        run: () => void performMergeRows(indices),
+      });
+    },
+    [tableRows, performMergeRows],
+  );
+
+  const handleMergeSelectedParcels = useCallback(
+    () => mergeRows(Array.from(selectedRows)),
+    [mergeRows, selectedRows],
+  );
+
   // Mode édition doublons : conserve l'occurrence `keepIndex` et supprime toutes
   // les autres occurrences du même NICAD (résolution du doublon en un clic).
   const handleKeepOnlyOccurrence = useCallback(
@@ -1427,7 +1560,11 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       await applyMapSnapshot(entry.before);
       mapHistory.commitUndo();
       toast.success(
-        entry.kind === "delete" ? "Suppression annulée" : "Renommage annulé",
+        entry.kind === "delete"
+          ? "Suppression annulée"
+          : entry.kind === "merge"
+            ? "Fusion annulée"
+            : "Renommage annulé",
       );
     } catch (err) {
       toast.error(String(err));
@@ -1447,7 +1584,11 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       await applyMapSnapshot(entry.after);
       mapHistory.commitRedo();
       toast.success(
-        entry.kind === "delete" ? "Suppression rétablie" : "Renommage rétabli",
+        entry.kind === "delete"
+          ? "Suppression rétablie"
+          : entry.kind === "merge"
+            ? "Fusion rétablie"
+            : "Renommage rétabli",
       );
     } catch (err) {
       toast.error(String(err));
@@ -2967,6 +3108,21 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                   )}
                 </div>
                 <div className="flex items-center gap-2">
+                  {tableDeletable && (
+                    <button
+                      onClick={handleMergeSelectedParcels}
+                      disabled={selectedRows.size < 2 || mergingRows}
+                      title="Fusionner en une seule parcelle — recoller une parcelle scindée à tort, pas fusionner deux parcelles réellement distinctes"
+                      className="flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium bg-violet-500/15 text-violet-400 hover:bg-violet-500/25 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                    >
+                      <Combine
+                        className={`w-3 h-3 ${mergingRows ? "animate-spin" : ""}`}
+                      />
+                      {mergingRows
+                        ? "Fusion…"
+                        : `Fusionner${selectedRows.size >= 2 ? ` (${selectedRows.size})` : ""}`}
+                    </button>
+                  )}
                   {tableDeletable && (
                     <button
                       onClick={handleDeleteSelectedParcels}

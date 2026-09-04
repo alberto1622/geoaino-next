@@ -5168,5 +5168,61 @@ venir que d'un calque explicitement reconnu ou mappé.
 
 ---
 
+## 55. Fusion manuelle de parcelles depuis la table attributaire : recoller une parcelle scindée à tort, sans mécanisme dédié jusqu'ici
+
+**Problème métier** : liste de tâches README § 09/03/2026, « appliquer une
+fusion sur les parcelles » — même besoin que la fusion de sections (§ 11 :
+« recoller » deux fragments issus d'une ligne parasite ou d'une mitoyenne mal
+captée à la polygonisation), mais côté parcelles. Contrairement aux sections,
+qui vivent en table relationnelle (`limite_section`) avec une fusion déjà
+implémentée (`/api/cadastre/sections/merge`), les parcelles n'ont aucun
+mécanisme de fusion : seules la suppression (`features/delete`) et la
+réassignation de NICAD (`features/update-nicad`) existaient.
+
+**Cause technique** : les parcelles ne sont pas des lignes DB mais des
+`Feature` dans le blob GeoJSON `Analysis.correctedData` (ou `geoJsonData`/
+`geojsonKey` en repli) — pas d'identifiant stable, chaque parcelle est
+retrouvée par un `Locator` (point intérieur, emprise, ou NICAD, cf.
+`feature-locator.ts`) au moment de l'appel, comme pour la suppression.
+
+**Solution** :
+- `src/app/api/analyses/[id]/features/merge/route.ts` — même contrat que
+  `features/delete` (localisateurs, transaction, `recordHistory`, écriture
+  disque best-effort hors transaction). Résout chaque `Locator` en index de
+  feature ; la **première** résolue (ordre = ordre de sélection côté client)
+  conserve ses `properties` (NICAD, numéro de parcelle/lot/TF, commune…), sa
+  géométrie devient `turf.union` de l'ensemble (repli concaténation d'anneaux
+  en `MultiPolygon` si l'union échoue, même stratégie que
+  `sections/merge · concatAsMultiPolygon`) ; les autres features résolues sont
+  retirées.
+- `src/lib/cadastre/history.ts` — `HistoryAction` gagne `"map-merge"`, routé
+  sur le `revertMap` déjà partagé par `map-delete`/`map-rename` (aucune
+  logique de revert nouvelle : un `MapEditSnapshot` avant/après suffit, comme
+  pour les autres éditions de la table attributaire).
+- `src/components/MapAnalysisClient.tsx` — `performMergeRows`/`mergeRows`
+  calqués sur `performDeleteRows`/`deleteRows` (mêmes locators, même
+  `mapHistory.push`, même toast avec bouton « Annuler »). Bouton
+  **« Fusionner (N) »** (icône `Combine`, violet — même code couleur que la
+  fusion de sections) dans la barre d'outils de la table attributaire, à côté
+  de « Supprimer (N) », désactivé sous 2 lignes cochées.
+
+**Pourquoi (pièges inclus)** : la sémantique « la première sélectionnée garde
+ses attributs » est **volontairement identique** à `sections/merge` — l'outil
+vise à recoller une parcelle scindée à tort, PAS à fusionner deux parcelles
+réellement distinctes (dans ce dernier cas, un des deux NICAD disparaît
+silencieusement). Garde-fou : si les parcelles cochées n'ont pas toutes le
+même NICAD, la confirmation cliente (`mergeRows`) ajoute un avertissement
+explicite avant d'envoyer la requête — la détection reste indicative, la fusion
+n'est jamais bloquée côté serveur. Piège assumé, PAS aligné sur
+`sections/merge` : cette route n'a **aucune garde ADMIN**, contrairement à la
+fusion de sections — choix délibéré pour rester cohérent avec sa route sœur
+immédiate `features/delete`, qui n'en a pas non plus (toute la table
+attributaire est éditable par un utilisateur authentifié simple). Après une
+fusion, la table attributaire est vidée (`setTableRows([])`) plutôt que
+réaffichée : les indices qu'elle référence sont caducs dès qu'une feature a
+disparu du GeoJSON, exactement le même choix que « Tout effacer ».
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

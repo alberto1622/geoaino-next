@@ -34,6 +34,7 @@ export type HistoryAction =
   | "nicad-fill"
   | "map-delete"
   | "map-rename"
+  | "map-merge"
   | "restore";
 
 export interface SectionsDeleteSnapshot {
@@ -187,7 +188,7 @@ export interface MapEditSnapshot {
   errorPatches: { errorId: number; corrected: boolean }[];
 }
 
-/** Revert partagé par `map-delete` et `map-rename` — réécrit
+/** Revert partagé par `map-delete`, `map-rename` et `map-merge` — réécrit
  * `Analysis.correctedData` avec le blob capturé AVANT l'édition et remet les
  * `TopologicalError.corrected` visés à leur état d'alors. Même logique que la
  * route déjà existante `/api/analyses/[id]/history/restore` (utilisée par
@@ -266,6 +267,7 @@ const REVERT_HANDLERS: Partial<Record<string, RevertFn>> = {
   "nicad-fill": (tx, before) => revertNicadFill(tx, before),
   "map-delete": revertMap,
   "map-rename": revertMap,
+  "map-merge": revertMap,
 };
 
 export function getRevertHandler(action: string): RevertFn | undefined {
