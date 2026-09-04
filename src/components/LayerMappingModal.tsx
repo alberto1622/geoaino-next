@@ -21,6 +21,22 @@ const CLASS_OPTIONS: { value: string; label: string }[] = [
   { value: "ignore", label: "— Ignorer ce calque —" },
 ];
 
+/**
+ * Classes « cœur » du pipeline parcelles : quand l'inventaire ne reconnaît pas
+ * un calque (`proposedClass` nul → « Ignorer » par défaut), on le pré-sélectionne
+ * quand même si son nom normalisé porte un signal clair pour l'une d'elles.
+ * Une proposition automatique existante (alias/flou) est toujours conservée
+ * telle quelle : cette table ne fait que rattraper les calques laissés sur
+ * « Ignorer ». `numero_tf` est volontairement strict (`…tf`) pour ne pas capter
+ * « titre foncier », alias de `limites_tf`.
+ */
+const CORE_PRESELECT: { cls: string; re: RegExp }[] = [
+  { cls: "numero_parcelle", re: /(numero|numeros|num|no|n)[ _-]*parcelle|parcel[ _-]*number/ },
+  { cls: "numero_lot", re: /(numero|num|no|n)[ _-]*(de[ _-]*)?lot/ },
+  { cls: "numero_tf", re: /(numero|num|no|n)[ _-]*tf/ },
+  { cls: "limites_parcelles", re: /limites?[ _-]*parcelles?/ },
+];
+
 export interface LayerInventoryEntry {
   layer: string;
   rawLayer: string;
@@ -78,7 +94,13 @@ export default function LayerMappingModal({ fileName, layers, onCancel, onConfir
   const [mapping, setMapping] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
     for (const l of layers) {
-      const proposed = l.proposedClass ?? "ignore";
+      let proposed = l.proposedClass ?? "ignore";
+      // Rattrapage des calques cœur non reconnus : jamais laissés sur « Ignorer »
+      // par défaut si leur nom porte un signal clair (cf. CORE_PRESELECT).
+      if (proposed === "ignore") {
+        const hit = CORE_PRESELECT.find((c) => c.re.test(l.layer));
+        if (hit) proposed = hit.cls;
+      }
       // Une proposition automatique hors du périmètre restreint (ex. calque
       // reconnu comme "limites_parcelles" alors que seules les classes
       // section sont proposées ici) doit retomber sur "Ignorer" — sinon elle
