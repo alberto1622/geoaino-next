@@ -5040,5 +5040,57 @@ fermeture est impossible par construction du pipeline.
 
 ---
 
+## 54. Numéro de Titre Foncier fondu dans le numéro de parcelle : le calque `numero_tf` alimentait le NICAD
+
+**Problème métier** : sur les DXF où les parcelles sont annotées à la fois par
+un numéro cadastral (calque « Numéro Parcelle ») et par un numéro de Titre
+Foncier (calque « Numéro TF »), le numéro de TF était traité comme un numéro de
+parcelle : il pouvait devenir la composante « parcelle » (5 chiffres) du NICAD,
+gonfler les `numeroCandidats` (fausse alerte `MULTI_NUMERO` sur une parcelle qui
+ne porte en réalité qu'un seul numéro cadastral + son numéro de TF), et être
+« récupéré par débordement » comme s'il s'agissait d'un numéro cadastral mal
+placé. Aucun champ ne portait le numéro de TF pour lui-même — impossible de
+l'afficher ou de l'exporter séparément.
+
+**Cause technique** : `parcelle-ingestion.ts` regroupait `numero_parcelle` **et**
+`numero_tf` dans un même ensemble `NUMERO_PARCELLE_CLASSES`, tous deux mappés sur
+la catégorie de libellé `"numero"` par `classifyLabelLayer`. Toute la mécanique
+réservée aux numéros de parcelle (`numeroLabels` pour le marquage « plus petit
+contenant » / suppression d'enveloppe, `resolveNumeroLabelPolygon` avec repli
+débordement/emprise de texte, `numerosVus` → `numeroCandidats`,
+`normalizeNumeroParcelle` → `numeroParcelle5` → NICAD) s'appliquait donc
+indistinctement aux deux. `cadastral-filter.ts` savait pourtant déjà isoler le
+calque (`_dgid_layer_class = "numero_tf"`, alias reconnus) et l'UI
+(`LayerMappingModal`) exposait déjà « N° de titre foncier » comme cible de
+mappage : l'information était disponible, seule l'ingestion la rabattait.
+
+**Solution** (`parcelle-ingestion.ts`) :
+
+- `NUMERO_PARCELLE_CLASSES` ne contient plus que `"numero_parcelle"` ; nouvel
+  ensemble dédié `NUMERO_TF_CLASSES = { "numero_tf" }`.
+- Nouvelle catégorie `LabelKind` `"tf"` ; `classifyLabelLayer` renvoie `"tf"`
+  pour le calque `numero_tf`.
+- Nouveau champ `ParcelleCandidate.numeroTF` (`string | null`), rempli dans la
+  boucle de composition (`else if (cls === "tf" && numeroTF === null) …`),
+  propagé sur la propriété GeoJSON `numero_tf` par
+  `parcellesToFeatureCollection`.
+- **Séparation stricte** : un libellé `"tf"` suit la jointure point-dans-polygone
+  ordinaire (`findContainingPolygon`) — il n'entre ni dans `numeroLabels`, ni
+  dans le repli débordement, ni dans `numerosVus`/`hasNumero`, ni dans le NICAD.
+
+**Pourquoi (pièges)** : un numéro de TF **n'est pas** un numéro de parcelle — il
+identifie un objet foncier juridique distinct, avec sa propre numérotation ; le
+verser au NICAD produit un identifiant cadastral faux. Conséquence assumée du
+changement : une parcelle annotée **uniquement** par un numéro de TF (aucun
+libellé `numero_parcelle` à l'intérieur) passe désormais en `nbSansNumero` et
+reste sans NICAD (repli volontairement écarté, cf. décision de conception) —
+c'est le comportement correct : mieux vaut un NICAD manquant, détecté et
+corrigible, qu'un NICAD construit sur un numéro qui n'est pas le bon. Le repli
+heuristique `classifyLabelText` (calque inconnu) est inchangé : sans le calque,
+rien ne distingue un numéro de TF d'un numéro de parcelle, `"tf"` ne peut donc
+venir que d'un calque explicitement reconnu ou mappé.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

@@ -13,13 +13,14 @@
  * 2. Classification des entités par calque DGID via `filterDxfCadastralFeatures`
  *    (`limites_parcelles`/`limites_tf` = limites de parcelle, `limites_sections`
  *    = couche-support de section, `piscine` = emprise de piscine, `batiment` =
- *    exclu, `numero_parcelle`/`numero_tf` = numéro, `numero_lot` = lot,
+ *    exclu, `numero_parcelle` = numéro de parcelle, `numero_tf` = numéro de
+ *    Titre Foncier (informatif, hors NICAD), `numero_lot` = lot,
  *    `proprietaire` = propriétaire, `titre_parcelle` = dénomination,
  *    `numero_section` = numéro de section, `numero_batiment`/`nb_nv_bati` =
  *    autres textes). Les annotations MTEXT multi-lignes (étape 5) sont éclatées
  *    ligne par ligne avant classification.
  * 3. Jointures spatiales point-dans-polygone (index en grille type STRtree) :
- *    textes → parcelle (numéro/lot/propriétaire/dénomination), parcelle →
+ *    textes → parcelle (numéro/TF/lot/propriétaire/dénomination), parcelle →
  *    section (numero_section), piscine → parcelle (is_piscine, piscine_surface).
  *    Le calque du texte prime sur l'heuristique. Le numero_parcelle est
  *    normalisé à 5 chiffres pour construire le NICAD (16 caractères, cf. nicad.ts).
@@ -74,6 +75,12 @@ export interface ParcelleCandidate {
   /** Numéro de parcelle normalisé à 5 chiffres (sert à construire le NICAD). */
   numeroParcelle5: string | null;
   numeroLot: string | null;
+  /**
+   * Numéro de Titre Foncier (calque `numero_tf`). Purement informatif :
+   * n'alimente ni le NICAD (`numeroParcelle5`), ni `numeroCandidats`, ni la
+   * résolution de débordement — un numéro de TF n'est pas un numéro de parcelle.
+   */
+  numeroTF: string | null;
   /** Numéro de section (3 chiffres) issu de la jointure parcelle ∈ limites_sections. */
   numeroSection: string | null;
   /**
@@ -814,7 +821,13 @@ const PISCINE_CLASS = "piscine";
 const IGNORED_BOUNDARY_CLASSES = new Set(["batiment"]);
 
 /** Calques d'annotation portant le "numéro" de la parcelle (→ NICAD). */
-const NUMERO_PARCELLE_CLASSES = new Set(["numero_parcelle", "numero_tf"]);
+const NUMERO_PARCELLE_CLASSES = new Set(["numero_parcelle"]);
+
+/**
+ * Calque d'annotation portant le numéro de Titre Foncier. Distinct du numéro de
+ * parcelle : conservé dans son propre champ (`numeroTF`), jamais versé au NICAD.
+ */
+const NUMERO_TF_CLASSES = new Set(["numero_tf"]);
 
 /** Calques d'annotation portant le numéro de lot. */
 const NUMERO_LOT_CLASSES = new Set(["numero_lot"]);
@@ -846,7 +859,7 @@ function getDgidLayerClass(feature: DgidGeoFeature): string {
 // ───────────────────────────── Classification des textes ─────────────────────────────
 
 /** Catégorie d'un libellé rattaché à une parcelle. */
-type LabelKind = "numero" | "lot" | "proprietaire" | "denomination" | "autre";
+type LabelKind = "numero" | "tf" | "lot" | "proprietaire" | "denomination" | "autre";
 
 const NUMERO_PREFIX = /^(lot|tf|titre\s*foncier|parcelle|n)[°ºo.\s_-]*\d/i;
 
@@ -868,6 +881,7 @@ function classifyLabelText(raw: string): "numero" | "denomination" {
  */
 function classifyLabelLayer(layerClass: string): LabelKind | null {
   if (NUMERO_PARCELLE_CLASSES.has(layerClass)) return "numero";
+  if (NUMERO_TF_CLASSES.has(layerClass)) return "tf";
   if (NUMERO_LOT_CLASSES.has(layerClass)) return "lot";
   if (PROPRIETAIRE_CLASSES.has(layerClass)) return "proprietaire";
   if (DENOMINATION_CLASSES.has(layerClass)) return "denomination";
@@ -2023,7 +2037,7 @@ export function buildParcellesFromFc32628(
     }
   }
 
-  // Composition des parcelles : classification numero / lot / propriétaire /
+  // Composition des parcelles : classification numero / TF / lot / propriétaire /
   // dénomination par calque DGID (prime sur l'heuristique), jointure section,
   // piscine, puis construction du NICAD (étape : numero_parcelle 5 chiffres).
   const parcelles: ParcelleCandidate[] = [];
@@ -2037,6 +2051,7 @@ export function buildParcellesFromFc32628(
 
   validPolygons.forEach((poly, idx) => {
     let numero: string | null = null;
+    let numeroTF: string | null = null;
     let numeroLot: string | null = null;
     let proprietaire: string | null = null;
     let denomination: string | null = null;
@@ -2049,6 +2064,7 @@ export function buildParcellesFromFc32628(
       const cls = label.cls ?? classifyLabelText(label.text);
       if (cls === "numero") numerosVus.add(label.text.trim());
       if (cls === "numero" && numero === null) numero = label.text;
+      else if (cls === "tf" && numeroTF === null) numeroTF = label.text;
       else if (cls === "lot" && numeroLot === null) numeroLot = label.text;
       else if (cls === "proprietaire" && proprietaire === null) proprietaire = label.text;
       else if (cls === "denomination" && denomination === null) denomination = label.text;
@@ -2090,6 +2106,7 @@ export function buildParcellesFromFc32628(
       numeroCandidats,
       numeroParcelle5: numero5.value,
       numeroLot,
+      numeroTF,
       numeroSection,
       nicad: null,
       syscolCommune2026: null,
@@ -2331,6 +2348,7 @@ export function parcellesToFeatureCollection(
         numero_candidats: p.numeroCandidats,
         numero_parcelle: p.numeroParcelle5,
         numero_lot: p.numeroLot,
+        numero_tf: p.numeroTF,
         numero_section: p.numeroSection,
         proprietaire: p.proprietaire,
         denomination: p.denomination,
