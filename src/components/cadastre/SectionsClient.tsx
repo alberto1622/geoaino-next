@@ -903,8 +903,15 @@ export default function SectionsClient() {
 
   // ── Attribution d'un numéro à une section qui n'en a pas ────────────────────
   // Handler partagé par la table (édition inline) et le popup carte (Task 4).
+  // Ref vers le handler courant : la boîte de confirmation « affecter quand
+  // même » relance l'attribution en mode `force` via cette ref plutôt qu'en
+  // référençant `performSetNumero` depuis sa propre définition (interdit par le
+  // React Compiler).
+  const performSetNumeroRef = useRef<
+    (sectionId: number, rawValue: string, force?: boolean) => void
+  >(() => {});
   const performSetNumero = useCallback(
-    async (sectionId: number, rawValue: string) => {
+    async (sectionId: number, rawValue: string, force = false) => {
       const numSection = rawValue.trim();
       if (!numSection) {
         toast.error("Le numéro ne peut pas être vide.");
@@ -915,10 +922,29 @@ export default function SectionsClient() {
         const res = await fetch("/api/cadastre/sections/numero", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sectionId, numSection }),
+          body: JSON.stringify({ sectionId, numSection, force }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Attribution échouée");
+        if (!res.ok) {
+          // Numéro déjà porté par une autre section de la même commune : au lieu
+          // de refuser sec, proposer de l'affecter quand même (section fusionnée
+          // dont la mitoyenne manque au DXF — cf. route `force`).
+          if (res.status === 409 && data?.overridable && !force) {
+            const c = data.conflict as { id: number; commune: string | null } | undefined;
+            setConfirmState({
+              title: "Numéro déjà utilisé",
+              description:
+                `Le numéro ${numSection} est déjà porté par la section #${c?.id ?? "?"}` +
+                `${c?.commune ? ` (${c.commune})` : ""}.\n` +
+                "L'affecter quand même à cette section ? Deux sections de la même commune " +
+                "porteront alors le même numéro — les NICAD dérivés pourront entrer en collision.",
+              confirmLabel: "Affecter quand même",
+              run: () => performSetNumeroRef.current(sectionId, rawValue, true),
+            });
+            return;
+          }
+          throw new Error(data.error || "Attribution échouée");
+        }
         setSections((prev) =>
           prev.map((s) => (s.id === sectionId ? { ...s, numSection } : s)),
         );
@@ -963,6 +989,9 @@ export default function SectionsClient() {
     },
     [],
   );
+  useEffect(() => {
+    performSetNumeroRef.current = performSetNumero;
+  }, [performSetNumero]);
 
   const unnumberedCount = useMemo(
     () => sections.filter((s) => !s.numSection).length,

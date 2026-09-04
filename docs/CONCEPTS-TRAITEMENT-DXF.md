@@ -956,11 +956,26 @@ section physique » (numérotation dupliquée par erreur dans le DXF source).
 La fusion reste un geste **délibéré** de l'utilisateur via la fonction de
 fusion manuelle existante (§11, « Fusion manuelle de sections »).
 
+**Évolution (2026-09-04) : contournement `force` sur confirmation.** Le refus
+409 sec bloquait un cas légitime : une section **fusionnée** parce que sa
+limite mitoyenne est absente du DXF source (§11 bis, ex. THIARE 013+018)
+couvre en réalité deux sections numérotées de la même commune. La réponse 409
+porte désormais `overridable: true` + le détail du conflit (`{ id, numSection,
+commune }`) ; le client (`SectionsClient.tsx`) n'affiche plus un `toast.error`
+mais une boîte de confirmation « Affecter quand même », qui réémet la requête
+avec `force: true`. Avec `force`, l'API saute le contrôle d'unicité, écrit le
+numéro et **trace le doublon assumé** dans l'historique (`… (doublon assumé
+avec la section #X, commune)`). Risque assumé et signalé à l'utilisateur : deux
+sections de la même commune portant le même numéro produisent des NICAD de
+parcelle identiques — les collisions éventuelles sont remontées par
+`syncNicadForSectionChange` (§11 ter bis), non bloquées. Sans `force` (défaut),
+le comportement 409 est inchangé.
+
 **Fichiers · fonctions.** `src/lib/cadastre/sections-data.ts`
 (`findSectionNumeroConflict`, `updateSectionNumero`, `getSection` étendu),
-`src/app/api/cadastre/sections/numero/route.ts`,
-`src/components/cadastre/SectionsClient.tsx` (`performSetNumero`,
-filtre `showUnnumberedOnly`).
+`src/app/api/cadastre/sections/numero/route.ts` (paramètre `force`),
+`src/components/cadastre/SectionsClient.tsx` (`performSetNumero` + argument
+`force`, `performSetNumeroRef`, filtre `showUnnumberedOnly`).
 
 ---
 

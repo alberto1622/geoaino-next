@@ -18,7 +18,11 @@ export const runtime = "nodejs";
  * l'extraction ; numSection déjà renseigné : correction manuelle, cf.
  * docs/CONCEPTS-TRAITEMENT-DXF.md §11 ter). Refuse si une AUTRE section de la
  * même commune (syscolCommune) porte déjà ce numéro — le numéro de section
- * n'est unique QUE dans sa commune (cf. build-sections.ts).
+ * n'est unique QUE dans sa commune (cf. build-sections.ts) — SAUF si le client
+ * repasse avec `force: true` après confirmation de l'utilisateur (section
+ * fusionnée dont la mitoyenne est absente du DXF : on assume alors deux
+ * sections de la même commune sous le même numéro, au risque de collisions
+ * NICAD signalées par `syncNicadForSectionChange`).
  *
  * Capture un snapshot de la section AVANT changement et l'enregistre comme
  * entrée d'historique restaurable, dans la même transaction que l'écriture —
@@ -42,7 +46,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   const createdBy = (session.user as { id?: string }).id ?? null;
 
-  let body: { sectionId?: number; numSection?: string } = {};
+  let body: { sectionId?: number; numSection?: string; force?: boolean } = {};
   try {
     body = await req.json();
   } catch {
@@ -50,6 +54,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
   const sectionId = Number(body.sectionId);
   const numSection = normalizeSection(body.numSection);
+  // `force` : l'utilisateur a confirmé l'attribution malgré un numéro déjà
+  // porté par une autre section de la même commune (cf. docstring).
+  const force = body.force === true;
   if (!Number.isInteger(sectionId) || !numSection) {
     return NextResponse.json({ error: "sectionId et numSection requis (numérique)" }, { status: 400 });
   }
@@ -62,15 +69,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         if (existing.numSection === numSection) return { kind: "noop" as const, existing };
 
         const conflict = await findSectionNumeroConflict(existing.syscolCommune, numSection, sectionId, tx);
-        if (conflict) return { kind: "conflict" as const, conflict };
+        if (conflict && !force) return { kind: "conflict" as const, conflict };
 
         await updateSectionNumero(sectionId, numSection, tx);
         const before: SectionsNumeroSnapshot = { section: existing };
+        // Doublon assumé (force) : le tracer dans l'historique — deux sections
+        // de la même commune portent désormais ce numéro.
+        const dupNote = conflict
+          ? ` (doublon assumé avec la section #${conflict.id}${conflict.commune ? `, ${conflict.commune}` : ""})`
+          : "";
         await recordHistory(tx, {
           scope: "sections",
           scopeKey: existing.syscolCommune,
           action: "numero",
-          summary: `Numéro de la section ${existing.numSection ?? "#" + existing.id} changé en ${numSection}${existing.commune ? ` (${existing.commune})` : ""}`,
+          summary: `Numéro de la section ${existing.numSection ?? "#" + existing.id} changé en ${numSection}${existing.commune ? ` (${existing.commune})` : ""}${dupNote}`,
           before,
           after: { numSection },
           createdBy,
@@ -91,7 +103,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         {
           error: `Le numéro ${numSection} est déjà utilisé par la section #${outcome.conflict.id}${
             outcome.conflict.commune ? ` (${outcome.conflict.commune})` : ""
-          } — fusionnez-les si c'est la même section.`,
+          } — fusionnez-les si c'est la même section, ou confirmez pour l'affecter quand même.`,
+          // Le client peut réémettre la requête avec `force: true` après
+          // confirmation explicite de l'utilisateur (deux sections de la même
+          // commune sous le même numéro — cf. docstring).
+          overridable: true,
+          conflict: { id: outcome.conflict.id, numSection, commune: outcome.conflict.commune },
         },
         { status: 409 },
       );
