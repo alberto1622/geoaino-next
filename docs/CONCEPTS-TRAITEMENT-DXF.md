@@ -3552,7 +3552,7 @@ est exactement ce qui avait produit les faux positifs du § 33.
 
 ---
 
-## 34 bis. Masquer les débordements de COMMUNE dans la page « gestion des sections » : bruit visuel quand le référentiel est moins précis que le levé
+## 34 bis. Masquer par NIVEAU les débordements administratifs dans la page « gestion des sections » : bruit visuel quand le référentiel est moins précis que le levé
 
 **Problème métier** : sur un lot réel (§ 34, lot Thiès : 296 débordements de
 commune détectés d'un coup), l'immense majorité des lignes `commune` de
@@ -3562,40 +3562,42 @@ tort (§ 33), mais un simple **décalage de contour** : la limite communale de
 que le levé topographique, donc une section correctement positionnée « déborde »
 de quelques mètres sur toute sa frontière commune. Ces faux positifs noient les
 rares débordements réels et rendent le panneau « Limites administratives »
-inexploitable. Les niveaux **département / région**, eux, restent
-significatifs (un débordement d'un département entier est presque toujours une
-vraie anomalie).
+inexploitable. Le niveau **commune** est le plus bruyant, mais l'opérateur doit
+pouvoir écarter **n'importe quel niveau** (commune / département / région) selon
+le lot : sur certaines emprises c'est le contour de département qui est
+grossier.
 
 **Cause technique** : la détection (`refreshAdminMismatches`, § 34) est
 volontairement stricte — `ST_Intersects` sans tolérance contre la géométrie
 exacte de la commune. Elle ne peut pas distinguer « la section chevauche une
-autre commande » de « le contour du référentiel est 3 m à côté ». Introduire
+autre commune » de « le contour du référentiel est 3 m à côté ». Introduire
 une tolérance côté détection serait fragile (quel seuil ? il varie selon la
 qualité du levé) et modifierait des données partagées.
 
 **Solution** (`src/components/cadastre/SectionsClient.tsx`) : un filtre
-**purement client**, sans toucher ni à la détection ni au stockage. État
-`hideCommuneMismatches`, préférence par navigateur (`localStorage`, clé
-`cadastre.sections.hideCommuneMismatches`, hydratée après montage — même
+**purement client par niveau**, sans toucher ni à la détection ni au stockage.
+État `hiddenMismatchLevels: Record<"commune"|"departement"|"region", boolean>`,
+préférence par navigateur (`localStorage`, clé
+`cadastre.sections.hiddenMismatchLevels` en JSON, hydratée après montage — même
 pattern anti-mismatch SSR que `CadastreSidebar`). Un dérivé mémoïsé
-`shownAdminMismatches` retire les lignes `adminLevel === "commune"` quand le
-filtre est actif, et remplace `adminMismatches` dans TOUS ses consommateurs
-d'affichage : couche carte (fuchsia), effets clignotement / zoom, et le
-compteur `pendingMismatches` du panneau. Bouton bascule dans l'en-tête de la
-sous-section « Limites administratives » (icône `EyeOff`, calqué sur le bouton
-« Sans numéro » de la table des sections). À l'activation, un débordement
-`commune` en cours de sélection est désélectionné (sinon clignotement/zoom
-pointeraient une couche démontée).
+`shownAdminMismatches` retire les lignes dont `adminLevel` est masqué et
+remplace `adminMismatches` dans TOUS ses consommateurs d'affichage : couche
+carte (fuchsia), effets clignotement / zoom, et le compteur `pendingMismatches`
+du panneau. Sélecteur `DropdownMenu` (3 cases à cocher Commune / Département /
+Région) dans l'en-tête de la sous-section « Limites administratives », calqué
+sur le sélecteur « Limites admin » voisin ; le déclencheur liste les niveaux
+masqués. Quand un niveau est masqué, un débordement de ce niveau en cours de
+sélection est désélectionné (sinon clignotement/zoom pointeraient une couche
+démontée).
 
 **Pourquoi (pièges inclus)** : masquage, pas suppression — réactivation
 instantanée, aucun réimport, et `clip`/`ignore` (§ 34) restent disponibles en
-réaffichant. Le filtre ne porte QUE sur le niveau commune : département et
-région ne sont jamais cachés. Piège tenu à l'œil : `shownAdminMismatches` est
-un `useMemo` (pas un `.filter()` inline) pour garder une référence stable —
-trois effets carte l'ont en dépendance, un nouveau tableau à chaque rendu
-relancerait le `setInterval` du clignotement. La préférence n'est PAS un
-réglage serveur : c'est un confort d'affichage propre à chaque opérateur, pas
-une décision métier sur les données. **Bug révélé par ce filtre** : l'effet de
+réaffichant. Piège tenu à l'œil : `shownAdminMismatches` est un `useMemo` (pas
+un `.filter()` inline) pour garder une référence stable — trois effets carte
+l'ont en dépendance, un nouveau tableau à chaque rendu relancerait le
+`setInterval` du clignotement. La préférence n'est PAS un réglage serveur :
+c'est un confort d'affichage propre à chaque opérateur, pas une décision métier
+sur les données. **Bug révélé par ce filtre** : l'effet de
 redessin recréait le `L.featureGroup` fuchsia des débordements à chaque passage
 SANS retirer le précédent (`adminMismatchesLayerRef` n'était jamais
 `map.removeLayer`é, contrairement aux sections et aux chevauchements) —

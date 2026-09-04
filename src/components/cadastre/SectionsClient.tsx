@@ -148,13 +148,34 @@ const MERGE_COLOR = "#8b5cf6";
 // Débordement section ↔ limite administrative (commune/département/région) —
 // fuchsia, distinct du rouge des chevauchements section↔section.
 const ADMIN_MISMATCH_COLOR = "#d946ef";
+// Niveaux portés par `limite_section_admin_mismatch` (cf. § 34) — ordre
+// d'affichage du plus fin au plus large.
+const ADMIN_MISMATCH_LEVELS = ["commune", "departement", "region"] as const;
+type AdminMismatchLevel = (typeof ADMIN_MISMATCH_LEVELS)[number];
 const ADMIN_MISMATCH_LEVEL_LABELS: Record<string, string> = {
   commune: "commune",
   departement: "département",
   region: "région",
 };
-// Préférence "masquer les débordements niveau commune" — par navigateur.
-const HIDE_COMMUNE_MISMATCHES_KEY = "cadastre.sections.hideCommuneMismatches";
+const ADMIN_MISMATCH_LEVEL_TITLES: Record<AdminMismatchLevel, string> = {
+  commune: "Commune",
+  departement: "Département",
+  region: "Région",
+};
+// Forme possessive ("de sa" / "de son") pour le message « aucun débordement ».
+const ADMIN_MISMATCH_LEVEL_DE: Record<AdminMismatchLevel, string> = {
+  commune: "de sa commune",
+  departement: "de son département",
+  region: "de sa région",
+};
+// Préférence "masquer les débordements par niveau" — par navigateur, JSON
+// `{ commune, departement, region }`.
+const HIDDEN_MISMATCH_LEVELS_KEY = "cadastre.sections.hiddenMismatchLevels";
+const NO_HIDDEN_MISMATCH_LEVELS: Record<AdminMismatchLevel, boolean> = {
+  commune: false,
+  departement: false,
+  region: false,
+};
 
 // Clignotement de l'erreur (chevauchement ou débordement administratif)
 // sélectionnée dans le panneau — alterne ces deux `fillOpacity` toutes les
@@ -290,12 +311,14 @@ export default function SectionsClient() {
   const [selectedMismatchId, setSelectedMismatchId] = useState<number | null>(null);
   const [correctingMismatch, setCorrectingMismatch] = useState<number | null>(null);
   const adminMismatchItemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
-  // Masquage client des débordements section ↔ limite de COMMUNE (carte + liste
-  // + compteur) : la limite de `cad_communes_2026` est parfois moins fine que le
-  // levé → faux positifs. Purement visuel, la détection/le stockage sont
-  // inchangés ; niveaux département/région non concernés. Préférence par
+  // Masquage client des débordements section ↔ limite administrative, par
+  // niveau (carte + liste + compteur) : la limite de `cad_communes_2026` est
+  // parfois moins fine que le levé → faux positifs, surtout au niveau commune.
+  // Purement visuel, la détection/le stockage sont inchangés. Préférence par
   // navigateur (localStorage), hydratée après montage — cf. CadastreSidebar.
-  const [hideCommuneMismatches, setHideCommuneMismatches] = useState(false);
+  const [hiddenMismatchLevels, setHiddenMismatchLevels] = useState<
+    Record<AdminMismatchLevel, boolean>
+  >(NO_HIDDEN_MISMATCH_LEVELS);
   const [loadingData, setLoadingData] = useState(false);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [deletingBatch, setDeletingBatch] = useState(false);
@@ -511,28 +534,47 @@ export default function SectionsClient() {
     })();
   }, [loadBatches, fetchData]);
 
-  // ── Préférence "masquer débordements commune" : hydratation après montage ───
-  // `false` au SSR (rendus serveur/client identiques), vraie préférence
+  // ── Préférence "masquer débordements par niveau" : hydratation après montage ─
+  // Tout visible au SSR (rendus serveur/client identiques), vraie préférence
   // localStorage synchronisée ici — même pattern que CadastreSidebar / ThemeProvider.
   useEffect(() => {
-    if (window.localStorage.getItem(HIDE_COMMUNE_MISMATCHES_KEY) === "1") {
+    try {
+      const raw = window.localStorage.getItem(HIDDEN_MISMATCH_LEVELS_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<Record<AdminMismatchLevel, unknown>>;
+      const next = { ...NO_HIDDEN_MISMATCH_LEVELS };
+      let any = false;
+      for (const lvl of ADMIN_MISMATCH_LEVELS) {
+        if (parsed[lvl] === true) {
+          next[lvl] = true;
+          any = true;
+        }
+      }
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setHideCommuneMismatches(true);
+      if (any) setHiddenMismatchLevels(next);
+    } catch {
+      /* préférence illisible : on reste tout visible */
     }
   }, []);
 
-  const toggleHideCommuneMismatches = useCallback(() => {
-    const next = !hideCommuneMismatches;
-    window.localStorage.setItem(HIDE_COMMUNE_MISMATCHES_KEY, next ? "1" : "0");
-    setHideCommuneMismatches(next);
-    // Un débordement commune actuellement sélectionné va disparaître : on le
-    // désélectionne pour ne pas laisser clignotement/zoom pointer une couche
-    // absente.
-    if (next && selectedMismatchId != null) {
-      const sel = adminMismatches.find((m) => m.id === selectedMismatchId);
-      if (sel?.adminLevel === "commune") setSelectedMismatchId(null);
-    }
-  }, [hideCommuneMismatches, selectedMismatchId, adminMismatches]);
+  const toggleMismatchLevelHidden = useCallback(
+    (level: AdminMismatchLevel) => {
+      const nowHidden = !hiddenMismatchLevels[level];
+      const next = { ...hiddenMismatchLevels, [level]: nowHidden };
+      window.localStorage.setItem(
+        HIDDEN_MISMATCH_LEVELS_KEY,
+        JSON.stringify(next),
+      );
+      setHiddenMismatchLevels(next);
+      // Le débordement sélectionné va être masqué : on le désélectionne pour ne
+      // pas laisser clignotement/zoom pointer une couche absente.
+      if (nowHidden && selectedMismatchId != null) {
+        const sel = adminMismatches.find((m) => m.id === selectedMismatchId);
+        if (sel?.adminLevel === level) setSelectedMismatchId(null);
+      }
+    },
+    [hiddenMismatchLevels, selectedMismatchId, adminMismatches],
+  );
 
   // ── Notification de fin de construction (job DXF/DGN ou shapefile synchrone) ─
   const reportBuildResult = useCallback(
@@ -1036,15 +1078,20 @@ export default function SectionsClient() {
     [sections, showUnnumberedOnly],
   );
   // Débordements administratifs effectivement dessinés/listés — les niveaux
-  // commune sont retirés quand le masquage est actif (préférence par
-  // navigateur). Mémoïsé pour garder une référence stable : plusieurs effets
-  // carte en dépendent (dessin, clignotement, zoom).
+  // masqués (préférence par navigateur) sont retirés. Mémoïsé pour garder une
+  // référence stable : plusieurs effets carte en dépendent (dessin,
+  // clignotement, zoom).
+  const anyMismatchLevelHidden = ADMIN_MISMATCH_LEVELS.some(
+    (lvl) => hiddenMismatchLevels[lvl],
+  );
   const shownAdminMismatches = useMemo(
     () =>
-      hideCommuneMismatches
-        ? adminMismatches.filter((m) => m.adminLevel !== "commune")
+      anyMismatchLevelHidden
+        ? adminMismatches.filter(
+            (m) => !hiddenMismatchLevels[m.adminLevel as AdminMismatchLevel],
+          )
         : adminMismatches,
-    [adminMismatches, hideCommuneMismatches],
+    [adminMismatches, anyMismatchLevelHidden, hiddenMismatchLevels],
   );
 
   // ── (Re)dessin des couches sections + chevauchements ───────────────────────
@@ -1909,6 +1956,15 @@ export default function SectionsClient() {
   const pendingMismatches = shownAdminMismatches.filter(
     (m) => m.status === "PENDING",
   );
+  // Niveaux masqués (pour le libellé du sélecteur) et niveaux encore contrôlés
+  // (pour le message « aucun débordement »).
+  const hiddenMismatchLevelList = ADMIN_MISMATCH_LEVELS.filter(
+    (lvl) => hiddenMismatchLevels[lvl],
+  );
+  const shownMismatchLevelList = ADMIN_MISMATCH_LEVELS.filter(
+    (lvl) => !hiddenMismatchLevels[lvl],
+  );
+  const hasAnyMismatch = adminMismatches.some((m) => m.status === "PENDING");
   // Sélection restreinte aux chevauchements encore PENDING affichés : les ids
   // résolus (correction individuelle, changement de lot) deviennent inertes
   // sans setState d'effet — même principe que `activeMergeSelection`.
@@ -2717,44 +2773,76 @@ export default function SectionsClient() {
                           {pendingMismatches.length}
                         </span>
                       )}
-                      {/* Masquage des débordements niveau commune (faux positifs
-                          quand la limite de cad_communes_2026 est moins fine que
-                          le levé). Purement visuel — cf. HIDE_COMMUNE_MISMATCHES_KEY.
-                          Affiché seulement s'il y a un débordement commune à cacher
-                          OU si le filtre est déjà actif (pour le lever) — même
-                          logique que le bouton « Sans numéro » de la table. */}
-                      {(hideCommuneMismatches ||
-                        adminMismatches.some(
-                          (m) =>
-                            m.adminLevel === "commune" && m.status === "PENDING",
-                        )) && (
-                        <button
-                          onClick={toggleHideCommuneMismatches}
-                          title={
-                            hideCommuneMismatches
-                              ? "Réafficher les débordements section ↔ limite de commune"
-                              : "Masquer les débordements section ↔ limite de commune (département et région conservés)"
-                          }
-                          className={[
-                            "ml-auto flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors",
-                            hideCommuneMismatches
-                              ? "bg-fuchsia-500/20 text-fuchsia-500"
-                              : "bg-secondary text-muted-foreground hover:bg-secondary/70",
-                          ].join(" ")}
-                        >
-                          <EyeOff className="h-3 w-3" />
-                          {hideCommuneMismatches
-                            ? "Commune masquée"
-                            : "Masquer commune"}
-                        </button>
+                      {/* Masquage par niveau des débordements administratifs
+                          (faux positifs quand la limite de cad_communes_2026 est
+                          moins fine que le levé, surtout au niveau commune).
+                          Purement visuel — cf. HIDDEN_MISMATCH_LEVELS_KEY.
+                          Affiché dès qu'il y a un débordement PENDING ou qu'un
+                          niveau est déjà masqué (pour le rétablir). */}
+                      {(hasAnyMismatch || hiddenMismatchLevelList.length > 0) && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button
+                              title="Masquer/réafficher les débordements par niveau administratif — purement visuel, la détection est inchangée"
+                              className={[
+                                "ml-auto flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors",
+                                hiddenMismatchLevelList.length > 0
+                                  ? "bg-fuchsia-500/20 text-fuchsia-500"
+                                  : "bg-secondary text-muted-foreground hover:bg-secondary/70",
+                              ].join(" ")}
+                            >
+                              <EyeOff className="h-3 w-3" />
+                              {hiddenMismatchLevelList.length > 0
+                                ? hiddenMismatchLevelList
+                                    .map((lvl) => ADMIN_MISMATCH_LEVEL_TITLES[lvl])
+                                    .join(", ")
+                                : "Masquer"}
+                              <ChevronDown className="h-3 w-3 opacity-60" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            {ADMIN_MISMATCH_LEVELS.map((lvl) => (
+                              <DropdownMenuCheckboxItem
+                                key={lvl}
+                                checked={hiddenMismatchLevels[lvl]}
+                                onSelect={(e) => e.preventDefault()}
+                                onCheckedChange={() =>
+                                  toggleMismatchLevelHidden(lvl)
+                                }
+                              >
+                                <span className="flex items-center gap-1.5">
+                                  <span
+                                    className="h-2.5 w-2.5 rounded-sm"
+                                    style={{ background: ADMIN_MISMATCH_COLOR }}
+                                  />
+                                  Masquer {ADMIN_MISMATCH_LEVEL_LABELS[lvl]}
+                                </span>
+                              </DropdownMenuCheckboxItem>
+                            ))}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       )}
                     </h4>
                     {pendingMismatches.length === 0 ? (
                       <p className="flex items-center gap-2 text-sm text-green-500">
                         <CheckCircle className="h-4 w-4" />{" "}
-                        {hideCommuneMismatches
-                          ? "Aucune section ne déborde de son département ou de sa région (débordements de commune masqués)."
-                          : "Aucune section ne déborde de sa commune, son département ou sa région."}
+                        {shownMismatchLevelList.length === 0
+                          ? "Tous les niveaux de débordement administratif sont masqués."
+                          : `Aucune section ne déborde ${shownMismatchLevelList
+                              .map((lvl) => ADMIN_MISMATCH_LEVEL_DE[lvl])
+                              .join(", ")}${
+                              hiddenMismatchLevelList.length > 0
+                                ? ` (${
+                                    hiddenMismatchLevelList.length > 1
+                                      ? "niveaux"
+                                      : "niveau"
+                                  } ${hiddenMismatchLevelList
+                                    .map((lvl) => ADMIN_MISMATCH_LEVEL_LABELS[lvl])
+                                    .join(", ")} masqué${
+                                    hiddenMismatchLevelList.length > 1 ? "s" : ""
+                                  })`
+                                : ""
+                            }.`}
                       </p>
                     ) : (
                       <div className="max-h-70 space-y-2 overflow-y-auto pr-0.5">
