@@ -495,13 +495,13 @@ export default function DxfPipelineSection() {
     resizeAll();
     window.addEventListener("resize", resizeAll);
 
-    // Résolu UNE fois (ne change pas en cours de session) : `--font-geist-mono`
+    // Résolu UNE fois (ne change pas en cours de session) : `--font-plex-mono`
     // (posée par next/font sur <html>, cf. layout.tsx) contient le nom de
-    // police déjà résolu, ex. "'Geist Mono', 'Geist Mono Fallback'" — c'est
+    // police déjà résolu, ex. "'IBM Plex Mono', 'IBM Plex Mono Fallback'" — c'est
     // CETTE chaîne littérale qu'il faut passer à `ctx.font`, jamais `var(...)`.
     const monoFont =
       getComputedStyle(document.documentElement)
-        .getPropertyValue("--font-geist-mono")
+        .getPropertyValue("--font-plex-mono")
         .trim() || "ui-monospace";
 
     function readColors(): Colors {
@@ -596,7 +596,7 @@ export default function DxfPipelineSection() {
   }, []);
 
   return (
-    <section className="max-w-7xl mx-auto px-6 py-2">
+    <section className="max-w-8xl mx-auto px-6 py-2">
       {/* <div className="text-center mb-12">
         <h2 className="text-3xl font-bold mb-3">D&apos;un fichier DXF à une parcelle certifiée</h2>
         <p className="text-muted-foreground max-w-xl mx-auto">
@@ -607,7 +607,7 @@ export default function DxfPipelineSection() {
 
       <div
         ref={wrapRef}
-        className="relative rounded-2xl border border-border bg-card p-5 md:p-6 shadow-sm"
+        className="relative rounded-lg border border-border bg-card p-5 md:p-6 shadow-sm"
         style={
           {
             "--dxf-ink": "var(--foreground)",
@@ -674,7 +674,7 @@ export default function DxfPipelineSection() {
                   {s.desc}
                 </p>
                 <p className="mt-auto pt-2.5 font-mono text-[11px] text-muted-foreground">
-                  Sortie{" "}
+                  <span className="uppercase tracking-[0.1em]">Sortie</span>{" "}
                   <span className="font-semibold text-foreground">{s.out}</span>
                 </p>
               </div>

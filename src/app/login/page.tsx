@@ -2,10 +2,11 @@
 import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { Globe, LogIn, Loader2 } from "lucide-react";
+import { LogIn, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageTitle } from "@/components/PageTitle";
+import { Logo } from "@/components/Logo";
 import { toast } from "sonner";
 
 export default function LoginPage() {
@@ -40,11 +41,11 @@ export default function LoginPage() {
       <PageTitle title="Connexion" />
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <div className="w-14 h-14 rounded-2xl bg-primary flex items-center justify-center shadow-xl shadow-primary/30 mx-auto mb-4">
-            <Globe className="w-7 h-7 text-primary-foreground" />
+          <div className="flex justify-center mb-4">
+            <Logo className="h-12" priority />
           </div>
-          <h1 className="text-2xl font-bold">GéoAino</h1>
-          <p className="text-sm text-muted-foreground mt-1">Fiabilisation des données cadastrales</p>
+          <h1 className="sr-only">GEO-AINO SUPREME</h1>
+          <p className="text-sm text-muted-foreground">Fiabilisation des données cadastrales</p>
         </div>
 
         <div className="rounded-2xl border border-border bg-card p-8 shadow-xl">

@@ -19,17 +19,17 @@ function applyAndPersist(t: Theme) {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  // Fixed "light" on SSR — server and client first render match, no hydration mismatch.
-  // The inline <script> in layout.tsx already applied the right class before first paint.
-  const [theme, setTheme] = useState<Theme>("light");
+  // Design system « Graticule » : sombre par défaut. SSR fixé à "dark" — le
+  // premier rendu serveur/client concorde, pas de mismatch d'hydratation.
+  // Le <script> inline de layout.tsx a déjà posé la bonne classe avant le paint.
+  const [theme, setTheme] = useState<Theme>("dark");
 
   // Single mount-only effect: sync React state with the real preference.
   // No [theme] effect — DOM is managed here and in toggleTheme to avoid
-  // the flash that would occur if a [theme] effect fired with the stale "light" state.
+  // the flash that would occur if a [theme] effect fired with the stale state.
   useEffect(() => {
     const stored = window.localStorage.getItem(STORAGE_KEY) as Theme | null;
-    const resolved =
-      stored ?? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    const resolved = stored ?? "dark";
     applyAndPersist(resolved);
     setTheme(resolved);
   }, []);

@@ -2,12 +2,25 @@
 @import "maplibre-gl/dist/maplibre-gl.css";
 @plugin "@tailwindcss/typography";
 
+/* Thème piloté par la classe .dark sur <html> (cf. ThemeProvider), pas par
+   prefers-color-scheme : on redéfinit la variante `dark:` en conséquence. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ============================================================================
+   GRATICULE — design system GEO-AINO SUPREME
+   Interface « techno / SIG », sombre par défaut, thème clair « plein jour ».
+   Les noms de tokens shadcn (--background, --primary, …) sont conservés :
+   tous les composants existants héritent de la nouvelle palette sans modif.
+   ========================================================================== */
+
 @theme inline {
+  /* -- tokens shadcn (remappés Graticule) -- */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-input: var(--input);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
@@ -19,87 +32,172 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-ring: var(--ring);
-  --font-sans: var(--font-manrope);
-  --font-serif: var(--font-fraunces);
-  --font-mono: var(--font-geist-mono);
+
+  /* -- Graticule : surfaces empilées (1 → 3) -- */
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-text-faint: var(--text-faint);
+
+  /* -- Graticule : accent turquoise + entité foncière -- */
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-press: var(--accent-press);
+  --color-land: var(--land);
+
+  /* -- Graticule : sémantique (états & anomalies topologiques) -- */
+  --color-good: var(--good);
+  --color-warn: var(--warn);
+  --color-crit: var(--crit);
+  --color-info: var(--info);
+
+  /* -- polices -- */
+  --font-sans: var(--font-plex-sans);
+  --font-serif: var(--font-bricolage);
+  --font-display: var(--font-bricolage);
+  --font-mono: var(--font-plex-mono);
+
+  /* -- rayons : base 8px, échelle courte (outil, pas vitrine) -- */
+  --radius-xs: 2px;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* Identité GéoAino (maquette Claude Design, projet "GeoAino.dc.html") : palette
-   crème/brun chaud en clair (thème par défaut), déclinaison sombre dérivée de la
-   propre section CTA de la maquette (encre #1E1610 + doré #C99A2E déjà associés
-   là-bas) — la maquette elle-même ne définissait qu'un thème clair. */
+/* ---------------------------------------------------------------------------
+   Thème sombre — base (:root). L'app pose toujours .light ou .dark sur <html>
+   (script inline de layout.tsx) ; :root sert de socle « dark-first ».
+   ------------------------------------------------------------------------- */
 :root {
-  color-scheme: light;
-  --radius: 0.625rem;
-  --background: #FAF6EF;
-  --foreground: #22190F;
-  --card: #FFFDF9;
-  --card-foreground: #22190F;
-  --border: #E9DFC9;
-  --input: #E9DFC9;
-  --primary: #1E1610;
-  --primary-foreground: #FAF6EF;
-  --secondary: #F1E9D8;
-  --secondary-foreground: #22190F;
-  --muted: #F1E9D8;
-  --muted-foreground: #6B5D4B;
-  --accent: #F0E4C8;
-  --accent-foreground: #8B4A2B;
-  --destructive: oklch(0.58 0.22 25);
-  --ring: #C99A2E;
+  color-scheme: dark;
+  --radius: 0.5rem;
+
+  /* neutres — nuit cartographique, légère dominante cyan */
+  --background: #0B1417;
+  --foreground: #E4ECEE;
+  --surface-1: #10191E;
+  --surface-2: #16232A;
+  --surface-3: #1D2E36;
+  --card: #10191E;
+  --card-foreground: #E4ECEE;
+  --border: #26383F;
+  --border-strong: #334A52;
+  --input: #26383F;
+  --muted: #16232A;
+  --muted-foreground: #93A6AC;
+  --text-faint: #63777D;
+
+  /* accent unique — turquoise « entité active » */
+  --primary: #2DD4BF;
+  --primary-foreground: #04211D;
+  --accent-hover: #46E0CE;
+  --accent-press: #1FB9A6;
+  --ring: #2DD4BF;
+
+  /* "accent" shadcn = surface de survol (discrète, ≠ accent de marque) */
+  --accent: #1D2E36;
+  --accent-foreground: #E4ECEE;
+  --secondary: #1D2E36;
+  --secondary-foreground: #E4ECEE;
+
+  /* entité foncière (parcelle / sol) */
+  --land: #34B27B;
+
+  /* sémantique — réservée aux états et anomalies, jamais décorative */
+  --good: #3FB950;
+  --warn: #E3B341;
+  --crit: #F85149;
+  --info: #6CB6FF;
+  --destructive: #F85149;
+
+  /* carte */
+  --graticule: rgba(255, 255, 255, 0.05);
+  --shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.45), 0 18px 40px -22px rgba(0, 0, 0, 0.7);
 }
 
+/* .dark : le socle :root est déjà sombre — on réaffirme juste color-scheme
+   pour les widgets natifs (popups de <select>, scrollbars, date pickers). */
 .dark {
-  /* Widgets natifs (listes des <select>, scrollbars, date pickers) rendus en
-     sombre : sans cela le navigateur ouvre un popup clair avec le texte clair
-     du thème hérité → blanc sur blanc. */
   color-scheme: dark;
-  --background: #1E1610;
-  --foreground: #FAF6EF;
-  --card: #241B13;
-  --card-foreground: #FAF6EF;
-  --border: #3A2C1E;
-  --input: #3A2C1E;
-  --primary: #C99A2E;
-  --primary-foreground: #1E1610;
-  --secondary: #2A2016;
-  --secondary-foreground: #FAF6EF;
-  --muted: #2A2016;
-  --muted-foreground: #B5A488;
-  --accent: #33261A;
-  --accent-foreground: #E8C874;
-  --destructive: oklch(0.60 0.22 25);
-  --ring: #C99A2E;
+}
+
+/* ---------------------------------------------------------------------------
+   Thème clair — « plein jour » : contraste élevé pour un usage terrain.
+   Le turquoise clair échoue sur blanc → l'accent bascule sur un vert-teal
+   profond (#0E7C5A) avec texte blanc.
+   ------------------------------------------------------------------------- */
+.light {
+  color-scheme: light;
+
+  --background: #F3F6F4;
+  --foreground: #14201E;
+  --surface-1: #FFFFFF;
+  --surface-2: #F0F3F1;
+  --surface-3: #E6ECE9;
+  --card: #FFFFFF;
+  --card-foreground: #14201E;
+  --border: #D2DBD7;
+  --border-strong: #B4C0BB;
+  --input: #D2DBD7;
+  --muted: #F0F3F1;
+  --muted-foreground: #53625E;
+  --text-faint: #7A8984;
+
+  --primary: #0E7C5A;
+  --primary-foreground: #FFFFFF;
+  --accent-hover: #0B6A4D;
+  --accent-press: #095740;
+  --ring: #0E7C5A;
+
+  --accent: #E6ECE9;
+  --accent-foreground: #14201E;
+  --secondary: #E6ECE9;
+  --secondary-foreground: #14201E;
+
+  --land: #0E7C5A;
+
+  --good: #1A7F37;
+  --warn: #9A6700;
+  --crit: #CF222E;
+  --info: #0969DA;
+  --destructive: #CF222E;
+
+  --graticule: rgba(20, 40, 35, 0.06);
+  --shadow-panel: 0 1px 2px rgba(20, 40, 35, 0.08), 0 16px 32px -20px rgba(20, 40, 35, 0.22);
 }
 
 * {
   border-color: var(--border);
 }
 
-h1, h2, h3 {
-  font-family: var(--font-serif), var(--font-sans);
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-plex-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
-/* Ceinture + bretelles pour Chrome/Edge Windows : couleurs explicites des
-   options des <select> natifs (le popup ne suit pas toujours color-scheme). */
+/* Titres : display grotesque, léger resserrement. */
+h1, h2, h3 {
+  font-family: var(--font-bricolage), var(--font-plex-sans), sans-serif;
+  letter-spacing: -0.02em;
+}
+
+/* Donnée = code : monospace + chiffres tabulaires (NICAD, coordonnées, EPSG…). */
+code, kbd, samp {
+  font-family: var(--font-plex-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Couleurs explicites des options des <select> natifs (le popup Chrome/Edge
+   Windows ne suit pas toujours color-scheme). */
 select option {
   background-color: var(--card);
   color: var(--foreground);
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-manrope, Arial, sans-serif);
-}
-
-/* Leaflet overrides */
+/* Leaflet — fond de carte toujours sombre pour le contraste des entités. */
 .leaflet-container {
-  background: oklch(0.175 0 0) !important;
+  background: #0B1417 !important;
   z-index: 0;
 }
 
@@ -118,9 +216,35 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: var(--border-strong);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--muted-foreground);
+}
+
+/* ---------------------------------------------------------------------------
+   Utilitaires Graticule — déclarés via @utility (pas @layer utilities) pour
+   que les variantes (hover:, dark:, responsive…) soient générées, ex.
+   `hover:shadow-panel`.
+   ------------------------------------------------------------------------- */
+
+/* Ombre unique du système, réservée aux éléments flottants. */
+@utility shadow-panel {
+  box-shadow: var(--shadow-panel);
+}
+
+/* Fond quadrillé « carte » — à réserver aux en-têtes / zones neutres. */
+@utility bg-graticule {
+  background-image:
+    linear-gradient(var(--graticule) 1px, transparent 1px),
+    linear-gradient(90deg, var(--graticule) 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-position: -1px -1px;
+}
+
+/* Colonnes de chiffres alignées (tables, compteurs) — préférer l'utilitaire
+   natif `tabular-nums` de Tailwind ; conservé pour compat. */
+@utility tabular {
+  font-variant-numeric: tabular-nums;
 }

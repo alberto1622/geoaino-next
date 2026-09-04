@@ -11,7 +11,6 @@ import {
   Activity,
   Layers,
   CheckCircle,
-  Globe,
   Database,
   ArrowRight,
   BarChart2,
@@ -22,6 +21,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { NavBar } from "@/components/NavBar";
+import { Logo } from "@/components/Logo";
 import DxfPipelineSection from "@/components/home/DxfPipelineSection";
 import LayerMappingModal, {
   type LayerInventoryEntry,
@@ -32,7 +32,7 @@ import {
   type JobProgressStep,
 } from "@/components/import/JobProgressSteps";
 import type { TargetFieldDef } from "@/lib/import/field-mapping";
-import { toNum } from "@/lib/utils";
+import { cn, toNum } from "@/lib/utils";
 
 interface LayerInventory {
   fileKey: string;
@@ -91,18 +91,46 @@ const FEATURES = [
   },
 ];
 
+// Alignées sur les tokens sémantiques du design system (globals.css) et sur
+// les identifiants réels du moteur de détection (cf. SETUP.md « Types
+// d'erreurs détectées ») — même hiérarchie de sévérité que sur la carte.
 const ERROR_TYPES = [
-  { label: "Chevauchements", sublabel: "Overlaps", color: "#ef4444" },
-  { label: "Espaces vides", sublabel: "Gaps", color: "#f59e0b" },
-  { label: "Résidus", sublabel: "Slivers", color: "#a855f7" },
-  { label: "Doublons NICAD", sublabel: "Duplicates", color: "#3b82f6" },
-  { label: "Géom. invalides", sublabel: "Invalid Geom.", color: "#ec4899" },
+  { label: "Chevauchements", sublabel: "OVERLAP", severity: "crit" },
+  { label: "Espaces vides", sublabel: "GAP", severity: "warn" },
+  { label: "Résidus", sublabel: "SLIVER", severity: "warn" },
+  { label: "Doublons NICAD", sublabel: "DUPLICATE", severity: "crit" },
+  { label: "Géom. invalides", sublabel: "INVALID_GEOM", severity: "crit" },
   {
     label: "Croisements limites",
-    sublabel: "Boundary Cross",
-    color: "#06b6d4",
+    sublabel: "BOUNDARY_CROSS",
+    severity: "info",
   },
-];
+] as const satisfies ReadonlyArray<{
+  label: string;
+  sublabel: string;
+  severity: "crit" | "warn" | "info";
+}>;
+
+const SEVERITY_STYLES: Record<
+  "crit" | "warn" | "info",
+  { border: string; badge: string; dot: string }
+> = {
+  crit: {
+    border: "hover:border-crit/40",
+    badge: "border-crit/30 bg-crit/10",
+    dot: "bg-crit",
+  },
+  warn: {
+    border: "hover:border-warn/40",
+    badge: "border-warn/30 bg-warn/10",
+    dot: "bg-warn",
+  },
+  info: {
+    border: "hover:border-info/40",
+    badge: "border-info/30 bg-info/10",
+    dot: "bg-info",
+  },
+};
 
 interface Props {
   user: { name?: string | null; email?: string | null } | null;
@@ -639,11 +667,13 @@ export default function HomeClient({ user, stats }: Props) {
 
       {/* Hero */}
       <section className="relative overflow-hidden">
+        {/* Quadrillage + halo à la teinte de marque (--primary), plutôt qu'un
+            bleu arbitraire hors palette — réactif au thème clair/sombre. */}
         <div
-          className="absolute inset-0 opacity-[0.025]"
+          className="absolute inset-0 opacity-[0.05]"
           style={{
             backgroundImage:
-              "linear-gradient(oklch(0.65 0.18 220) 1px, transparent 1px), linear-gradient(90deg, oklch(0.65 0.18 220) 1px, transparent 1px)",
+              "linear-gradient(var(--primary) 1px, transparent 1px), linear-gradient(90deg, var(--primary) 1px, transparent 1px)",
             backgroundSize: "50px 50px",
           }}
         />
@@ -651,69 +681,78 @@ export default function HomeClient({ user, stats }: Props) {
           className="absolute top-0 left-1/2 -translate-x-1/2 w-425 h-100 rounded-full pointer-events-none"
           style={{
             background:
-              "radial-gradient(ellipse, oklch(0.65 0.18 220 / 0.15), transparent 70%)",
+              "radial-gradient(ellipse, color-mix(in oklab, var(--primary) 15%, transparent), transparent 70%)",
           }}
         />
 
         <div className="relative mx-auto px-6 pt-8 pb-6">
-          <div className="text-center max-w-5xl mx-auto">
-            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-primary/30 bg-primary/5 text-primary text-xs font-medium mb-4">
+          <div className="text-center max-w-6xl mx-auto">
+            <div className="inline-flex items-center gap-2 rounded-full border border-primary/25 bg-primary/5 px-3.5 py-1.5 text-primary">
               <Activity className="w-3.5 h-3.5" />
-              Fiabilisation des données cadastrales — Sénégal
+              <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.08em]">
+                Fiabilisation des données cadastrales et Foncières · Sénégal
+              </span>
             </div>
 
-            <h1 className="text-4xl md:text-5xl font-bold tracking-tight mb-6 leading-tight">
-              Fiabiliser les données cadastrales
-              <br />
-              <span className="text-primary text-3xl md:text-4xl">
-                détection, correction et traçabilité
-              </span>
+            <h1 className="mt-5 text-4xl md:text-5xl font-bold tracking-tight leading-[1.08]">
+              Fiabiliser les données cadastrales et Foncières
             </h1>
+            <p className="mt-2 text-xl md:text-2xl font-semibold text-primary tracking-tight">
+              Détection, correction et traçabilité
+            </p>
 
-            <p className="text-lg text-muted-foreground mb-10 max-w-3xl mx-auto leading-relaxed">
+            <p className="mx-auto mt-5 mb-10 max-w-2xl text-base md:text-lg leading-relaxed text-muted-foreground">
               Détection des erreurs topologiques, corrections proposées et
               rapports d&apos;analyse sur vos fichiers SHP, GeoJSON, DGN et DXF.
             </p>
 
             {/* Workflow — pipeline DXF réel (lecture → mappage → polygonisation → jointure) */}
+            <div className="mb-6 flex items-center justify-center gap-3">
+              <span className="h-px w-8 bg-border" aria-hidden="true" />
+              <span className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                Le pipeline, étape par étape
+              </span>
+              <span className="h-px w-8 bg-border" aria-hidden="true" />
+            </div>
             <DxfPipelineSection />
 
-            <h3 className="text-primary text-4xl font-bold tracking-tight my-6 leading-tight">
-              Statistiques
-            </h3>
-
             {stats.totalAnalyses > 0 && (
-              <div className="flex items-center justify-center gap-6 mt-4 mb-10 text-lg">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Database className="w-4 h-4 text-primary" />
-                  <span>
-                    <strong className="font-serif text-foreground">
-                      {stats.totalAnalyses}
-                    </strong>{" "}
-                    analyses
-                  </span>
+              <>
+                <p className="mt-10 mb-4 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-primary">
+                  En chiffres
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3 mb-10 text-lg">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Database className="w-4 h-4 text-primary" />
+                    <span>
+                      <strong className="font-serif tabular-nums text-foreground">
+                        {stats.totalAnalyses}
+                      </strong>{" "}
+                      analyses
+                    </span>
+                  </div>
+                  <div className="w-px h-4 bg-border" />
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <MapPin className="w-4 h-4 text-info" />
+                    <span>
+                      <strong className="font-serif tabular-nums text-foreground">
+                        {(stats.totalParcelles ?? 0).toLocaleString()}
+                      </strong>{" "}
+                      parcelles traitées
+                    </span>
+                  </div>
+                  <div className="w-px h-4 bg-border" />
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <CheckCircle className="w-4 h-4 text-good" />
+                    <span>
+                      Conformité moy.{" "}
+                      <strong className="font-serif tabular-nums text-good">
+                        {toNum(stats.avgConformity).toFixed(1)}%
+                      </strong>
+                    </span>
+                  </div>
                 </div>
-                <div className="w-px h-4 bg-border" />
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <MapPin className="w-4 h-4 text-blue-400" />
-                  <span>
-                    <strong className="font-serif text-foreground">
-                      {(stats.totalParcelles ?? 0).toLocaleString()}
-                    </strong>{" "}
-                    parcelles traitées
-                  </span>
-                </div>
-                <div className="w-px h-4 bg-border" />
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <CheckCircle className="w-4 h-4 text-green-400" />
-                  <span>
-                    Conformité moy.{" "}
-                    <strong className="font-serif text-green-400">
-                      {toNum(stats.avgConformity).toFixed(1)}%
-                    </strong>
-                  </span>
-                </div>
-              </div>
+              </>
             )}
 
             {/* Format chips */}
@@ -721,7 +760,7 @@ export default function HomeClient({ user, stats }: Props) {
               {FORMATS.map((f) => (
                 <span
                   key={f}
-                  className="px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground text-xs font-mono border border-border"
+                  className="px-3 py-1.5 rounded-full bg-secondary text-secondary-foreground text-xs font-mono uppercase tracking-[0.06em] border border-border"
                 >
                   {f}
                 </span>
@@ -736,7 +775,7 @@ export default function HomeClient({ user, stats }: Props) {
               }}
               onDragLeave={() => setIsDragging(false)}
               onDrop={handleDrop}
-              className={`relative border-2 border-dashed rounded-2xl p-14 transition-all cursor-pointer group max-w-2xl mx-auto ${
+              className={`relative border-2 border-dashed rounded-lg p-14 transition-all cursor-pointer group max-w-2xl mx-auto ${
                 isDragging
                   ? "border-primary bg-primary/5 scale-[1.01]"
                   : "border-border hover:border-primary/50 hover:bg-secondary/20"
@@ -766,9 +805,9 @@ export default function HomeClient({ user, stats }: Props) {
                     /* ── Résultat + boutons d'action ── */
                     <div className="flex flex-col items-center gap-5 w-full">
                       <div className="flex items-center gap-3">
-                        <CheckCircle className="w-8 h-8 text-green-400" />
+                        <CheckCircle className="w-8 h-8 text-good" />
                         <div className="text-left">
-                          <p className="text-sm font-semibold text-green-400">
+                          <p className="text-sm font-semibold text-good">
                             Analyse terminée
                           </p>
                           <p className="text-xs text-muted-foreground font-mono truncate max-w-52">
@@ -780,7 +819,7 @@ export default function HomeClient({ user, stats }: Props) {
                       {/* KPIs rapides */}
                       <div className="flex gap-4 text-center">
                         <div>
-                          <p className="text-2xl font-bold text-primary">
+                          <p className="text-2xl font-bold tabular-nums text-primary">
                             {analysisResult.totalFeatures.toLocaleString()}
                           </p>
                           <p className="text-xs text-muted-foreground">
@@ -789,7 +828,7 @@ export default function HomeClient({ user, stats }: Props) {
                         </div>
                         <div className="w-px bg-border" />
                         <div>
-                          <p className="text-2xl font-bold text-red-400">
+                          <p className="text-2xl font-bold tabular-nums text-crit">
                             {analysisResult.errorCount}
                           </p>
                           <p className="text-xs text-muted-foreground">
@@ -799,7 +838,7 @@ export default function HomeClient({ user, stats }: Props) {
                         <div className="w-px bg-border" />
                         <div>
                           <p
-                            className={`text-2xl font-bold ${analysisResult.conformityScore >= 70 ? "text-green-400" : "text-orange-400"}`}
+                            className={`text-2xl font-bold tabular-nums ${analysisResult.conformityScore >= 70 ? "text-good" : "text-warn"}`}
                           >
                             {analysisResult.conformityScore.toFixed(0)}%
                           </p>
@@ -891,7 +930,7 @@ export default function HomeClient({ user, stats }: Props) {
               ) : (
                 <div className="flex flex-col items-center gap-5">
                   <div
-                    className={`w-20 h-20 rounded-2xl border-2 flex items-center justify-center transition-all ${isDragging ? "border-primary bg-primary/10 scale-110" : "border-border group-hover:border-primary/50"}`}
+                    className={`w-20 h-20 rounded-lg border-2 flex items-center justify-center transition-all ${isDragging ? "border-primary bg-primary/10 scale-110" : "border-border group-hover:border-primary/50"}`}
                   >
                     <Upload
                       className={`w-9 h-9 transition-colors ${isDragging ? "text-primary" : "text-muted-foreground group-hover:text-primary"}`}
@@ -917,16 +956,16 @@ export default function HomeClient({ user, stats }: Props) {
                   </div>
                   <div className="flex items-center gap-6 text-xs text-muted-foreground border-t border-border pt-4 w-full justify-center">
                     <span className="flex items-center gap-1.5">
-                      <CheckCircle className="w-3.5 h-3.5 text-green-500" />{" "}
-                      Analyse automatique
+                      <CheckCircle className="w-3.5 h-3.5 text-good" /> Analyse
+                      automatique
                     </span>
                     <span className="flex items-center gap-1.5">
-                      <CheckCircle className="w-3.5 h-3.5 text-green-500" />{" "}
-                      Rapport IA instantané
+                      <CheckCircle className="w-3.5 h-3.5 text-good" /> Rapport
+                      IA instantané
                     </span>
                     <span className="flex items-center gap-1.5">
-                      <CheckCircle className="w-3.5 h-3.5 text-green-500" />{" "}
-                      Carte interactive
+                      <CheckCircle className="w-3.5 h-3.5 text-good" /> Carte
+                      interactive
                     </span>
                   </div>
                 </div>
@@ -961,8 +1000,11 @@ export default function HomeClient({ user, stats }: Props) {
       {/* Error types */}
       <section className="max-w-7xl mx-auto px-6 py-16">
         <div className="text-center mb-10">
+          <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-primary mb-3">
+            Contrôle topologique
+          </p>
           <h2 className="text-3xl font-bold mb-3">
-            6 Types d&apos;Anomalies Détectées
+            6 types d&apos;anomalies détectées
           </h2>
           <p className="text-muted-foreground max-w-xl mx-auto">
             Chaque type d&apos;erreur est identifié, localisé et expliqué par
@@ -970,35 +1012,40 @@ export default function HomeClient({ user, stats }: Props) {
           </p>
         </div>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-          {ERROR_TYPES.map((err) => (
-            <div
-              key={err.label}
-              className="rounded-xl border border-border bg-card p-5 text-center hover:border-primary/30 transition-all group"
-            >
+          {ERROR_TYPES.map((err) => {
+            const sv = SEVERITY_STYLES[err.severity];
+            return (
               <div
-                className="w-10 h-10 rounded-xl mx-auto mb-3 flex items-center justify-center group-hover:scale-110 transition-transform"
-                style={{
-                  background: `${err.color}20`,
-                  border: `1px solid ${err.color}40`,
-                }}
+                key={err.label}
+                className={cn(
+                  "rounded-lg border border-border bg-card p-5 text-center transition-all group",
+                  sv.border,
+                )}
               >
                 <div
-                  className="w-3 h-3 rounded-full"
-                  style={{ background: err.color }}
-                />
+                  className={cn(
+                    "w-10 h-10 rounded-md border mx-auto mb-3 flex items-center justify-center group-hover:scale-110 transition-transform",
+                    sv.badge,
+                  )}
+                >
+                  <div className={cn("w-3 h-3 rounded-full", sv.dot)} />
+                </div>
+                <p className="text-xs font-semibold mb-1">{err.label}</p>
+                <p className="text-[10px] text-muted-foreground font-mono uppercase tracking-[0.06em]">
+                  {err.sublabel}
+                </p>
               </div>
-              <p className="text-xs font-semibold mb-1">{err.label}</p>
-              <p className="text-[10px] text-muted-foreground font-mono">
-                {err.sublabel}
-              </p>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </section>
 
       {/* Features */}
       <section className="max-w-7xl mx-auto px-6 py-16">
         <div className="text-center mb-12">
+          <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-primary mb-3">
+            La plateforme
+          </p>
           <h2 className="text-3xl font-bold mb-3">Fonctionnalités</h2>
           <p className="text-muted-foreground max-w-xl mx-auto">
             Contrôles topologiques, cartographie et rapports pour les données
@@ -1009,10 +1056,10 @@ export default function HomeClient({ user, stats }: Props) {
           {FEATURES.map((feat) => (
             <div
               key={feat.title}
-              className="rounded-xl border border-border bg-card p-6 hover:border-primary/30 transition-all hover:shadow-xl group"
+              className="rounded-lg border border-border bg-card p-6 hover:border-primary/30 transition-all hover:shadow-panel group"
             >
               <div
-                className="w-12 h-12 rounded-xl flex items-center justify-center mb-5 group-hover:scale-110 transition-transform"
+                className="w-12 h-12 rounded-md flex items-center justify-center mb-5 group-hover:scale-110 transition-transform"
                 style={{
                   background: `${feat.color}15`,
                   border: `1px solid ${feat.color}30`,
@@ -1031,7 +1078,7 @@ export default function HomeClient({ user, stats }: Props) {
 
       {/* CTA */}
       <section className="max-w-7xl mx-auto px-6 py-16">
-        <div className="rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/5 via-background to-background p-12 text-center relative overflow-hidden">
+        <div className="rounded-lg border border-primary/20 bg-gradient-to-br from-primary/5 via-background to-background p-12 text-center relative overflow-hidden">
           <TrendingUp className="w-12 h-12 text-primary mx-auto mb-4" />
           <h2 className="text-3xl font-bold mb-3">
             Prêt à fiabiliser vos données cadastrales ?
@@ -1072,9 +1119,8 @@ export default function HomeClient({ user, stats }: Props) {
       {/* Footer */}
       <footer className="border-t border-border py-8 text-center text-sm text-muted-foreground">
         <div className="max-w-7xl mx-auto px-6 flex items-center justify-between flex-wrap gap-4">
-          <div className="flex items-center gap-2">
-            <Globe className="w-4 h-4 text-primary" />
-            <span className="font-semibold text-foreground">GéoAino</span>
+          <div className="flex items-center gap-3">
+            <Logo className="h-10" />
             <span>Fiabilisation des données cadastrales</span>
           </div>
           <div className="flex items-center gap-4">

@@ -2,7 +2,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Globe,
   BarChart2,
   History,
   FileText,
@@ -23,6 +22,7 @@ import {
 // import { ThemeToggle } from "@/components/ThemeToggle";
 import { signOutAction } from "@/app/_actions/auth";
 import { cn } from "@/lib/utils";
+import { Logo } from "@/components/Logo";
 
 interface NavBarProps {
   user?: {
@@ -88,16 +88,12 @@ export function NavBar({ user }: NavBarProps) {
             </SheetContent>
           </Sheet>
 
-          <Link href="/" className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center shadow-lg shadow-primary/30">
-              <Globe className="w-5 h-5 text-primary-foreground" />
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="font-bold text-lg tracking-tight">GéoAino</span>
-              <span className="hidden sm:inline text-xs text-muted-foreground">
-                Fiabilisation cadastrale
-              </span>
-            </div>
+          <Link
+            href="/"
+            className="flex items-center"
+            aria-label="GEO-AINO SUPREME — accueil"
+          >
+            <Logo className="h-12 sm:h-13" priority />
           </Link>
         </div>
 
