@@ -153,6 +153,8 @@ const ADMIN_MISMATCH_LEVEL_LABELS: Record<string, string> = {
   departement: "département",
   region: "région",
 };
+// Préférence "masquer les débordements niveau commune" — par navigateur.
+const HIDE_COMMUNE_MISMATCHES_KEY = "cadastre.sections.hideCommuneMismatches";
 
 // Clignotement de l'erreur (chevauchement ou débordement administratif)
 // sélectionnée dans le panneau — alterne ces deux `fillOpacity` toutes les
@@ -288,6 +290,12 @@ export default function SectionsClient() {
   const [selectedMismatchId, setSelectedMismatchId] = useState<number | null>(null);
   const [correctingMismatch, setCorrectingMismatch] = useState<number | null>(null);
   const adminMismatchItemRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+  // Masquage client des débordements section ↔ limite de COMMUNE (carte + liste
+  // + compteur) : la limite de `cad_communes_2026` est parfois moins fine que le
+  // levé → faux positifs. Purement visuel, la détection/le stockage sont
+  // inchangés ; niveaux département/région non concernés. Préférence par
+  // navigateur (localStorage), hydratée après montage — cf. CadastreSidebar.
+  const [hideCommuneMismatches, setHideCommuneMismatches] = useState(false);
   const [loadingData, setLoadingData] = useState(false);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [deletingBatch, setDeletingBatch] = useState(false);
@@ -502,6 +510,29 @@ export default function SectionsClient() {
       if (list.length > 0) await fetchData([]);
     })();
   }, [loadBatches, fetchData]);
+
+  // ── Préférence "masquer débordements commune" : hydratation après montage ───
+  // `false` au SSR (rendus serveur/client identiques), vraie préférence
+  // localStorage synchronisée ici — même pattern que CadastreSidebar / ThemeProvider.
+  useEffect(() => {
+    if (window.localStorage.getItem(HIDE_COMMUNE_MISMATCHES_KEY) === "1") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setHideCommuneMismatches(true);
+    }
+  }, []);
+
+  const toggleHideCommuneMismatches = useCallback(() => {
+    const next = !hideCommuneMismatches;
+    window.localStorage.setItem(HIDE_COMMUNE_MISMATCHES_KEY, next ? "1" : "0");
+    setHideCommuneMismatches(next);
+    // Un débordement commune actuellement sélectionné va disparaître : on le
+    // désélectionne pour ne pas laisser clignotement/zoom pointer une couche
+    // absente.
+    if (next && selectedMismatchId != null) {
+      const sel = adminMismatches.find((m) => m.id === selectedMismatchId);
+      if (sel?.adminLevel === "commune") setSelectedMismatchId(null);
+    }
+  }, [hideCommuneMismatches, selectedMismatchId, adminMismatches]);
 
   // ── Notification de fin de construction (job DXF/DGN ou shapefile synchrone) ─
   const reportBuildResult = useCallback(
@@ -1004,6 +1035,17 @@ export default function SectionsClient() {
       showUnnumberedOnly ? sections.filter((s) => !s.numSection) : sections,
     [sections, showUnnumberedOnly],
   );
+  // Débordements administratifs effectivement dessinés/listés — les niveaux
+  // commune sont retirés quand le masquage est actif (préférence par
+  // navigateur). Mémoïsé pour garder une référence stable : plusieurs effets
+  // carte en dépendent (dessin, clignotement, zoom).
+  const shownAdminMismatches = useMemo(
+    () =>
+      hideCommuneMismatches
+        ? adminMismatches.filter((m) => m.adminLevel !== "commune")
+        : adminMismatches,
+    [adminMismatches, hideCommuneMismatches],
+  );
 
   // ── (Re)dessin des couches sections + chevauchements ───────────────────────
   useEffect(() => {
@@ -1225,7 +1267,7 @@ export default function SectionsClient() {
 
     const amGroup = L.featureGroup();
     adminMismatchLayersRef.current.clear();
-    for (const m of adminMismatches) {
+    for (const m of shownAdminMismatches) {
       if (m.status !== "PENDING" || !m.intersectionGeoJson) continue;
       try {
         const gj = L.geoJSON(m.intersectionGeoJson as any, {
@@ -1269,7 +1311,7 @@ export default function SectionsClient() {
   }, [
     displayedSections,
     overlaps,
-    adminMismatches,
+    shownAdminMismatches,
     pendingSectionIds,
     selectedSources,
     mapReady,
@@ -1476,14 +1518,14 @@ export default function SectionsClient() {
     tick();
     const intervalId = setInterval(tick, BLINK_INTERVAL_MS);
     return () => clearInterval(intervalId);
-  }, [selectedMismatchId, sections, adminMismatches, mapReady]);
+  }, [selectedMismatchId, sections, shownAdminMismatches, mapReady]);
 
   // ── Zoom sur le débordement administratif sélectionné dans la table ────────
   useEffect(() => {
     const L = LRef.current;
     const map = mapRef.current;
     if (!L || !map || !mapReady || selectedMismatchId == null) return;
-    const m = adminMismatches.find((x) => x.id === selectedMismatchId);
+    const m = shownAdminMismatches.find((x) => x.id === selectedMismatchId);
     if (!m) return;
     const geoms: GeoJSON.Geometry[] = [];
     const s = sections.find((x) => x.id === m.sectionId);
@@ -1502,7 +1544,7 @@ export default function SectionsClient() {
     } catch {
       /* ignore */
     }
-  }, [selectedMismatchId, adminMismatches, sections, mapReady]);
+  }, [selectedMismatchId, shownAdminMismatches, sections, mapReady]);
 
   // ── Défilement du panneau vers le débordement administratif sélectionné ────
   useEffect(() => {
@@ -1857,7 +1899,9 @@ export default function SectionsClient() {
   }, [selectedSources, batches, performDeleteBatch]);
 
   const pending = overlaps.filter((o) => o.status === "PENDING");
-  const pendingMismatches = adminMismatches.filter((m) => m.status === "PENDING");
+  const pendingMismatches = shownAdminMismatches.filter(
+    (m) => m.status === "PENDING",
+  );
   // Sélection restreinte aux chevauchements encore PENDING affichés : les ids
   // résolus (correction individuelle, changement de lot) deviennent inertes
   // sans setState d'effet — même principe que `activeMergeSelection`.
@@ -2666,11 +2710,44 @@ export default function SectionsClient() {
                           {pendingMismatches.length}
                         </span>
                       )}
+                      {/* Masquage des débordements niveau commune (faux positifs
+                          quand la limite de cad_communes_2026 est moins fine que
+                          le levé). Purement visuel — cf. HIDE_COMMUNE_MISMATCHES_KEY.
+                          Affiché seulement s'il y a un débordement commune à cacher
+                          OU si le filtre est déjà actif (pour le lever) — même
+                          logique que le bouton « Sans numéro » de la table. */}
+                      {(hideCommuneMismatches ||
+                        adminMismatches.some(
+                          (m) =>
+                            m.adminLevel === "commune" && m.status === "PENDING",
+                        )) && (
+                        <button
+                          onClick={toggleHideCommuneMismatches}
+                          title={
+                            hideCommuneMismatches
+                              ? "Réafficher les débordements section ↔ limite de commune"
+                              : "Masquer les débordements section ↔ limite de commune (département et région conservés)"
+                          }
+                          className={[
+                            "ml-auto flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors",
+                            hideCommuneMismatches
+                              ? "bg-fuchsia-500/20 text-fuchsia-500"
+                              : "bg-secondary text-muted-foreground hover:bg-secondary/70",
+                          ].join(" ")}
+                        >
+                          <EyeOff className="h-3 w-3" />
+                          {hideCommuneMismatches
+                            ? "Commune masquée"
+                            : "Masquer commune"}
+                        </button>
+                      )}
                     </h4>
                     {pendingMismatches.length === 0 ? (
                       <p className="flex items-center gap-2 text-sm text-green-500">
-                        <CheckCircle className="h-4 w-4" /> Aucune section ne
-                        déborde de sa commune, son département ou sa région.
+                        <CheckCircle className="h-4 w-4" />{" "}
+                        {hideCommuneMismatches
+                          ? "Aucune section ne déborde de son département ou de sa région (débordements de commune masqués)."
+                          : "Aucune section ne déborde de sa commune, son département ou sa région."}
                       </p>
                     ) : (
                       <div className="max-h-70 space-y-2 overflow-y-auto pr-0.5">
