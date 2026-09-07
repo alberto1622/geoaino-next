@@ -104,7 +104,7 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 - → ✅Activer la barre d'évolution
 - → ✅Effectuer les mêmes corrections avec les shapefiles que...
 - → ✅Ajouter le mappage des fichiers .shp
-- Web-cache pour charger de gros volumes de données WFS
+- ✅ Web-cache pour charger de gros volumes de données WFS
 - → Ajouter le départage des départements, syscol
 - ✅Dans la liste déroulante, "Lot stocké :" Ajouter la possibilité de selection/deselectionner des lots
 - ✅Vérifier les chevauchments et intersections entre les sections chargés et existant déjà
@@ -146,7 +146,7 @@ claude --worktree edition-numero-sections --resume 26a0d07b-4c68-4849-8025-05b77
 - → ✅Sélection suivant les fichiers
 - → ✅Corriger l'affichage (Mark)
 - → Chevauchement / Intersection
-- → Différencier les gaps et les chevauchements
+- → ✅Différencier les gaps et les chevauchements
 - → ✅Effectuer le mappage des champs avant le traitement
 
 # Problèmes
@@ -161,3 +161,14 @@ analyser le fichier Zig sachant que le fichier est trés impropre par rapport au
 Exemple: avec le calque limites parcelles ont a des textes, des lignes mélangées comme pas possible
 
 Donner des propositions pour le traitement de ce genre de fichier
+
+### 09/03/2026
+
+- Dans le processus de récupértion des données, distinguer les numero_parcelle, numero_lot, numero_TF suivant les claques utilisés
+- ✅appliquer une fusion sur les prcelles
+- ✅mettre l contrainte pour récupérer les 5 dernière caractère
+- ✅Pour la contrainte d'affectation de numero de section, prposer à l'utilisat la possibilité d'affecter deux numéros d'une même commune
+- ✅possibilité de déactiver les chevauchements comune-section
+- ✅fusionner deux lignes qui se superpose pour corriger le découpage des parcelles
+- pour les fusions appliquer des intersections
+- ✅Ajouter l'action de fusion des parcelles comme la fusion de section implémenter
