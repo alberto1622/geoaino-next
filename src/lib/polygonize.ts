@@ -98,10 +98,13 @@ export interface PolygonizeOptions {
   lineSourceEntities?: string[];
   /**
    * Rempli (si fourni) par les paires de lignes quasi-doublons réconciliées
-   * AVANT noding (§ 53 ter) : même limite dessinée deux fois avec une
-   * imprécision de digitalisation (sommet quasi partagé, colinéaire, bout
-   * libre à ≤ `DUPLICATE_EDGE_MAX_GAP_M`) — une seule conservée. Purement
-   * diagnostique, ne change pas le comportement de la réconciliation elle-même.
+   * AVANT noding (§ 53 quater) : même limite dessinée deux fois avec une
+   * imprécision de digitalisation (sommet quasi partagé, colinéaire, bouts
+   * libres à ≤ `DUPLICATE_EDGE_MAX_GAP_M` OU copie courte posée sur la longue)
+   * — une seule conservée. Purement diagnostique, ne change pas le comportement
+   * de la réconciliation elle-même. `farGapM` = distance entre bouts libres
+   * (peut dépasser `DUPLICATE_EDGE_MAX_GAP_M` quand c'est le critère « posée
+   * sur le segment » qui a retenu la paire).
    */
   nearDuplicateEdges?: Array<{
     keptIndex: number;
@@ -153,7 +156,7 @@ const TILE_HARD_DROP_SEGMENTS = Number(process.env.DXF_POLYGONIZE_TILE_HARD_DROP
 // non mesuré aussi finement.
 const SNAP_TOLERANCE_M = Number(process.env.DXF_POLYGONIZE_SNAP_TOLERANCE_M ?? 1);
 
-// ── Réconciliation des arêtes quasi-doublons (§ 53 ter) ─────────────────────
+// ── Réconciliation des arêtes quasi-doublons (§ 53 quater) ─────────────────────
 // Cas réel Matam_Ourossogui.dxf (signalé par l'utilisateur) : une limite
 // interne dessinée DEUX FOIS avec une imprécision de digitalisation — même
 // sommet de départ, bout libre différent de quelques mètres — n'a NI l'une
@@ -184,6 +187,20 @@ const DUPLICATE_EDGE_MAX_ANGLE_DEG = 12;
 // même le raccord — testé et validé (43→46 polygones, 0 nouvel outlier) sur
 // les vraies coordonnées du cas Matam_Ourossogui avant d'être intégré ici.
 const DUPLICATE_EDGE_MAX_GAP_M = Number(process.env.DXF_DUPLICATE_EDGE_MAX_GAP_M ?? 5);
+// § 53 quater : deuxième critère d'acceptation d'une paire quasi-doublon, pour
+// le cas où le bout libre est BEAUCOUP plus loin que `DUPLICATE_EDGE_MAX_GAP_M`
+// simplement parce qu'une des deux copies est plus COURTE que l'autre (re-tracé
+// partiel). On accepte alors la paire quand le bout libre de la copie courte
+// est POSÉ sur le segment de la copie longue (projection clampée ≤ ce seuil) :
+// la courte est géométriquement incluse dans la longue, la retirer ne peut
+// enlever aucune information. Cas réel Matam_Ourossogui (bloc parcelle 4242,
+// h. 95B186 50 m vs 95B21D 37,7 m, colinéaires, sommet bas partagé, bouts
+// hauts à 12,3 m l'un de l'autre) : le seul critère « bouts libres ≤ 5 m »
+// laissait passer les deux copies → 2 parcelles restaient fusionnées en une
+// (1000 m² au lieu de 2×500). Validé plein fichier : +68 polygones,
+// −302 dangles, outliers ≥3× 299→280 (et ≥5/10/20× tous en baisse),
+// aire totale +0,06 %, ~3,9 % des lignes retirées, aucune régression.
+const DUPLICATE_EDGE_ON_SEGMENT_EPS_M = Number(process.env.DXF_DUPLICATE_EDGE_ON_SEGMENT_EPS_M ?? 0.5);
 
 type LineBBox = [number, number, number, number]; // [minX, minY, maxX, maxY]
 
@@ -875,11 +892,29 @@ function canonicalLineKey(line: LineCoords): string {
 }
 
 /**
- * Réconcilie les paires de lignes quasi-doublons AVANT noding (§ 53 ter) :
+ * Distance d'un point au SEGMENT [a, b] (projection clampée aux extrémités —
+ * pas à la droite support). Utilisé par `reconcileNearDuplicateEdges` (§ 53
+ * quater) pour détecter qu'un bout libre est « posé sur » un autre segment.
+ */
+function pointToSegmentDistance(
+  p: [number, number],
+  a: [number, number],
+  b: [number, number]
+): number {
+  const dx = b[0] - a[0];
+  const dy = b[1] - a[1];
+  const l2 = dx * dx + dy * dy;
+  if (l2 === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+  let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(a[0] + t * dx - p[0], a[1] + t * dy - p[1]);
+}
+
+/**
+ * Réconcilie les paires de lignes quasi-doublons AVANT noding (§ 53 quater) :
  * même limite dessinée deux fois avec une imprécision de digitalisation —
  * sommet de départ (quasi-)partagé (`DUPLICATE_EDGE_VERTEX_EPS_M`), colinéaire
- * depuis ce sommet (`DUPLICATE_EDGE_MAX_ANGLE_DEG`), bout libre à
- * `DUPLICATE_EDGE_MAX_GAP_M` au plus de son homologue. Contrairement à
+ * depuis ce sommet (`DUPLICATE_EDGE_MAX_ANGLE_DEG`). Contrairement à
  * `canonicalLineKey` (doublon EXACT, chaîne identique), ceci couvre les
  * quasi-doublons dont l'extrémité libre diffère de quelques mètres — sans
  * réconciliation, aucune des deux extrémités libres n'a de partenaire net,
@@ -887,10 +922,19 @@ function canonicalLineKey(line: LineCoords): string {
  * tolérance raisonnable), et le Polygonizer JSTS exclut les DEUX comme
  * dangles : la subdivision qu'elles dessinaient disparaît silencieusement.
  *
- * Ne garde qu'UNE ligne par paire : celle dont le bout libre est déjà ancré
- * ailleurs dans le réseau (partagé avec une AUTRE ligne) l'emporte sur une
- * extrémité isolée — un ancrage est un indice direct de tracé correctement
- * raccordé ; à égalité, la plus longue (esquisse la plus aboutie).
+ * Une paire est retenue si l'un des deux critères de recouvrement tient :
+ *   1. les bouts LIBRES sont à ≤ `DUPLICATE_EDGE_MAX_GAP_M` l'un de l'autre —
+ *      les deux copies ont ~la même longueur ;
+ *   2. le bout libre de la copie COURTE est posé sur le segment de la copie
+ *      LONGUE (projection clampée ≤ `DUPLICATE_EDGE_ON_SEGMENT_EPS_M`) —
+ *      re-tracé partiel : une copie s'arrête plus tôt, sur la même droite.
+ *
+ * Ne garde qu'UNE ligne par paire. Critère 2 : on retire toujours la COURTE
+ * (géométriquement incluse dans la longue). Critère 1 : celle dont le bout
+ * libre est déjà ancré ailleurs dans le réseau (partagé avec une AUTRE ligne)
+ * l'emporte sur une extrémité isolée — un ancrage est un indice direct de
+ * tracé correctement raccordé ; à égalité, la plus longue (esquisse la plus
+ * aboutie).
  */
 function reconcileNearDuplicateEdges(
   lines: LineCoords[],
@@ -952,7 +996,8 @@ function reconcileNearDuplicateEdges(
         const dx = A.other[0] - B.other[0];
         const dy = A.other[1] - B.other[1];
         const gap = Math.sqrt(dx * dx + dy * dy);
-        if (gap <= 0 || gap > DUPLICATE_EDGE_MAX_GAP_M) continue;
+        // Bouts libres confondus : doublon exact, déjà écarté par canonicalLineKey.
+        if (gap <= 0) continue;
 
         const vx1 = A.other[0] - A.self[0], vy1 = A.other[1] - A.self[1];
         const vx2 = B.other[0] - B.self[0], vy2 = B.other[1] - B.self[1];
@@ -962,13 +1007,42 @@ function reconcileNearDuplicateEdges(
         const angleDeg = (Math.acos(cos) * 180) / Math.PI;
         if (angleDeg > DUPLICATE_EDGE_MAX_ANGLE_DEG) continue;
 
+        // Critère 1 : bouts libres proches — deux copies ~même longueur.
+        const closeFarEnds = gap <= DUPLICATE_EDGE_MAX_GAP_M;
+
+        // Critère 2 : re-tracé partiel — le bout libre de la copie
+        // la plus courte est posé sur le segment de la plus longue (une des deux
+        // s'arrête plus tôt, sur la même droite). Écarte le quasi-égal (géré par
+        // le critère 1 / canonicalLineKey).
+        const lenA = lineLength(A.line);
+        const lenB = lineLength(B.line);
+        const aShorter = lenA <= lenB;
+        const shortEnd = aShorter ? A : B;
+        const longLine = lines[aShorter ? B.line : A.line];
+        const onLongSegment =
+          Math.abs(lenA - lenB) > DUPLICATE_EDGE_ON_SEGMENT_EPS_M &&
+          pointToSegmentDistance(
+            shortEnd.other,
+            longLine[0] as [number, number],
+            longLine[longLine.length - 1] as [number, number]
+          ) <= DUPLICATE_EDGE_ON_SEGMENT_EPS_M;
+
+        if (!closeFarEnds && !onLongSegment) continue;
+
         decidedPairs.add(pairKey);
-        const aAnchored = isAnchored(A.other, A.line);
-        const bAnchored = isAnchored(B.other, B.line);
-        const toDrop =
-          aAnchored !== bAnchored
-            ? aAnchored ? B.line : A.line
-            : lineLength(A.line) >= lineLength(B.line) ? B.line : A.line;
+        let toDrop: number;
+        if (onLongSegment && !closeFarEnds) {
+          // Copie courte géométriquement incluse dans la longue : la retirer ne
+          // peut enlever aucune information — on ignore l'heuristique d'ancrage.
+          toDrop = aShorter ? A.line : B.line;
+        } else {
+          const aAnchored = isAnchored(A.other, A.line);
+          const bAnchored = isAnchored(B.other, B.line);
+          toDrop =
+            aAnchored !== bAnchored
+              ? aAnchored ? B.line : A.line
+              : lenA >= lenB ? B.line : A.line;
+        }
         drop.add(toDrop);
         if (info) {
           info.push({
@@ -983,7 +1057,7 @@ function reconcileNearDuplicateEdges(
   }
 
   if (drop.size === 0) return { lines, sourceEntities };
-  console.info(`[polygonize] ${drop.size} arête(s) quasi-doublon(s) réconciliée(s) avant noding (§ 53 ter).`);
+  console.info(`[polygonize] ${drop.size} arête(s) quasi-doublon(s) réconciliée(s) avant noding (§ 53 quater).`);
   const outLines: LineCoords[] = [];
   const outSrc: string[] | undefined = sourceEntities ? [] : undefined;
   lines.forEach((l, i) => {
@@ -1025,7 +1099,7 @@ export function polygonizeLines(
   }
   if (usable.length === 0) return [];
 
-  // § 53 ter : quasi-doublons (extrémité libre différente de quelques mètres),
+  // § 53 quater : quasi-doublons (extrémité libre différente de quelques mètres),
   // distincts des doublons EXACTS déjà écartés ci-dessus.
   const reconciled = reconcileNearDuplicateEdges(
     usable,
@@ -1056,7 +1130,7 @@ export function polygonizeLines(
   // AUCUN filet de rattrapage (subdivision + retentative) sur un échec de
   // noding — un jeu de lignes fragile en dessous du seuil de tuilage faisait
   // planter tout l'appel plutôt que de dégrader proprement. Révélé en testant
-  // § 53 ter à l'échelle réelle : le dédoublonnage AVANT noding retire assez
+  // § 53 quater à l'échelle réelle : le dédoublonnage AVANT noding retire assez
   // de lignes pour repasser sous `tileThreshold` sur certains fichiers
   // (Matam_Ourossogui.dxf, réseau limites de parcelles : 27 498 → 19 531
   // lignes), faisant basculer un fichier auparavant protégé par le tuilage

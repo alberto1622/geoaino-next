@@ -54,7 +54,7 @@ import { polygonizeLines, type PolygonizeOptions } from "./polygonize";
 
 /** Un dangle unique (cf. `PolygonizeOptions.dangles`) — type dérivé pour éviter la duplication/dérive entre les deux fichiers. */
 type DangleInfo = NonNullable<PolygonizeOptions["dangles"]>[number];
-/** Une paire quasi-doublon réconciliée (cf. `PolygonizeOptions.nearDuplicateEdges`, § 53 ter). */
+/** Une paire quasi-doublon réconciliée (cf. `PolygonizeOptions.nearDuplicateEdges`, § 53 quater). */
 type NearDuplicateEdgeInfo = NonNullable<PolygonizeOptions["nearDuplicateEdges"]>[number];
 
 const execFileAsync = promisify(execFile);
@@ -156,7 +156,7 @@ export interface DxfIngestionReport {
    *  anneau, donc jamais construits en parcelle. Diagnostic (comptage par tuile,
    *  surcompte possible en marge), n'écarte rien de nouveau. */
   nbLimitesNonRefermees: number;
-  /** Cf. § 53 ter — paires de lignes quasi-doublons (extrémité libre différente
+  /** Cf. § 53 quater — paires de lignes quasi-doublons (extrémité libre différente
    *  de quelques mètres, sommet quasi partagé) réconciliées AVANT noding.
    *  Sans ce contrôle, chacune finissait comptée dans `nbLimitesNonRefermees`
    *  et la subdivision qu'elles dessinaient disparaissait. */
@@ -1169,7 +1169,7 @@ function polygonizeBoundaries(
   droppedRegions: Array<{ x0: number; y0: number; x1: number; y1: number; segments: number }>;
   /** Cf. § 53, docs/CONCEPTS-TRAITEMENT-DXF.md — segments restés pendants après raccord. */
   dangles: DangleInfo[];
-  /** Cf. § 53 ter — quasi-doublons réconciliés avant noding. */
+  /** Cf. § 53 quater — quasi-doublons réconciliés avant noding. */
   nearDuplicateEdges: NearDuplicateEdgeInfo[];
 } {
   let reconstructed = 0;
@@ -1830,10 +1830,11 @@ export function buildParcellesFromFc32628(
         `Type source : ${sourceBreakdown}.`
     );
   }
-  // Cf. § 53 ter : quasi-doublons AVANT noding (extrémité libre différente de
-  // quelques mètres, distincts des doublons EXACTS) — réconciliés, pas
-  // rejetés : sans ce contrôle, chacune des deux lignes finissait exclue comme
-  // dangle (cf. ci-dessus) et la subdivision qu'elles dessinaient disparaissait.
+  // Cf. § 53 quater : quasi-doublons AVANT noding (extrémité libre
+  // différente de quelques mètres, OU copie partielle posée sur une plus
+  // longue — distincts des doublons EXACTS) — réconciliés, pas rejetés : sans
+  // ce contrôle, chacune des deux lignes finissait exclue comme dangle (cf.
+  // ci-dessus) et la subdivision qu'elles dessinaient disparaissait.
   const nbAretesQuasiDoublonsReconciliees = aretesQuasiDoublonsReconciliees.length;
   if (nbAretesQuasiDoublonsReconciliees > 0) {
     warnings.push(

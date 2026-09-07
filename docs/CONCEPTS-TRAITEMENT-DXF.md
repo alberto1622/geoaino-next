@@ -5191,21 +5191,49 @@ n'est reconstruite pour la subdivision qu'ils dessinaient.
 (quasi-)exactement partagé (`DUPLICATE_EDGE_VERTEX_EPS_M`, 2 cm — bruit
 d'export, pas une coïncidence de voisinage) par ≥ 2 lignes, teste les paires
 colinéaires depuis ce sommet (`DUPLICATE_EDGE_MAX_ANGLE_DEG`, 12° — mesuré à
-0,0° sur les vraies paires du cas réel) dont le bout libre est à
-`DUPLICATE_EDGE_MAX_GAP_M` (5 m, `DXF_DUPLICATE_EDGE_MAX_GAP_M`) au plus
-l'une de l'autre. Ne garde qu'UNE ligne par paire : celle dont le bout libre
-est déjà ancré ailleurs dans le réseau l'emporte (indice de tracé
-correctement raccordé) ; à égalité, la plus longue. Compté dans
-`nbAretesQuasiDoublonsReconciliees` (`parcelle-ingestion.ts`), avertissement
-agrégé séparé de `nbLimitesNonRefermees`.
+0,0° sur les vraies paires du cas réel). Une paire est retenue si l'un des
+deux critères de recouvrement tient :
 
-**Validé à l'échelle réelle** : rejoué sur les 231 lignes `LIMITE PARCELLE`
-du voisinage signalé (43→46 polygones, le bloc de 2000 m² disparaît, 0 nouvel
-outlier), PUIS sur l'intégralité du réseau `LIMITE PARCELLE` de
-Matam_Ourossogui.dxf (27 498 lignes) : 9124→9183 polygones, dangles
-9229→9040, outliers ≥3× 302→299, aire totale quasi inchangée (+0,06 %).
-Régression nette : aucune — le fichier reste très imparfait par ailleurs
-(299 outliers résiduels, hors du patron ciblé ici), mais rien n'empire.
+1. **bouts libres proches** — à `DUPLICATE_EDGE_MAX_GAP_M` (5 m,
+   `DXF_DUPLICATE_EDGE_MAX_GAP_M`) au plus l'un de l'autre : les deux copies
+   ont ~la même longueur ;
+2. **copie courte posée sur la longue** — le bout libre de la plus courte se
+   projette sur le SEGMENT de la plus longue (projection clampée) à
+   `DUPLICATE_EDGE_ON_SEGMENT_EPS_M` (0,5 m,
+   `DXF_DUPLICATE_EDGE_ON_SEGMENT_EPS_M`) au plus : re-tracé partiel, une
+   copie s'arrête plus tôt sur la même droite, donc les bouts libres peuvent
+   être à > 5 m l'un de l'autre alors que la courte est géométriquement
+   incluse dans la longue.
+
+Ne garde qu'UNE ligne par paire. Critère 2 : on retire toujours la COURTE
+(incluse dans la longue → aucune information perdue, l'heuristique d'ancrage
+est ignorée). Critère 1 : celle dont le bout libre est déjà ancré ailleurs
+dans le réseau l'emporte (indice de tracé correctement raccordé) ; à égalité,
+la plus longue. Compté dans `nbAretesQuasiDoublonsReconciliees`
+(`parcelle-ingestion.ts`), avertissement agrégé séparé de
+`nbLimitesNonRefermees`.
+
+**Pourquoi le critère 2 (l'utilisateur a ré-importé et voyait toujours une
+fusion)** : le bloc de la parcelle 4242 (001-00819) est digitalisé 2 à 4 fois
+par-dessus lui-même (périmètre en 4 copies exactes, une grande limite ×2, les
+3 murs de refend chacun en 2 copies décalées de 1,3 / 6,2 / 1,7 m). Le
+critère 1 seul réconciliait les murs 1 et 3 (bouts libres à ≤ 5 m) — d'où
+4 parcelles-en-une ramenées à 2-en-une. Le mur 2 (h. 95B186 50 m vs 95B21D
+37,7 m) partage le sommet du bas, est parfaitement colinéaire (perpendiculaire
+≈ 0,01 m), mais ses bouts hauts sont à 12,3 m l'un de l'autre — simplement
+parce que 95B21D est plus court. Le critère 1 rejetait la paire, les deux
+copies survivaient et empêchaient le Polygonizer de fermer l'anneau interne →
+4242 restait soudée à sa voisine (1000 m² au lieu de 2×500).
+
+**Validé à l'échelle réelle** : rejoué sur le voisinage signalé
+(001-00817 + 001-00819 : 2000/2000 fusionnées → 500/500 séparées), PUIS sur
+l'intégralité du réseau `LIMITE PARCELLE` de Matam_Ourossogui.dxf (27 498
+lignes), face à la base pré-réconciliation (d67acbd) : 9124→9252 polygones,
+dangles 9229→8732, outliers ≥3× 302→279 (≥5× 147→142, ≥10× 59→55, ≥20×
+20→16 — tous en baisse), aire totale +0,12 %, aire max inchangée
+(35 966 m², autre patron hors sujet), ~1 090 arêtes réconciliées. Régression
+nette : aucune — le fichier reste imparfait par ailleurs, mais chaque
+métrique bouge dans le bon sens.
 
 **Pourquoi (pièges inclus) — le vrai piège n'était pas géométrique** : le test
 à l'échelle réelle a révélé un problème INDÉPENDANT de cette réconciliation.
