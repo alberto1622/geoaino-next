@@ -1,6 +1,7 @@
 "use client";
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import NewAnalysisModal from "@/components/NewAnalysisModal";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -592,6 +593,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   const [aiReport, setAiReport] = useState<string | null>(analysis.aiReport);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showNewAnalysis, setShowNewAnalysis] = useState(false);
   const [tableRows, setTableRows] = useState<Record<string, unknown>[]>([]);
   const [tableOpen, setTableOpen] = useState(false);
   const [nicadSearch, setNicadSearch] = useState("");
@@ -2081,8 +2083,8 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 </>
               )}
               <button
-                onClick={() => router.push("/")}
-                title="Retourner à l'accueil pour charger un nouveau fichier"
+                onClick={() => setShowNewAnalysis(true)}
+                title="Charger un nouveau fichier sans quitter la carte"
                 className="ml-auto shrink-0 flex items-center gap-1 text-primary hover:underline cursor-pointer"
               >
                 <Upload className="w-3 h-3" />
@@ -3366,6 +3368,10 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         }}
         onCancel={() => setNicadFillPreview(null)}
       />
+
+      {showNewAnalysis && (
+        <NewAnalysisModal onClose={() => setShowNewAnalysis(false)} />
+      )}
     </div>
   );
 }

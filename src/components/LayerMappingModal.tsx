@@ -2,6 +2,7 @@
 import { useMemo, useState } from "react";
 import { Layers, X, ArrowRight, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 /** Classe DGID + libellé lisible (ordre = celui de CADASTRAL_CLASSES). */
 const CLASS_OPTIONS: { value: string; label: string }[] = [
@@ -59,6 +60,13 @@ interface Props {
    * pour le pipeline parcelles.
    */
   allowedClasses?: string[];
+  /**
+   * Classe(s) ajoutée(s) à l'overlay plein écran (`fixed inset-0 …`) — sert à
+   * relever le `z-index` quand la modale est ouverte par-dessus une autre
+   * fenêtre modale (`NewAnalysisPanel inModal`, pages carte/historique). Par
+   * défaut : `z-50`.
+   */
+  overlayClassName?: string;
 }
 
 /** Badge indiquant l'origine de la proposition automatique. */
@@ -82,7 +90,7 @@ function MethodBadge({ method }: { method: LayerInventoryEntry["method"] }) {
  * avant de lancer le traitement. Chaque ligne est pré-remplie avec la classe
  * proposée automatiquement (ou « Ignorer » si le calque n'est pas reconnu).
  */
-export default function LayerMappingModal({ fileName, layers, onCancel, onConfirm, allowedClasses }: Props) {
+export default function LayerMappingModal({ fileName, layers, onCancel, onConfirm, allowedClasses, overlayClassName }: Props) {
   const classOptions = useMemo(
     () =>
       allowedClasses
@@ -117,7 +125,7 @@ export default function LayerMappingModal({ fileName, layers, onCancel, onConfir
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+    <div className={cn("fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4", overlayClassName)}>
       <div className="w-full max-w-3xl max-h-[85vh] flex flex-col rounded-2xl border border-white/10 bg-[oklch(0.20_0.02_240)] shadow-2xl">
         {/* En-tête */}
         <div className="flex items-start justify-between gap-4 p-5 border-b border-white/10">

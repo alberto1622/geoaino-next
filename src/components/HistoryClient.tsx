@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { NavBar } from "@/components/NavBar";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import NewAnalysisModal from "@/components/NewAnalysisModal";
 import { toast } from "sonner";
 import { toNum } from "@/lib/utils";
 
@@ -47,6 +48,7 @@ export default function HistoryClient({ user, analyses, total, page, limit, sear
   const [searchValue, setSearchValue] = useState(search);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [toDelete, setToDelete] = useState<Analysis | null>(null);
+  const [showNewAnalysis, setShowNewAnalysis] = useState(false);
   const totalPages = Math.ceil(total / limit);
 
   const handleSearch = (e: React.FormEvent) => {
@@ -89,9 +91,9 @@ export default function HistoryClient({ user, analyses, total, page, limit, sear
             </h1>
             <p className="text-muted-foreground text-sm mt-1">{total} analyse{total > 1 ? "s" : ""} au total</p>
           </div>
-          <Link href="/">
-            <Button size="sm" className="gap-2">Nouvelle analyse</Button>
-          </Link>
+          <Button size="sm" className="gap-2" onClick={() => setShowNewAnalysis(true)}>
+            Nouvelle analyse
+          </Button>
         </div>
 
         {/* Search */}
@@ -120,9 +122,9 @@ export default function HistoryClient({ user, analyses, total, page, limit, sear
               <CardContent className="py-12 text-center">
                 <History className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
                 <p className="text-muted-foreground">Aucune analyse trouvée</p>
-                <Link href="/">
-                  <Button size="sm" className="mt-4">Créer une analyse</Button>
-                </Link>
+                <Button size="sm" className="mt-4" onClick={() => setShowNewAnalysis(true)}>
+                  Créer une analyse
+                </Button>
               </CardContent>
             </Card>
           ) : (
@@ -214,6 +216,10 @@ export default function HistoryClient({ user, analyses, total, page, limit, sear
         }}
         onCancel={() => setToDelete(null)}
       />
+
+      {showNewAnalysis && (
+        <NewAnalysisModal onClose={() => setShowNewAnalysis(false)} />
+      )}
     </div>
   );
 }

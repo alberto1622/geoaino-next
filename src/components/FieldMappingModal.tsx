@@ -2,6 +2,7 @@
 import { useMemo, useState } from "react";
 import { ListChecks, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import type { TargetFieldDef } from "@/lib/import/field-mapping";
 
 interface AvailableField {
@@ -17,6 +18,12 @@ interface Props {
   onCancel: () => void;
   /** Reçoit le mappage validé { champ_cible → colonne .dbf source }. */
   onConfirm: (mapping: Record<string, string>) => void;
+  /**
+   * Classe(s) ajoutée(s) à l'overlay plein écran — relève le `z-index` quand la
+   * modale s'ouvre par-dessus une autre fenêtre modale (`NewAnalysisPanel
+   * inModal`). Par défaut : `z-50`.
+   */
+  overlayClassName?: string;
 }
 
 /**
@@ -32,6 +39,7 @@ export default function FieldMappingModal({
   proposedMapping,
   onCancel,
   onConfirm,
+  overlayClassName,
 }: Props) {
   const [mapping, setMapping] = useState<Record<string, string>>(() => ({ ...proposedMapping }));
 
@@ -41,7 +49,7 @@ export default function FieldMappingModal({
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+    <div className={cn("fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4", overlayClassName)}>
       <div className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-2xl border border-white/10 bg-[oklch(0.20_0.02_240)] shadow-2xl">
         <div className="flex items-start justify-between gap-4 p-5 border-b border-white/10">
           <div className="flex items-center gap-3">
