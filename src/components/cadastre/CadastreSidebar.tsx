@@ -14,6 +14,7 @@ import {
   Menu,
   LayoutDashboard,
   ShieldCheck,
+  FileCheck2,
   Sparkles,
   GitBranch,
   Map as MapIcon,
@@ -53,6 +54,11 @@ export const CADASTRE_NAV = [
     label: "Vérification NICAD",
     href: "/cadastre/verification",
     icon: ShieldCheck,
+  },
+  {
+    label: "Vérifier des bornes",
+    href: "/cadastre/plan-verif",
+    icon: FileCheck2,
   },
   { label: "Génération NICAD", href: "/cadastre/generation", icon: Sparkles },
   {

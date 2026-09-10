@@ -63,6 +63,7 @@ model User {
   reports          Report[]
   adminLayers      AdminLayer[]
   aiConversations  AiConversation[]
+  cadVerifications CadVerification[]
 }
 
 enum Role {
@@ -419,6 +420,33 @@ model CadParcelle {
   @@index([syscolCommune, numSection, version])
   @@index([nicad])
   @@map("cad_parcelles")
+}
+
+/// Vérification d'une parcelle reconstruite depuis un tableau de bornes X/Y
+/// (module « Vérifier des bornes », /cadastre/plan-verif — porté de cadex-next).
+/// `geom` est écrite en SQL brut (PostGIS), comme `CadParcelle.geom`.
+model CadVerification {
+  id                 Int      @id @default(autoincrement())
+  userId             String
+  nicad              String?
+  crsSource          String // "EPSG:32628" | "EPSG:31028"
+  source             String // "saisie" | "fichier" | "referentiel"
+  bornes             Json
+  superficieCalculee Decimal  @db.Decimal(20, 4)
+  superficieDeclaree Decimal? @db.Decimal(20, 4)
+  perimetreM         Decimal  @db.Decimal(20, 4)
+  tolerancePct       Decimal  @db.Decimal(6, 3)
+  tolerancePlancher  Decimal  @db.Decimal(10, 3)
+  verdict            String // "CONFORME" | "CONFORME_AVEC_RESERVE" | "NON_CONFORME"
+  anomalies          Json
+  geom               Unsupported("geometry(Polygon, 4326)")?
+  createdAt          DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([nicad])
+  @@map("cad_verifications")
 }
 
 // Job de traitement asynchrone d'un fichier CAO Microstation (DXF/DGN).
