@@ -2,12 +2,14 @@
   "name": "geoaino-next",
   "version": "0.1.0",
   "private": true,
+  "main": "desktop/dist/main.js",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:verif": "npx tsx scripts/test-verif.ts"
+    "test:verif": "npx tsx scripts/test-verif.ts",
+    "build:desktop": "tsc -p desktop/tsconfig.json"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",
@@ -77,6 +79,8 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
     "eslint": "^9",
     "eslint-config-next": "16.2.7",
     "mysql2": "^3.22.5",
