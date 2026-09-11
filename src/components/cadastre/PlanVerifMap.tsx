@@ -110,6 +110,7 @@ export default function PlanVerifMap({
       <MapContainer
         center={CENTRE_SENEGAL}
         zoom={7}
+        maxZoom={22}
         scrollWheelZoom
         className="h-full w-full"
         style={{ background: "#e5e7eb" }}
@@ -117,7 +118,11 @@ export default function PlanVerifMap({
         <TileLayer
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           attribution="&copy; OpenStreetMap"
-          maxZoom={19}
+          // maxNativeZoom reste à 19 (résolution réelle des tuiles OSM) ;
+          // maxZoom au-delà (22) laisse Leaflet suréchantillonner les
+          // dernières tuiles pour continuer à zoomer sur une petite parcelle
+          // — cohérent avec le maxZoom:21 déjà utilisé par Recadrage.
+          maxZoom={22}
           maxNativeZoom={19}
         />
         {geometry ? (
