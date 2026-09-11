@@ -55,3 +55,8 @@ __pycache__/
 *.pyc
 
 .mcp.json
+
+# tesseract.js : modèle de langue téléchargé au premier OCR (module
+# « Vérifier des bornes », voie pdf-ocr) — mis en cache au répertoire courant
+# par défaut, reproductible à la demande, pas versionné (~5 Mo par langue).
+*.traineddata

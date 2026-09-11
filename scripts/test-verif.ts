@@ -14,11 +14,13 @@
  *  6. tolérance de superficie (limite, > T, > 2T, plancher).
  */
 import { PDFDocument, StandardFonts } from "pdf-lib";
+import { createCanvas } from "@napi-rs/canvas";
 import { prisma } from "../src/lib/prisma";
 import { parseBornes, formaterBornes } from "../src/lib/cadastre/verif/parse";
 import { verifier, appliquerCorrection } from "../src/lib/cadastre/verif/core";
 import { bornesDuReferentiel } from "../src/lib/cadastre/verif/referentiel";
 import { extraireTextePdf, lireMetaPlan } from "../src/lib/cadastre/verif/pdfTexte";
+import { ocrTableauCoordonnees } from "../src/lib/cadastre/verif/ocr";
 import type { Borne, CodeAnomalie } from "../src/lib/cadastre/verif/types";
 
 let ok = 0;
@@ -314,6 +316,59 @@ async function testPdfTexte() {
   }
 }
 
+// --- 8. Import PDF : reconnaissance optique (pdfjs-dist + @napi-rs/canvas + tesseract.js) ---
+
+/**
+ * Ne vérifie PAS la justesse de la reconnaissance (dépend de la police, hors
+ * de notre contrôle) : vérifie que le pipeline entier — rendu pdfjs sur un
+ * canvas @napi-rs/canvas, puis tesseract.js — s'exécute **sans faire planter
+ * le process** et renvoie une réponse structurée. C'est le garde-fou contre
+ * la régression observée en production : pdfjs-dist@4.10.38 déclare
+ * `optionalDependencies: { "@napi-rs/canvas": "^0.1.65" }` ; installer une
+ * version différente au niveau racine (ex. la dernière, 1.x) fait coexister
+ * deux copies binaires incompatibles de l'addon natif — un objet canvas créé
+ * par l'une, passé au rendu interne de l'autre, segfault le process Node
+ * (SIGSEGV, incontournable par un try/catch). `@napi-rs/canvas` DOIT rester
+ * épinglé sur la plage que pdfjs-dist déclare.
+ */
+async function testOcr() {
+  console.log("\n[8] Import PDF — reconnaissance optique (OCR)");
+
+  const canvas = createCanvas(800, 300);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, 800, 300);
+  ctx.fillStyle = "#000000";
+  ctx.font = "28px sans-serif";
+  ["B1 500000.0000 1600100.0000", "B2 500100.0000 1600100.0000"].forEach((l, i) =>
+    ctx.fillText(l, 20, 50 + i * 50),
+  );
+  const png = canvas.toBuffer("image/png");
+
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([595, 842]);
+  const img = await doc.embedPng(png);
+  page.drawImage(img, { x: 40, y: 500, width: 400, height: 150 });
+  const pdf = Buffer.from(await doc.save());
+
+  let res: Awaited<ReturnType<typeof ocrTableauCoordonnees>> | null = null;
+  let erreur: unknown = null;
+  try {
+    res = await ocrTableauCoordonnees(pdf);
+  } catch (e) {
+    erreur = e;
+  }
+  check(
+    "le pipeline OCR se termine sans lever (pas de segfault de process)",
+    erreur === null,
+    erreur instanceof Error ? erreur.message : String(erreur),
+  );
+  check(
+    "la réponse a la forme attendue (bornes[], meta, erreurs[])",
+    !!res && Array.isArray(res.bornes) && Array.isArray(res.erreurs) && typeof res.meta === "object",
+  );
+}
+
 async function main() {
   await testAllerRetour();
   testParsing();
@@ -321,6 +376,7 @@ async function main() {
   testCorrections();
   testTolerance();
   await testPdfTexte();
+  await testOcr();
 
   console.log(`\n${ok} assertion(s) OK, ${ko} en échec.`);
   await prisma.$disconnect();

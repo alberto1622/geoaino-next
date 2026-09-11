@@ -65,7 +65,13 @@ export async function ocrTableauCoordonnees(pdf: Buffer): Promise<ResultatOcr> {
   const meta = { nicad: brut.nicad, superficie: brut.superficieM2 };
 
   const pdfjs = await chargerOptionnel("pdfjs-dist/legacy/build/pdf.mjs");
-  const tesseract = await chargerOptionnel("tesseract.js");
+  // `recognize`/`detect` de tesseract.js ne sont exposés QUE sur `default`
+  // (l'espace de noms ESM porte `createWorker`/`createScheduler`, mais pas
+  // ces deux raccourcis) — à la différence de pdfjs-dist, qui expose tout
+  // directement. Repli sur le module lui-même si `default` est absent
+  // (interop CJS/ESM selon le bundler).
+  const tesseractMod = await chargerOptionnel("tesseract.js");
+  const tesseract = tesseractMod?.default ?? tesseractMod;
   if (!pdfjs || !tesseract) {
     return { bornes: [], meta, erreurs: [], motifEchec: INDISPONIBLE };
   }
