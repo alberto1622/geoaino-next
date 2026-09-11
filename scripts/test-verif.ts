@@ -347,6 +347,13 @@ async function testOcr() {
 
   const doc = await PDFDocument.create();
   const page = doc.addPage([595, 842]);
+  // Texte VECTORIEL (en-tête, cartouche) en plus de l'image du tableau : un
+  // plan réel en porte toujours, même quand le tableau lui-même est une
+  // image — c'est ce texte qui a déclenché le crash `paintChar` corrigé par
+  // `disableFontFace: false` (§ ocr.ts), une image seule ne le reproduit pas.
+  const font = await doc.embedFont(StandardFonts.HelveticaBold);
+  page.drawText("PLAN DE MORCELLEMENT", { x: 40, y: 780, size: 16, font });
+  page.drawText("NICAD 014020030012345", { x: 40, y: 760, size: 10, font });
   const img = await doc.embedPng(png);
   page.drawImage(img, { x: 40, y: 500, width: 400, height: 150 });
   const pdf = Buffer.from(await doc.save());

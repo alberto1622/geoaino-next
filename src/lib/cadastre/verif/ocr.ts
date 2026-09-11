@@ -78,7 +78,24 @@ export async function ocrTableauCoordonnees(pdf: Buffer): Promise<ResultatOcr> {
 
   let doc: any;
   try {
-    doc = await pdfjs.getDocument({ data: new Uint8Array(pdf), useSystemFonts: true }).promise;
+    doc = await pdfjs.getDocument({
+      data: new Uint8Array(pdf),
+      useSystemFonts: true,
+      // Sous Node, pdfjs-dist met `disableFontFace` à `true` par défaut : au
+      // lieu de dessiner le texte par police native (`ctx.font`/`fillText`),
+      // il reconstruit chaque glyphe en chemin vectoriel manuel
+      // (`getPathGenerator` + `ctx.fill(path)`) — repli hérité des anciennes
+      // limites de `node-canvas` sur les polices embarquées. Ce chemin n'est
+      // pas fiable avec @napi-rs/canvas : dès qu'une page porte du texte
+      // vectoriel (systématique sur un plan réel, même quand le tableau de
+      // bornes lui-même est une image) le rendu lève une erreur native du
+      // binding (« Value is none of these types `String`, `Path`, » — objet
+      // de chemin renvoyé par `getPathGenerator` non reconnu par
+      // `ctx.fill()`), reproduit hors serveur sur un PDF avec texte + image.
+      // @napi-rs/canvas gère correctement le rendu par police native : on
+      // force cette voie plutôt que le repli en chemins vectoriels.
+      disableFontFace: false,
+    }).promise;
   } catch (e: any) {
     return {
       bornes: [],
