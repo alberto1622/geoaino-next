@@ -267,8 +267,14 @@ async function testPdfTexte() {
 
   // Métadonnées + tableau de coordonnées, chacun dans son propre drawText
   // (donc son propre bloc BT…ET, comme sur un plan réel).
-  page.drawText("NICAD 014020030012345", { x: 40, y: 800, size: 10, font });
-  page.drawText("Superficie : 500.00 m2", { x: 40, y: 780, size: 10, font });
+  // NICAD/superficie sur un vrai plan : le libellé et la valeur sont deux
+  // blocs de texte distincts (deux drawText, donc deux chaînes BT…ET) —
+  // lireMetaPlan() reconnaît la valeur par sa FORME, jamais par un libellé
+  // collé devant. On reproduit donc ce découpage, pas une phrase unique.
+  page.drawText("NICAD", { x: 40, y: 800, size: 8, font });
+  page.drawText("014020030012345", { x: 100, y: 800, size: 10, font });
+  page.drawText("Superficie", { x: 40, y: 780, size: 8, font });
+  page.drawText("500.00 m2", { x: 100, y: 780, size: 10, font });
   const table = [
     "Pts X Y",
     "B1 500000.0000 1600100.0000",

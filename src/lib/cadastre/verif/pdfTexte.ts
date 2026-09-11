@@ -183,7 +183,7 @@ export async function extraireTextePdf(pdf: Buffer | Uint8Array): Promise<string
 }
 
 const RE_DATE = /^\d{2}\/\d{2}\/\d{4}$/;
-const RE_SUPERFICIE = /^([\d  \s.,]+)\s*m(?:²|2)?$/i;
+const RE_SUPERFICIE = /^([\d\u00A0\u202F\s.,]+)\s*m(?:²|2)?$/i;
 
 /**
  * Un NICAD plausible : alphanumérique, au moins 8 caractères, majoritairement
@@ -199,7 +199,7 @@ function estNicad(s: string): boolean {
 }
 
 function versNombre(brut: string): number | undefined {
-  const n = Number(brut.replace(/[  \s]/g, "").replace(",", "."));
+  const n = Number(brut.replace(/[\u00A0\u202F\s]/g, "").replace(",", "."));
   return Number.isFinite(n) ? n : undefined;
 }
 
