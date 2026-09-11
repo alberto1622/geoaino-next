@@ -20,6 +20,7 @@ const SOURCES_VALIDES: SourceVerif[] = [
   "pdf-texte",
   "pdf-referentiel",
   "pdf-ocr",
+  "image-ocr",
 ];
 
 /**

@@ -2,8 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { parseBornes } from "@/lib/cadastre/verif/parse";
 import { extraireTextePdf, lireMetaPlan } from "@/lib/cadastre/verif/pdfTexte";
-import { extraireTexteParPosition } from "@/lib/cadastre/verif/pdfTableauTexte";
-import { ocrTableauCoordonnees } from "@/lib/cadastre/verif/ocr";
+import {
+  extraireTexteParPosition,
+  isolerBlocTableau,
+} from "@/lib/cadastre/verif/pdfTableauTexte";
+import { ocrTableauCoordonnees, ocrImageCoordonnees } from "@/lib/cadastre/verif/ocr";
 import { bornesDuReferentiel } from "@/lib/cadastre/verif/referentiel";
 import type { Borne, ErreurLigne, SourceVerif } from "@/lib/cadastre/verif/types";
 
@@ -82,8 +85,34 @@ export async function POST(req: NextRequest) {
       };
       return NextResponse.json(reponse);
     }
+    if (
+      nom.endsWith(".jpg") ||
+      nom.endsWith(".jpeg") ||
+      nom.endsWith(".png") ||
+      nom.endsWith(".webp")
+    ) {
+      // Image déjà recadrée par l'opérateur côté client (onglet « Photo » de
+      // PlanVerifClient.tsx) : pas de rendu à faire, envoi direct à l'OCR.
+      // Aucune métadonnée (NICAD/superficie) : le recadrage exclut par
+      // construction le reste du document — cf. ocrImageCoordonnees.
+      const ocr = await ocrImageCoordonnees(buffer);
+      const reponse: Reponse = {
+        bornes: ocr.bornes,
+        source: "image-ocr",
+        meta: {},
+        aRelire: true,
+        erreurs: ocr.erreurs,
+        avertissement:
+          ocr.motifEchec ??
+          "Bornes obtenues par reconnaissance optique : relisez chaque coordonnée avant d'enregistrer. Les confusions 0/O, 1/7 et 5/6 sur la 4e décimale sont fréquentes.",
+      };
+      return NextResponse.json(reponse);
+    }
     return NextResponse.json(
-      { error: "Format non pris en charge. Fichiers acceptés : .csv, .txt, .pdf." },
+      {
+        error:
+          "Format non pris en charge. Fichiers acceptés : .csv, .txt, .pdf, .jpg, .jpeg, .png, .webp.",
+      },
       { status: 400 },
     );
   } catch (e) {
@@ -109,7 +138,11 @@ async function importerPdf(buffer: Buffer): Promise<Reponse> {
   // de dessin (pdf-lib) seulement si pdfjs-dist est indisponible.
   const texteParPosition = await extraireTexteParPosition(buffer);
   const texteVoie1 = texteParPosition ?? nettoyerChainesPdf(chaines);
-  const parTexte = parseBornes(texteVoie1);
+  // Le tableau est isolé du reste de la page AVANT parsing : `parseBornes`
+  // tient toute ligne à deux jetons numériques pour une borne, et le cartouche
+  // d'un plan en porte (« 10 000 », l'échelle du plan de situation, devenait
+  // une borne fantôme en (10 ; 0) — cf. isolerBlocTableau).
+  const parTexte = parseBornes(isolerBlocTableau(texteVoie1));
   if (parTexte.bornes.length >= 3) {
     return {
       bornes: parTexte.bornes,
@@ -118,7 +151,7 @@ async function importerPdf(buffer: Buffer): Promise<Reponse> {
       aRelire: false,
       erreurs: parTexte.erreurs,
       avertissement:
-        "Bornes lues dans la couche texte du plan. Vérifiez qu'il s'agit bien du tableau de coordonnées et non d'autres nombres du document.",
+        "Bornes lues dans le tableau de coordonnées du plan (couche texte). Vérifiez qu'elles correspondent bien aux bornes imprimées.",
     };
   }
 

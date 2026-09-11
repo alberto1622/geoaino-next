@@ -119,7 +119,8 @@ export type VerifRapport = {
  *   (commodité de saisie : ne *lit* aucun document, cf. referentiel.ts) ;
  * - `pdf-texte` — tableau lu dans la couche texte d'un plan PDF (exact) ;
  * - `pdf-referentiel` — NICAD lu sur le plan PDF, bornes reprises du référentiel ;
- * - `pdf-ocr` — tableau reconnu optiquement sur un plan PDF (à relire).
+ * - `pdf-ocr` — tableau reconnu optiquement sur un plan PDF (à relire) ;
+ * - `image-ocr` — photo recadrée par l'opérateur sur le tableau (à relire).
  */
 export type SourceVerif =
   | "saisie"
@@ -127,7 +128,8 @@ export type SourceVerif =
   | "referentiel"
   | "pdf-texte"
   | "pdf-referentiel"
-  | "pdf-ocr";
+  | "pdf-ocr"
+  | "image-ocr";
 
 // --- Constantes partagées -----------------------------------------------------
 

@@ -123,3 +123,84 @@ function regrouperEnLignes(fragments: { texte: string; x: number; y: number }[])
     .filter(Boolean)
     .join("\n");
 }
+
+/**
+ * En-tête de colonnes et pied du tableau de coordonnées — les deux bornes
+ * visuelles du bloc sur un plan CADEX. Mêmes motifs que les lignes de
+ * décoration de `parse.ts` : ce qui y est ignoré au parsing sert ici à
+ * délimiter.
+ */
+const RE_ENTETE = /^\s*(pts?|points?|n[o°]|num([ée]ro)?|borne)\b.*\b(x|est|easting)\b/i;
+const RE_PIED = /syst[èe]me\s+de\s+coordonn|^\s*rrs\s*-?\s*0?4\s*$/i;
+
+/** Une ligne porte-t-elle au moins deux jetons numériques, donc un couple X/Y possible ? */
+function ressembleAUneBorne(ligne: string): boolean {
+  const jetons = ligne.trim().split(/[\t;|,]+|\s+/).filter(Boolean);
+  if (jetons.length < 2) return false;
+  return jetons.filter((j) => /^[+-]?\d+([.,]\d+)?$/.test(j)).length >= 2;
+}
+
+/**
+ * Restreint le texte d'une page au seul bloc du tableau de coordonnées.
+ *
+ * **Pourquoi c'est indispensable.** `parseBornes` est écrit pour un tableau
+ * seul : toute ligne portant deux jetons numériques y devient une borne. Or
+ * une page de plan porte aussi un cartouche, et sur un plan Morcellement CADEX
+ * l'échelle du plan de situation s'y écrit « 10 000 » — deux jetons une fois
+ * découpée sur l'espace (qui est un séparateur de colonnes, pas de milliers,
+ * cf. `ESPACES_MILLIERS`). Passer la page entière au parseur fabriquait donc
+ * une borne fantôme en (10 ; 0), que `verifier()` rejetait ensuite en « 1
+ * borne sort de l'emprise du Sénégal » — sur un plan pourtant parfaitement lu.
+ *
+ * **Deux stratégies, dans cet ordre.**
+ * 1. Les repères du tableau : ce qui suit l'en-tête « Pts / X / Y » et précède
+ *    le pied « Système de coordonnée : RRS04 ». Exact sur tout plan CADEX, où
+ *    ces deux lignes sont toujours imprimées.
+ * 2. À défaut de repère (plan d'un géomètre privé, d'un autre bureau), la plus
+ *    longue suite de lignes CONSÉCUTIVES portant un couple de nombres : les
+ *    lignes d'un tableau se suivent dans l'ordre de lecture, un nombre isolé
+ *    du cartouche non. Il en faut au moins trois — c'est le minimum pour une
+ *    parcelle, et ça écarte un « 10 000 » solitaire.
+ *
+ * Si aucune des deux n'aboutit, le texte est renvoyé **tel quel** : mieux vaut
+ * laisser `parseBornes` remonter ses erreurs de ligne que de masquer
+ * silencieusement un tableau que l'on n'a pas su délimiter.
+ *
+ * Isoler n'est pas corriger : une coordonnée réellement fautive dans le
+ * tableau reste dans le bloc, et c'est bien à `verifier()` de la signaler.
+ */
+export function isolerBlocTableau(texte: string): string {
+  const lignes = texte.split("\n");
+
+  // 1. Délimitation par les repères du tableau.
+  const iEntete = lignes.findIndex((l) => RE_ENTETE.test(l));
+  const debut = iEntete >= 0 ? iEntete + 1 : 0;
+  const iPied = lignes.findIndex((l, i) => i >= debut && RE_PIED.test(l));
+  if (iEntete >= 0 || iPied > debut) {
+    const bloc = lignes.slice(debut, iPied >= 0 ? iPied : undefined);
+    if (bloc.some(ressembleAUneBorne)) return bloc.join("\n");
+  }
+
+  // 2. Plus longue suite de lignes consécutives ressemblant à des bornes.
+  let meilleurDebut = -1;
+  let meilleureLongueur = 0;
+  let courantDebut = -1;
+  lignes.forEach((ligne, i) => {
+    if (!ressembleAUneBorne(ligne)) {
+      courantDebut = -1;
+      return;
+    }
+    if (courantDebut < 0) courantDebut = i;
+    const longueur = i - courantDebut + 1;
+    if (longueur > meilleureLongueur) {
+      meilleureLongueur = longueur;
+      meilleurDebut = courantDebut;
+    }
+  });
+  if (meilleureLongueur >= 3) {
+    return lignes.slice(meilleurDebut, meilleurDebut + meilleureLongueur).join("\n");
+  }
+
+  // 3. Rien de concluant : au parseur de se débrouiller, et de rapporter.
+  return texte;
+}

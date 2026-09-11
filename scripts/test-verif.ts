@@ -20,8 +20,11 @@ import { parseBornes, formaterBornes } from "../src/lib/cadastre/verif/parse";
 import { verifier, appliquerCorrection } from "../src/lib/cadastre/verif/core";
 import { bornesDuReferentiel } from "../src/lib/cadastre/verif/referentiel";
 import { extraireTextePdf, lireMetaPlan } from "../src/lib/cadastre/verif/pdfTexte";
-import { extraireTexteParPosition } from "../src/lib/cadastre/verif/pdfTableauTexte";
-import { ocrTableauCoordonnees } from "../src/lib/cadastre/verif/ocr";
+import {
+  extraireTexteParPosition,
+  isolerBlocTableau,
+} from "../src/lib/cadastre/verif/pdfTableauTexte";
+import { ocrTableauCoordonnees, ocrImageCoordonnees } from "../src/lib/cadastre/verif/ocr";
 import type { Borne, CodeAnomalie } from "../src/lib/cadastre/verif/types";
 
 let ok = 0;
@@ -378,7 +381,77 @@ async function testPdfTableauParPosition() {
   );
 }
 
-// --- 10. Import PDF : reconnaissance optique (pdfjs-dist + @napi-rs/canvas + tesseract.js) ---
+// --- 10. Import PDF : cartouche du plan pris pour une borne ------------
+
+/**
+ * Garde-fou contre la régression signalée par l'utilisateur : « 1 borne sort
+ * de l'emprise du Sénégal en UTM 28N » à la vérification d'un plan dont le
+ * tableau est pourtant parfaitement lu.
+ *
+ * `parseBornes` était appliqué à TOUT le texte de la page, alors qu'il est
+ * écrit pour un tableau seul : toute ligne du cartouche portant deux jetons
+ * numériques devenait une borne. Le coupable sur un plan Morcellement CADEX
+ * est l'échelle du plan de situation, « 10 000 » — deux jetons une fois
+ * découpée sur l'espace (qui est un séparateur de colonnes, pas de milliers,
+ * cf. `ESPACES_MILLIERS`), donc une borne fantôme en (10 ; 0).
+ *
+ * Le tableau doit être ISOLÉ du reste de la page avant parsing.
+ */
+async function testPdfCartouche() {
+  console.log("\n[10] Import PDF — le cartouche ne doit pas produire de bornes");
+
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([595, 842]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+
+  // Cartouche d'un plan Morcellement réel, au-dessus du tableau.
+  const cartouche: [string, number, number][] = [
+    ["012345678901", 450, 655], // NICAD
+    ["3561.87 m²", 500, 625], // superficie
+    ["10 000", 160, 485], // échelle du plan de situation — le coupable
+    ["11/09/2026", 107, 143], // date
+    ["1000", 334, 19], // échelle du plan
+  ];
+  for (const [t, x, y] of cartouche) page.drawText(t, { x, y, size: 10, font });
+
+  // Tableau, cellule par cellule, en-tête et pied compris.
+  const BORNES: [string, string, string][] = [
+    ["B1", "284650.1541", "1626132.3434"],
+    ["B2", "284692.0447", "1626118.6919"],
+    ["B3", "284681.8798", "1626065.6607"],
+    ["B4", "284627.0047", "1626072.7871"],
+    ["B5", "284617.6048", "1626106.0712"],
+  ];
+  let y = 310;
+  for (const [pt, x, yy] of [["Pts", "X (m)", "Y (m)"] as [string, string, string], ...BORNES]) {
+    page.drawText(pt, { x: 45, y, size: 8, font });
+    page.drawText(x, { x: 78, y, size: 8, font });
+    page.drawText(yy, { x: 145, y, size: 8, font });
+    y -= 17;
+  }
+  page.drawText("Système de coordonnée : RRS04", { x: 64, y, size: 7, font });
+
+  const pdf = Buffer.from(await doc.save());
+  const texte = await extraireTexteParPosition(pdf);
+  check("l'extraction par position aboutit", texte !== null);
+  if (!texte) return;
+
+  const { bornes } = parseBornes(isolerBlocTableau(texte));
+  check(
+    "seules les 5 bornes du tableau sont retenues (« 10 000 » écarté)",
+    bornes.length === 5 && bornes.every((b, i) => b.x === Number(BORNES[i][1])),
+    `${bornes.length} borne(s) : ${JSON.stringify(bornes)}`,
+  );
+
+  const rapport = verifier({ bornes, crsSource: "EPSG:32628" });
+  check(
+    "aucune anomalie HORS_EMPRISE",
+    !rapport.anomalies.some((a) => a.code === "HORS_EMPRISE"),
+    JSON.stringify(rapport.anomalies.map((a) => a.code)),
+  );
+}
+
+// --- 11. Import PDF : reconnaissance optique (pdfjs-dist + @napi-rs/canvas + tesseract.js) ---
 
 /**
  * Ne vérifie PAS la justesse de la reconnaissance (dépend de la police, hors
@@ -394,7 +467,7 @@ async function testPdfTableauParPosition() {
  * épinglé sur la plage que pdfjs-dist déclare.
  */
 async function testOcr() {
-  console.log("\n[10] Import PDF — reconnaissance optique (OCR)");
+  console.log("\n[11] Import PDF — reconnaissance optique (OCR)");
 
   const canvas = createCanvas(800, 300);
   const ctx = canvas.getContext("2d");
@@ -438,6 +511,53 @@ async function testOcr() {
   );
 }
 
+// --- 12. Import image directe : reconnaissance optique sans PDF -----------
+
+/**
+ * Garde-fou pour la voie image directe (onglet « Photo » de
+ * PlanVerifClient.tsx) : pas de rendu pdfjs ici, l'image recadrée par
+ * l'opérateur est envoyée telle quelle à tesseract. Comme [11], ne vérifie
+ * pas la justesse de la reconnaissance (dépend de la police) mais que le
+ * pipeline s'exécute sans lever et renvoie une réponse structurée, sans
+ * métadonnées (le recadrage exclut par construction le reste du document).
+ */
+async function testOcrImage() {
+  console.log("\n[12] Import image directe — reconnaissance optique (OCR)");
+
+  const canvas = createCanvas(800, 200);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, 800, 200);
+  ctx.fillStyle = "#000000";
+  ctx.font = "28px sans-serif";
+  ["B1 500000.0000 1600100.0000", "B2 500100.0000 1600100.0000"].forEach((l, i) =>
+    ctx.fillText(l, 20, 50 + i * 50),
+  );
+  const png = canvas.toBuffer("image/png");
+
+  let res: Awaited<ReturnType<typeof ocrImageCoordonnees>> | null = null;
+  let erreur: unknown = null;
+  try {
+    res = await ocrImageCoordonnees(png);
+  } catch (e) {
+    erreur = e;
+  }
+  check(
+    "le pipeline OCR image se termine sans lever",
+    erreur === null,
+    erreur instanceof Error ? erreur.message : String(erreur),
+  );
+  check(
+    "la réponse a la forme attendue (bornes[], meta={}, erreurs[])",
+    !!res &&
+      Array.isArray(res.bornes) &&
+      Array.isArray(res.erreurs) &&
+      typeof res.meta === "object" &&
+      !res.meta.nicad &&
+      res.meta.superficie === undefined,
+  );
+}
+
 async function main() {
   await testAllerRetour();
   testParsing();
@@ -446,7 +566,9 @@ async function main() {
   testTolerance();
   await testPdfTexte();
   await testPdfTableauParPosition();
+  await testPdfCartouche();
   await testOcr();
+  await testOcrImage();
 
   console.log(`\n${ok} assertion(s) OK, ${ko} en échec.`);
   await prisma.$disconnect();

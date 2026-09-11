@@ -57,7 +57,34 @@ async function chargerOptionnel(specificateur: string): Promise<any | null> {
 const INDISPONIBLE =
   "Le tableau de coordonnées de ce plan est une image, et la reconnaissance optique n'est pas disponible sur ce serveur. Saisissez ou collez le tableau.";
 
-/** Extrait le tableau de coordonnées d'un plan dont le tableau est une image. */
+/**
+ * Charge `tesseract.js`, en repliant sur `default` si besoin. `recognize`/
+ * `detect` n'y sont exposés QUE sur `default` (l'espace de noms ESM porte
+ * `createWorker`/`createScheduler`, mais pas ces deux raccourcis) — à la
+ * différence de pdfjs-dist, qui expose tout directement.
+ */
+async function chargerTesseract(): Promise<any | null> {
+  const mod = await chargerOptionnel("tesseract.js");
+  return mod?.default ?? mod;
+}
+
+/**
+ * Cœur de la reconnaissance : lance tesseract sur une image RASTER déjà
+ * prête (PNG/JPEG…), liste blanche restreinte aux caractères d'un tableau de
+ * bornes. Isolé pour être partagé entre la voie PDF (rendu de page,
+ * `ocrTableauCoordonnees`) et la voie image directe (`ocrImageCoordonnees`).
+ */
+async function reconnaitreImage(
+  tesseract: any,
+  image: Buffer,
+): Promise<string> {
+  const { data } = await tesseract.recognize(image, "eng", {
+    tessedit_char_whitelist: LISTE_BLANCHE,
+  });
+  return nettoyerTexteOcr(data?.text ?? "");
+}
+
+/** Extrait le tableau de coordonnées d'un plan PDF dont le tableau est une image. */
 export async function ocrTableauCoordonnees(pdf: Buffer): Promise<ResultatOcr> {
   // Les métadonnées se lisent sans OCR et restent utiles si la reconnaissance
   // échoue : elles pré-remplissent NICAD et superficie.
@@ -65,13 +92,7 @@ export async function ocrTableauCoordonnees(pdf: Buffer): Promise<ResultatOcr> {
   const meta = { nicad: brut.nicad, superficie: brut.superficieM2 };
 
   const pdfjs = await chargerOptionnel("pdfjs-dist/legacy/build/pdf.mjs");
-  // `recognize`/`detect` de tesseract.js ne sont exposés QUE sur `default`
-  // (l'espace de noms ESM porte `createWorker`/`createScheduler`, mais pas
-  // ces deux raccourcis) — à la différence de pdfjs-dist, qui expose tout
-  // directement. Repli sur le module lui-même si `default` est absent
-  // (interop CJS/ESM selon le bundler).
-  const tesseractMod = await chargerOptionnel("tesseract.js");
-  const tesseract = tesseractMod?.default ?? tesseractMod;
+  const tesseract = await chargerTesseract();
   if (!pdfjs || !tesseract) {
     return { bornes: [], meta, erreurs: [], motifEchec: INDISPONIBLE };
   }
@@ -113,10 +134,7 @@ export async function ocrTableauCoordonnees(pdf: Buffer): Promise<ResultatOcr> {
     for (let p = 1; p <= nbPages; p++) {
       const page = await doc.getPage(p);
       const png = await rasteriser(page);
-      const { data } = await tesseract.recognize(png, "eng", {
-        tessedit_char_whitelist: LISTE_BLANCHE,
-      });
-      morceaux.push(nettoyerTexteOcr(data?.text ?? ""));
+      morceaux.push(await reconnaitreImage(tesseract, png));
     }
     const { bornes, erreurs } = parseBornes(morceaux.join("\n"));
     return {
@@ -136,6 +154,48 @@ export async function ocrTableauCoordonnees(pdf: Buffer): Promise<ResultatOcr> {
     };
   } finally {
     await doc.destroy?.();
+  }
+}
+
+/**
+ * Extrait le tableau de bornes d'une IMAGE directe (photo/capture d'écran
+ * recadrée par l'opérateur sur la zone Pts/X/Y — cf. `PlanVerifClient.tsx`,
+ * onglet « Photo »). Contrairement à `ocrTableauCoordonnees`, aucune étape de
+ * rendu : une image n'a pas besoin d'être rastérisée depuis un PDF, elle est
+ * déjà une matrice de pixels — envoyée telle quelle à tesseract. Pas de
+ * métadonnées (NICAD/superficie) : le recadrage exclut par construction le
+ * reste du document.
+ */
+export async function ocrImageCoordonnees(image: Buffer): Promise<ResultatOcr> {
+  const tesseract = await chargerTesseract();
+  if (!tesseract) {
+    return {
+      bornes: [],
+      meta: {},
+      erreurs: [],
+      motifEchec:
+        "La reconnaissance optique n'est pas disponible sur ce serveur. Saisissez ou collez le tableau.",
+    };
+  }
+
+  try {
+    const texte = await reconnaitreImage(tesseract, image);
+    const { bornes, erreurs } = parseBornes(texte);
+    return {
+      bornes,
+      meta: {},
+      erreurs,
+      motifEchec: bornes.length
+        ? undefined
+        : "La reconnaissance optique n'a extrait aucune coordonnée exploitable de cette image. Recadrez plus précisément sur le tableau Pts/X/Y, ou saisissez les bornes.",
+    };
+  } catch (e: any) {
+    return {
+      bornes: [],
+      meta: {},
+      erreurs: [],
+      motifEchec: `La reconnaissance optique a échoué (${e?.message ?? e}).`,
+    };
   }
 }
 

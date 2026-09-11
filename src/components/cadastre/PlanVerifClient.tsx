@@ -3,10 +3,13 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { toast } from "sonner";
+import ReactCrop, { type Crop, type PixelCrop } from "react-image-crop";
+import "react-image-crop/dist/ReactCrop.css";
 import {
   AlertTriangle,
   ArrowLeftRight,
   CheckCircle2,
+  Camera,
   ClipboardPaste,
   Download,
   FileCheck2,
@@ -55,12 +58,13 @@ const PlanVerifMap = dynamic(() => import("./PlanVerifMap"), {
   ),
 });
 
-type Onglet = "coller" | "grille" | "fichier" | "nicad";
+type Onglet = "coller" | "grille" | "fichier" | "photo" | "nicad";
 
 const ONGLETS: Array<{ cle: Onglet; libelle: string; icone: typeof Table2 }> = [
   { cle: "coller", libelle: "Coller", icone: ClipboardPaste },
   { cle: "grille", libelle: "Grille", icone: Table2 },
   { cle: "fichier", libelle: "Fichier", icone: FileSpreadsheet },
+  { cle: "photo", libelle: "Photo", icone: Camera },
   { cle: "nicad", libelle: "NICAD", icone: Search },
 ];
 
@@ -110,6 +114,7 @@ const LIBELLE_SOURCE: Record<SourceVerif, string> = {
   "pdf-texte": "Plan PDF — tableau lu dans la couche texte",
   "pdf-referentiel": "Plan PDF — NICAD lu, bornes du référentiel",
   "pdf-ocr": "Plan PDF — reconnaissance optique (à relire)",
+  "image-ocr": "Photo recadrée — reconnaissance optique (à relire)",
 };
 
 /** Une ligne de la grille : les champs restent des chaînes tant qu'on édite. */
@@ -119,6 +124,34 @@ const versLignes = (bornes: Borne[]): LigneGrille[] =>
   bornes.map((b) => ({ pt: b.pt, x: String(b.x), y: String(b.y) }));
 
 const LIGNE_VIDE: LigneGrille = { pt: "", x: "", y: "" };
+
+/**
+ * Rend le contenu de `crop` (coordonnées à l'échelle d'affichage de `image`)
+ * sur un canvas hors-écran, à la résolution native de l'image, et le renvoie
+ * en JPEG. Le fichier original n'est jamais lu au-delà de ce recadrage : rien
+ * hors de la zone sélectionnée par l'opérateur n'est transmis au serveur.
+ */
+function recadrerImage(image: HTMLImageElement, crop: PixelCrop): Promise<Blob | null> {
+  const echelleX = image.naturalWidth / image.width;
+  const echelleY = image.naturalHeight / image.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(crop.width * echelleX));
+  canvas.height = Math.max(1, Math.round(crop.height * echelleY));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return Promise.resolve(null);
+  ctx.drawImage(
+    image,
+    crop.x * echelleX,
+    crop.y * echelleY,
+    crop.width * echelleX,
+    crop.height * echelleY,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
+  return new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/jpeg", 0.92));
+}
 
 /** Petit wrapper `fetch` : lève une Error dont `.message` porte le message serveur. */
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -171,6 +204,13 @@ export default function PlanVerifClient({ operateur }: PlanVerifClientProps) {
 
   const inputFichier = useRef<HTMLInputElement>(null);
   const nicadRechercheRef = useRef("");
+
+  // Onglet « Photo » : recadrage local (react-image-crop) avant envoi.
+  const [photoSrc, setPhotoSrc] = useState<string | null>(null);
+  const [crop, setCrop] = useState<Crop>();
+  const [completedCrop, setCompletedCrop] = useState<PixelCrop>();
+  const imgRecadrage = useRef<HTMLImageElement>(null);
+  const inputPhoto = useRef<HTMLInputElement>(null);
 
   // --- État dérivé -----------------------------------------------------------
 
@@ -292,6 +332,37 @@ export default function PlanVerifClient({ operateur }: PlanVerifClientProps) {
     },
     [chargerBornes],
   );
+
+  const choisirPhoto = useCallback((fichier: File) => {
+    const url = URL.createObjectURL(fichier);
+    setPhotoSrc((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return url;
+    });
+    setCrop(undefined);
+    setCompletedCrop(undefined);
+  }, []);
+
+  const onChargementPhoto = useCallback((e: React.SyntheticEvent<HTMLImageElement>) => {
+    const { width, height } = e.currentTarget;
+    if (!width || !height) return;
+    // Zone de départ : quasi toute l'image, à ajuster sur le tableau Pts/X/Y.
+    setCrop({ unit: "%", x: 5, y: 5, width: 90, height: 90 });
+  }, []);
+
+  const extraireDepuisPhoto = useCallback(async () => {
+    const image = imgRecadrage.current;
+    if (!image || !completedCrop?.width || !completedCrop?.height) {
+      toast.error("Sélectionnez d'abord la zone du tableau Pts / X / Y.");
+      return;
+    }
+    const blob = await recadrerImage(image, completedCrop);
+    if (!blob) {
+      toast.error("Le recadrage a échoué.");
+      return;
+    }
+    await importer(new File([blob], "recadrage.jpg", { type: "image/jpeg" }));
+  }, [completedCrop, importer]);
 
   const rechercherNicad = useCallback(async () => {
     const cible = nicadRechercheRef.current.trim();
@@ -593,6 +664,65 @@ export default function PlanVerifClient({ operateur }: PlanVerifClientProps) {
                 par reconnaissance optique — dans ce dernier cas les bornes sont
                 <em> à relire</em> avant enregistrement.
               </p>
+            </div>
+          )}
+
+          {onglet === "photo" && (
+            <div className="space-y-2">
+              <Label htmlFor="verif-photo">Photo ou capture d&apos;écran du tableau</Label>
+              <input
+                ref={inputPhoto}
+                id="verif-photo"
+                type="file"
+                accept="image/*"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) choisirPhoto(f);
+                  e.target.value = "";
+                }}
+                className="block w-full text-xs file:mr-3 file:rounded-md file:border file:border-input file:bg-secondary file:px-3 file:py-1.5 file:text-xs file:font-medium"
+              />
+              <p className="text-xs text-muted-foreground">
+                Sélectionnez de préférence la zone contenant les bornes, X/Est et
+                Y/Nord : ça améliore la lecture et évite de transmettre le reste du
+                document. Seul le recadrage est envoyé au serveur — la photo
+                d&apos;origine n&apos;est pas modifiée et reste sur votre appareil.
+              </p>
+              {photoSrc && (
+                <>
+                  <div className="max-h-[360px] overflow-auto rounded-md border bg-muted/20 p-1">
+                    <ReactCrop
+                      crop={crop}
+                      onChange={(_, pourcentage) => setCrop(pourcentage)}
+                      onComplete={(c) => setCompletedCrop(c)}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element -- aperçu local (blob:), non servi par Next/Image */}
+                      <img
+                        ref={imgRecadrage}
+                        src={photoSrc}
+                        alt="Photo à recadrer sur le tableau de bornes"
+                        onLoad={onChargementPhoto}
+                        className="max-w-full"
+                      />
+                    </ReactCrop>
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={extraireDepuisPhoto}
+                    disabled={
+                      !completedCrop?.width || !completedCrop?.height || importEnCours
+                    }
+                    className="w-full"
+                  >
+                    {importEnCours ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Wand2 className="mr-2 h-4 w-4" />
+                    )}
+                    Extraire les bornes de la zone sélectionnée
+                  </Button>
+                </>
+              )}
             </div>
           )}
 
