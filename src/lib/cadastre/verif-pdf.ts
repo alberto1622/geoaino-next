@@ -30,6 +30,9 @@ const LIBELLE_SOURCE: Record<SourceVerif, string> = {
   saisie: "Saisie manuelle / collage",
   fichier: "Import d'un fichier CSV / TXT",
   referentiel: "Bornes reprises du referentiel (recherche par NICAD)",
+  "pdf-texte": "Plan PDF - tableau lu dans la couche texte",
+  "pdf-referentiel": "Plan PDF - NICAD lu, bornes reprises du referentiel",
+  "pdf-ocr": "Plan PDF - reconnaissance optique, relue par l'operateur",
 };
 
 type RGB = [number, number, number];

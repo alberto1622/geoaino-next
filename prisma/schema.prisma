@@ -430,7 +430,7 @@ model CadVerification {
   userId             String
   nicad              String?
   crsSource          String // "EPSG:32628" | "EPSG:31028"
-  source             String // "saisie" | "fichier" | "referentiel"
+  source             String // saisie | fichier | referentiel | pdf-texte | pdf-referentiel | pdf-ocr
   bornes             Json
   superficieCalculee Decimal  @db.Decimal(20, 4)
   superficieDeclaree Decimal? @db.Decimal(20, 4)

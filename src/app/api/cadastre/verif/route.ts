@@ -13,7 +13,14 @@ import {
 export const runtime = "nodejs";
 
 const CRS_VALIDES: CrsSource[] = ["EPSG:32628", "EPSG:31028"];
-const SOURCES_VALIDES: SourceVerif[] = ["saisie", "fichier", "referentiel"];
+const SOURCES_VALIDES: SourceVerif[] = [
+  "saisie",
+  "fichier",
+  "referentiel",
+  "pdf-texte",
+  "pdf-referentiel",
+  "pdf-ocr",
+];
 
 /**
  * Valide le corps de la requête. Les bornes viennent du navigateur : elles

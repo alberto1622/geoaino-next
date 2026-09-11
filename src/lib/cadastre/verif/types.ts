@@ -116,9 +116,18 @@ export type VerifRapport = {
  * Origine des bornes, reportée sur le PV et dans l'historique.
  * - `saisie` / `fichier` — report humain (grille éditée, collage, .csv/.txt) ;
  * - `referentiel` — bornes reconstituées depuis `CadParcelle` par NICAD
- *   (commodité de saisie : ne *lit* aucun document, cf. referentiel.ts).
+ *   (commodité de saisie : ne *lit* aucun document, cf. referentiel.ts) ;
+ * - `pdf-texte` — tableau lu dans la couche texte d'un plan PDF (exact) ;
+ * - `pdf-referentiel` — NICAD lu sur le plan PDF, bornes reprises du référentiel ;
+ * - `pdf-ocr` — tableau reconnu optiquement sur un plan PDF (à relire).
  */
-export type SourceVerif = "saisie" | "fichier" | "referentiel";
+export type SourceVerif =
+  | "saisie"
+  | "fichier"
+  | "referentiel"
+  | "pdf-texte"
+  | "pdf-referentiel"
+  | "pdf-ocr";
 
 // --- Constantes partagées -----------------------------------------------------
 

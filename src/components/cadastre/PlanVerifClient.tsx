@@ -107,6 +107,9 @@ const LIBELLE_SOURCE: Record<SourceVerif, string> = {
   saisie: "Saisie manuelle / collage",
   fichier: "Fichier importé (CSV / TXT)",
   referentiel: "Bornes reprises du référentiel (NICAD)",
+  "pdf-texte": "Plan PDF — tableau lu dans la couche texte",
+  "pdf-referentiel": "Plan PDF — NICAD lu, bornes du référentiel",
+  "pdf-ocr": "Plan PDF — reconnaissance optique (à relire)",
 };
 
 /** Une ligne de la grille : les champs restent des chaînes tant qu'on édite. */
@@ -152,6 +155,10 @@ export default function PlanVerifClient({ operateur }: PlanVerifClientProps) {
 
   const [source, setSource] = useState<SourceVerif>("saisie");
   const [avertissementImport, setAvertissementImport] = useState<string | null>(null);
+  // Voie OCR : bornes reconnues optiquement, enregistrement bloqué tant que
+  // l'opérateur n'a pas confirmé les avoir relues.
+  const [aRelire, setARelire] = useState(false);
+  const [relu, setRelu] = useState(false);
 
   const [enGon, setEnGon] = useState(true);
   const [surlignees, setSurlignees] = useState<number[]>([]);
@@ -213,6 +220,10 @@ export default function PlanVerifClient({ operateur }: PlanVerifClientProps) {
       setLignes(nouvelles.length ? versLignes(nouvelles) : [{ ...LIGNE_VIDE }]);
       setErreursParse(erreurs);
       setDernierPv(null);
+      // Toute nouvelle source de bornes lève le blocage OCR ; `importer` le
+      // repose ensuite si la voie retenue est l'OCR.
+      setARelire(false);
+      setRelu(false);
     },
     [],
   );
@@ -245,6 +256,8 @@ export default function PlanVerifClient({ operateur }: PlanVerifClientProps) {
         const res = await apiJson<{
           bornes: Borne[];
           source: SourceVerif;
+          meta?: { nicad?: string; superficie?: number };
+          aRelire?: boolean;
           erreurs: ErreurLigne[];
           avertissement?: string;
         }>("/api/cadastre/verif/import", { method: "POST", body: form });
@@ -252,12 +265,23 @@ export default function PlanVerifClient({ operateur }: PlanVerifClientProps) {
         setSource(res.source);
         setAvertissementImport(res.avertissement ?? null);
 
+        // Pré-remplit NICAD / superficie lus sur le plan, sans écraser une
+        // valeur déjà saisie.
+        setNicad((prev) => prev || res.meta?.nicad || prev);
+        if (res.meta?.superficie != null) {
+          setSuperficieDeclaree((prev) => prev || String(res.meta!.superficie));
+        }
+
         if (!res.bornes.length) {
           setErreursParse(res.erreurs);
           toast.error(res.avertissement ?? "Aucune borne extraite de ce fichier.");
           return;
         }
         chargerBornes(res.bornes, res.erreurs);
+        // `chargerBornes` remet aRelire à false : on repose le blocage APRÈS,
+        // uniquement pour la voie OCR.
+        setARelire(res.aRelire ?? false);
+        setRelu(false);
         setOnglet("grille");
         toast.success(`${res.bornes.length} borne(s) importée(s).`);
       } catch (e) {
@@ -547,12 +571,12 @@ export default function PlanVerifClient({ operateur }: PlanVerifClientProps) {
 
           {onglet === "fichier" && (
             <div className="space-y-2">
-              <Label htmlFor="verif-fichier">Fichier CSV ou TXT</Label>
+              <Label htmlFor="verif-fichier">Fichier CSV / TXT ou plan PDF</Label>
               <input
                 ref={inputFichier}
                 id="verif-fichier"
                 type="file"
-                accept=".csv,.txt"
+                accept=".csv,.txt,.pdf"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
                   if (f) importer(f);
@@ -561,9 +585,13 @@ export default function PlanVerifClient({ operateur }: PlanVerifClientProps) {
                 className="block w-full text-xs file:mr-3 file:rounded-md file:border file:border-input file:bg-secondary file:px-3 file:py-1.5 file:text-xs file:font-medium"
               />
               <p className="text-xs text-muted-foreground">
-                Une ligne par borne, colonnes Pts / X / Y. Pour un classeur Excel, copiez
-                les cellules et utilisez l&apos;onglet « Coller » : le presse-papiers Excel
-                est déjà au bon format.
+                <strong>CSV / TXT</strong> : une ligne par borne, colonnes Pts / X / Y
+                (un copier-coller Excel passe par l&apos;onglet « Coller »).
+                <br />
+                <strong>Plan de morcellement PDF</strong> : le tableau est lu dans la
+                couche texte si elle existe, sinon par le NICAD porté sur le plan, sinon
+                par reconnaissance optique — dans ce dernier cas les bornes sont
+                <em> à relire</em> avant enregistrement.
               </p>
             </div>
           )}
@@ -702,10 +730,25 @@ export default function PlanVerifClient({ operateur }: PlanVerifClientProps) {
             {LIBELLE_SOURCE[source]}
           </div>
 
+          {aRelire && (
+            <label className="flex cursor-pointer items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs">
+              <input
+                type="checkbox"
+                checked={relu}
+                onChange={(e) => setRelu(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                J&apos;ai relu chaque coordonnée obtenue par reconnaissance optique et
+                je confirme qu&apos;elles correspondent au plan.
+              </span>
+            </label>
+          )}
+
           <Button
             type="button"
             className="w-full"
-            disabled={!rapport || enregistrement}
+            disabled={!rapport || enregistrement || (aRelire && !relu)}
             onClick={enregistrer}
           >
             {enregistrement ? (
@@ -715,6 +758,11 @@ export default function PlanVerifClient({ operateur }: PlanVerifClientProps) {
             )}
             Enregistrer la vérification
           </Button>
+          {aRelire && !relu && (
+            <p className="text-center text-xs text-amber-600 dark:text-amber-400">
+              Confirmez la relecture avant d&apos;enregistrer.
+            </p>
+          )}
 
           {dernierPv && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/40 p-2 text-xs">

@@ -13,10 +13,12 @@
  *  4. corrections PERMUTER_XY / DIVISER_1000 ;
  *  6. tolérance de superficie (limite, > T, > 2T, plancher).
  */
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import { prisma } from "../src/lib/prisma";
 import { parseBornes, formaterBornes } from "../src/lib/cadastre/verif/parse";
 import { verifier, appliquerCorrection } from "../src/lib/cadastre/verif/core";
 import { bornesDuReferentiel } from "../src/lib/cadastre/verif/referentiel";
+import { extraireTextePdf, lireMetaPlan } from "../src/lib/cadastre/verif/pdfTexte";
 import type { Borne, CodeAnomalie } from "../src/lib/cadastre/verif/types";
 
 let ok = 0;
@@ -254,12 +256,65 @@ function testTolerance() {
   check("petite parcelle, écart < plancher (1 m²) : pas d'anomalie", !aCode(sousPlancher.anomalies, "ECART_SUPERFICIE"));
 }
 
+// --- 7. Import PDF : lecture de la couche texte -------------------------
+
+async function testPdfTexte() {
+  console.log("\n[7] Import PDF — couche texte (pdf-lib)");
+
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([595, 842]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+
+  // Métadonnées + tableau de coordonnées, chacun dans son propre drawText
+  // (donc son propre bloc BT…ET, comme sur un plan réel).
+  page.drawText("NICAD 014020030012345", { x: 40, y: 800, size: 10, font });
+  page.drawText("Superficie : 500.00 m2", { x: 40, y: 780, size: 10, font });
+  const table = [
+    "Pts X Y",
+    "B1 500000.0000 1600100.0000",
+    "B2 500100.0000 1600100.0000",
+    "B3 500100.0000 1600000.0000",
+    "B4 500000.0000 1600000.0000",
+  ];
+  table.forEach((ligne, i) => {
+    page.drawText(ligne, { x: 40, y: 740 - i * 16, size: 9, font });
+  });
+
+  const pdf = Buffer.from(await doc.save());
+  const chaines = await extraireTextePdf(pdf);
+  check("des chaînes de texte sont extraites du PDF", chaines.length > 0, `${chaines.length}`);
+
+  const joint = chaines
+    .join("\n")
+    .replace(/\bB\s*(\d)/g, "\nB$1")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join("\n");
+  const { bornes, erreurs } = parseBornes(joint);
+  check(
+    "les 4 bornes du tableau texte sont retrouvées",
+    bornes.length === 4,
+    `${bornes.length} bornes / ${erreurs.length} erreurs`,
+  );
+
+  const meta = lireMetaPlan(chaines);
+  check("le NICAD est lu dans la couche texte", meta.nicad === "014020030012345", meta.nicad);
+  check("la superficie est lue dans la couche texte", meta.superficieM2 === 500, String(meta.superficieM2));
+
+  if (bornes.length === 4) {
+    const rap = verifier({ bornes, crsSource: "EPSG:32628", superficieDeclaree: meta.superficieM2 });
+    check("le rapport se calcule sur les bornes extraites", rap.geometry !== null && rap.superficieM2 > 0);
+  }
+}
+
 async function main() {
   await testAllerRetour();
   testParsing();
   testAnomalies();
   testCorrections();
   testTolerance();
+  await testPdfTexte();
 
   console.log(`\n${ok} assertion(s) OK, ${ko} en échec.`);
   await prisma.$disconnect();
