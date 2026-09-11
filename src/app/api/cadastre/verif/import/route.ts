@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { parseBornes } from "@/lib/cadastre/verif/parse";
 import { extraireTextePdf, lireMetaPlan } from "@/lib/cadastre/verif/pdfTexte";
+import { extraireTexteParPosition } from "@/lib/cadastre/verif/pdfTableauTexte";
 import { ocrTableauCoordonnees } from "@/lib/cadastre/verif/ocr";
 import { bornesDuReferentiel } from "@/lib/cadastre/verif/referentiel";
 import type { Borne, ErreurLigne, SourceVerif } from "@/lib/cadastre/verif/types";
@@ -98,8 +99,17 @@ async function importerPdf(buffer: Buffer): Promise<Reponse> {
   const meta = lireMetaPlan(chaines);
   const metaSortie = { nicad: meta.nicad, superficie: meta.superficieM2 };
 
-  // Voie 1 — le tableau est du vrai texte dans le PDF.
-  const parTexte = parseBornes(nettoyerChainesPdf(chaines));
+  // Voie 1 — le tableau est du vrai texte dans le PDF. Reconstruction PAR
+  // POSITION (pdfjs-dist, regroupe les fragments en lignes de lecture) :
+  // la plupart des générateurs PDF dessinent chaque cellule séparément
+  // (« B1 », « 500000.0000 », « 1600100.0000 » en trois appels), et leur
+  // ORDRE DE DESSIN ne correspond pas forcément à l'ordre de lecture visuel
+  // — sur des plans de sources variées, ça produisait des bornes manquantes,
+  // en trop ou mal recomposées (cf. pdfTableauTexte.ts). Repli sur l'ordre
+  // de dessin (pdf-lib) seulement si pdfjs-dist est indisponible.
+  const texteParPosition = await extraireTexteParPosition(buffer);
+  const texteVoie1 = texteParPosition ?? nettoyerChainesPdf(chaines);
+  const parTexte = parseBornes(texteVoie1);
   if (parTexte.bornes.length >= 3) {
     return {
       bornes: parTexte.bornes,

@@ -20,6 +20,7 @@ import { parseBornes, formaterBornes } from "../src/lib/cadastre/verif/parse";
 import { verifier, appliquerCorrection } from "../src/lib/cadastre/verif/core";
 import { bornesDuReferentiel } from "../src/lib/cadastre/verif/referentiel";
 import { extraireTextePdf, lireMetaPlan } from "../src/lib/cadastre/verif/pdfTexte";
+import { extraireTexteParPosition } from "../src/lib/cadastre/verif/pdfTableauTexte";
 import { ocrTableauCoordonnees } from "../src/lib/cadastre/verif/ocr";
 import type { Borne, CodeAnomalie } from "../src/lib/cadastre/verif/types";
 
@@ -316,7 +317,68 @@ async function testPdfTexte() {
   }
 }
 
-// --- 8. Import PDF : reconnaissance optique (pdfjs-dist + @napi-rs/canvas + tesseract.js) ---
+// --- 8. Import PDF : couche texte reconstruite PAR POSITION (tableau cellule par cellule) ---
+
+/**
+ * Garde-fou contre la régression signalée par l'utilisateur : « bornes
+ * manquantes, en trop, ou mal ordonnées » après import d'un plan PDF dont le
+ * tableau est du texte. La voie [7] ci-dessus dessine chaque LIGNE comme une
+ * seule chaîne — trop optimiste : la plupart des générateurs PDF dessinent
+ * chaque CELLULE séparément (Pts, X, Y en trois `drawText`), et leur ordre de
+ * DESSIN ne suit pas forcément l'ordre de LECTURE. Ce cas-ci reproduit
+ * exactement ça et vérifie que la reconstruction par position (pdfTableauTexte.ts)
+ * retrouve les bonnes bornes, dans le bon ordre — là où l'ancienne extraction
+ * par ordre de dessin échoue (testé manuellement : 0 borne retrouvée).
+ */
+async function testPdfTableauParPosition() {
+  console.log("\n[9] Import PDF — tableau reconstruit par position (cellule par cellule)");
+
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([595, 842]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const fontB = await doc.embedFont(StandardFonts.HelveticaBold);
+
+  page.drawText("PLAN DE MORCELLEMENT", { x: 40, y: 800, size: 16, font: fontB });
+  page.drawText("NICAD", { x: 40, y: 770, size: 8, font });
+  page.drawText("014020030012345", { x: 100, y: 770, size: 10, font });
+
+  // Chaque cellule (Pts / X / Y) est un drawText séparé, alignée par colonne
+  // — pas "B1 240123.4567 1630987.6543" en une seule chaîne.
+  const COL_PT = 40;
+  const COL_X = 100;
+  const COL_Y = 220;
+  const lignesTable: [string, string, string][] = [
+    ["Pts", "X (m)", "Y (m)"],
+    ["B1", "240123.4567", "1630987.6543"],
+    ["B2", "240200.5000", "1631000.2500"],
+    ["B3", "240250.0000", "1630900.0000"],
+    ["B4", "240100.0000", "1630850.0000"],
+  ];
+  let y = 700;
+  for (const [pt, x, yy] of lignesTable) {
+    page.drawText(pt, { x: COL_PT, y, size: 10, font });
+    page.drawText(x, { x: COL_X, y, size: 10, font });
+    page.drawText(yy, { x: COL_Y, y, size: 10, font });
+    y -= 20;
+  }
+  const pdf = Buffer.from(await doc.save());
+
+  const parPosition = await extraireTexteParPosition(pdf);
+  check("l'extraction par position aboutit (pdfjs-dist disponible)", parPosition !== null);
+  if (!parPosition) return;
+
+  const { bornes, erreurs } = parseBornes(parPosition);
+  check(
+    "les 4 bornes cellule-par-cellule sont retrouvées, dans l'ordre",
+    bornes.length === 4 &&
+      bornes.every((b, i) => b.pt === `B${i + 1}`) &&
+      bornes[1].x === 240200.5 &&
+      bornes[1].y === 1631000.25,
+    `${bornes.length} bornes / ${erreurs.length} erreurs : ${JSON.stringify(bornes)}`,
+  );
+}
+
+// --- 10. Import PDF : reconnaissance optique (pdfjs-dist + @napi-rs/canvas + tesseract.js) ---
 
 /**
  * Ne vérifie PAS la justesse de la reconnaissance (dépend de la police, hors
@@ -332,7 +394,7 @@ async function testPdfTexte() {
  * épinglé sur la plage que pdfjs-dist déclare.
  */
 async function testOcr() {
-  console.log("\n[8] Import PDF — reconnaissance optique (OCR)");
+  console.log("\n[10] Import PDF — reconnaissance optique (OCR)");
 
   const canvas = createCanvas(800, 300);
   const ctx = canvas.getContext("2d");
@@ -383,6 +445,7 @@ async function main() {
   testCorrections();
   testTolerance();
   await testPdfTexte();
+  await testPdfTableauParPosition();
   await testOcr();
 
   console.log(`\n${ok} assertion(s) OK, ${ko} en échec.`);
