@@ -27,8 +27,8 @@
 C'est le risque le plus incertain du projet (cf. spec, « Risques résiduels ») : le valider en premier, avant d'investir dans l'orchestration Electron.
 
 **Faits vérifiés (recherche effectuée pendant le brainstorming) :**
-- EDB distribue PostgreSQL pour Windows en **zip sans installateur** : https://www.enterprisedb.com/download-postgresql-binaries (version actuelle utilisée par le projet : PostgreSQL **16**, ex. `postgresql-16.15-1-windows-x64-binaries.zip`).
-- PostGIS distribue un **zip de binaires** (pas seulement un installateur) pour PostgreSQL 16, 64-bit, sur https://download.osgeo.org/postgis/windows/pg16/ (ou via la page https://postgis.net/documentation/getting_started/install_windows/released_versions/) — « les fichiers .zip sont juste les binaires à copier dans l'installation PostgreSQL, puis à activer dans chaque base ». Le projet utilise PostGIS 3.4 en production (`docker-compose.yml` : `postgis/postgis:16-3.4`) ; une version PostGIS plus récente compatible PG16 (ex. 3.6.x) convient aussi — le code applicatif n'utilise que des fonctions `ST_*`/GiST stables, pas de fonctionnalité liée à un correctif mineur précis.
+- EDB distribue PostgreSQL pour Windows en **zip sans installateur**, à une URL directe stable (vérifié par `curl -I`, `HTTP/1.1 200 OK`) : https://get.enterprisedb.com/postgresql/postgresql-16.15-3-windows-x64-binaries.zip (333 Mo ; version actuelle utilisée par le projet, PostgreSQL **16**).
+- PostGIS distribue un **zip de binaires** (pas seulement un installateur) pour PostgreSQL 16, 64-bit, à une URL directe elle aussi stable (même vérification) : https://download.osgeo.org/postgis/windows/pg16/postgis-bundle-pg16-3.6.2x64.zip (124 Mo) — « les fichiers .zip sont juste les binaires à copier dans l'installation PostgreSQL, puis à activer dans chaque base ». Le projet utilise PostGIS 3.4 en production (`docker-compose.yml` : `postgis/postgis:16-3.4`) ; cette version plus récente (3.6.2) compatible PG16 convient aussi — le code applicatif n'utilise que des fonctions `ST_*`/GiST stables, pas de fonctionnalité liée à un correctif mineur précis.
 
 **Files:**
 - Create: `desktop/scripts/assemble-pg-portable.ps1`
@@ -38,13 +38,28 @@ C'est le risque le plus incertain du projet (cf. spec, « Risques résiduels »)
 **Interfaces:**
 - Produces: un dossier `desktop/vendor/pg-portable/` contenant `bin/initdb.exe`, `bin/pg_ctl.exe`, `bin/postgres.exe`, `bin/psql.exe`, `bin/pg_isready.exe`, `lib/postgis-3.*.dll` (ou équivalent), `share/extension/postgis*.control` — structure consommée par Task 2 (`postgres-manager.ts`) et Task 10 (`electron-builder.yml`, `extraResources`).
 
-- [ ] **Step 1 : Téléchargements manuels**
+- [ ] **Step 1 : Télécharger les deux archives**
 
-  Depuis un navigateur (ces pages exigent une interaction humaine, pas d'automatisation fiable) :
-  1. https://www.enterprisedb.com/download-postgresql-binaries → PostgreSQL **16.x**, Windows x86-64, zip « binaries ».
-  2. https://download.osgeo.org/postgis/windows/pg16/ → le zip (pas le `.exe`) le plus récent pour PostgreSQL 16, 64-bit.
+  Les deux fichiers sont accessibles par une URL directe et stable, sans
+  interaction navigateur (vérifié : `curl -I` sur les deux renvoie
+  `HTTP/1.1 200 OK`, `Content-Type: application/zip`) :
 
-  Noter les deux chemins locaux téléchargés (ex. `C:\Downloads\postgresql-16.15-1-windows-x64-binaries.zip` et `C:\Downloads\postgis-bundle-pg16x64-....zip`).
+  ```
+  mkdir -p desktop/vendor/_downloads
+  curl -L -o desktop/vendor/_downloads/postgresql-16-windows-x64-binaries.zip https://get.enterprisedb.com/postgresql/postgresql-16.15-3-windows-x64-binaries.zip
+  curl -L -o desktop/vendor/_downloads/postgis-bundle-pg16x64.zip https://download.osgeo.org/postgis/windows/pg16/postgis-bundle-pg16-3.6.2x64.zip
+  ```
+
+  (`desktop/vendor/_downloads/` est déjà couvert par le `.gitignore` créé au
+  Step 4 ci-dessous — ces deux zips, plusieurs centaines de Mo à eux deux, ne
+  doivent jamais être committés.)
+
+  (Si l'une de ces URL a changé au moment de l'exécution — EDB republie parfois
+  sous un numéro de patch différent, ex. `16.16-1` — retrouver l'URL courante
+  respectivement sur https://www.enterprisedb.com/download-postgresql-binaries
+  et https://download.osgeo.org/postgis/windows/pg16/ : ce sont des pages HTML
+  simples, listant des liens directs, pas des téléchargements nécessitant un
+  navigateur.)
 
 - [ ] **Step 2 : Écrire le script d'assemblage**
 
@@ -115,7 +130,7 @@ C'est le risque le plus incertain du projet (cf. spec, « Risques résiduels »)
 - [ ] **Step 3 : Exécuter le script**
 
   ```
-  powershell -ExecutionPolicy Bypass -File desktop\scripts\assemble-pg-portable.ps1 -PgZip "C:\Downloads\postgresql-16.15-1-windows-x64-binaries.zip" -PostgisZip "C:\Downloads\<zip-postgis-pg16>.zip"
+  powershell -ExecutionPolicy Bypass -File desktop\scripts\assemble-pg-portable.ps1 -PgZip "desktop\vendor\_downloads\postgresql-16-windows-x64-binaries.zip" -PostgisZip "desktop\vendor\_downloads\postgis-bundle-pg16x64.zip"
   ```
 
   Attendu : le script se termine sur `OK : ... contient un PostgreSQL 16 + PostGIS fonctionnel.` — si `CREATE EXTENSION postgis` échoue, la structure fusionnée est incorrecte (vérifier que le zip PostGIS téléchargé est bien la variante « zip », pas seulement le `.exe` StackBuilder) : corriger avant de continuer, ce point bloque tout le reste du plan.
