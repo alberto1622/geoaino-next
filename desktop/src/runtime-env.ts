@@ -76,6 +76,16 @@ export function construireEnvRuntime(options: {
     // l'adresse attendue. Fixe explicitement apres le spread pour ecraser
     // toute valeur ambiante.
     HOSTNAME: "127.0.0.1",
+    // Auth.js v5 valide l'en-tete Host de chaque requete et la rejette
+    // (`UntrustedHost`) sauf opt-in explicite — comportement voulu pour un
+    // deploiement standard, mais qui bloque ici `attendreServeurPret`
+    // (sonde `/api/auth/session`) des que le Host recu ne correspond pas
+    // exactement a ce qui est attendu. `AUTH_TRUST_HOST` est l'equivalent
+    // en variable d'environnement de `trustHost: true` dans la config
+    // NextAuth — evite de toucher `src/lib/auth.ts` (partage avec la
+    // webapp deployee, ou cette variable n'est simplement jamais definie
+    // et n'a donc aucun effet).
+    AUTH_TRUST_HOST: "true",
     GEOAINO_TESSERACT_LANG_PATH: amorcerCacheTesseract(options.cheminRessources),
     // Dans le process principal Electron, `process.execPath` designe le
     // binaire Electron lui-meme, pas un Node.js classique : le relancer via
