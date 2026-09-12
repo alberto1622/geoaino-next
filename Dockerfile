@@ -22,6 +22,12 @@ WORKDIR /app
 # --- Dépendances ---
 FROM base AS deps
 COPY package.json package-lock.json ./
+# electron/electron-builder sont des devDependencies nécessaires seulement à
+# l'empaquetage desktop (bureau autonome) ; cette image web Linux ne les
+# utilise jamais mais `npm ci` installerait quand même le binaire Electron
+# (~100 Mo) via son script postinstall. La variable est respectée par ce
+# script et fait sauter le téléchargement tout en gardant le paquet JS.
+ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 RUN npm ci
 
 # --- Build ---

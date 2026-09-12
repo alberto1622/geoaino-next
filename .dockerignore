@@ -12,3 +12,10 @@ yarn-error.log*
 .pnpm-debug.log*
 Dockerfile
 .dockerignore
+
+# app desktop (Electron/bureau autonome) : Postgres portable embarqué,
+# installateur généré et build electron-builder — sans rapport avec l'image
+# web Docker, mais volumineux (Go) si présents sur la machine de build.
+desktop/vendor
+desktop/dist-installer
+desktop/dist
