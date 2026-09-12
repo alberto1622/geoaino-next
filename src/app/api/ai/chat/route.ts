@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
-import { invokeLLM } from "@/lib/llm";
+import { invokeLLM, LLMIndisponibleError } from "@/lib/llm";
 import { loadGeoJsonFromKey } from "@/lib/geo-storage";
 
 export async function POST(req: NextRequest) {
@@ -84,7 +84,15 @@ ${analysisContext}${parcelCtx}`;
     { role: "user", content: message },
   ];
 
-  const assistantMessage = await invokeLLM({ messages });
+  let assistantMessage: string;
+  try {
+    assistantMessage = await invokeLLM({ messages });
+  } catch (err) {
+    if (err instanceof LLMIndisponibleError) {
+      return NextResponse.json({ error: err.message }, { status: 503 });
+    }
+    throw err;
+  }
 
   if (session?.user?.id && analysisId) {
     await prisma.aiConversation.createMany({

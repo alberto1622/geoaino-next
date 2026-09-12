@@ -10,6 +10,7 @@
     "start": "next start",
     "lint": "eslint",
     "test:verif": "npx tsx scripts/test-verif.ts",
+    "test:llm": "npx tsx scripts/test-llm-offline.ts",
     "build:desktop": "tsc -p desktop/tsconfig.json"
   },
   "dependencies": {
