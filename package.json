@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "build:standalone": "next build && node scripts/copy-standalone-assets.mjs",
+    "build:standalone": "cross-env GEOAINO_DESKTOP_BUILD=1 next build && node scripts/copy-standalone-assets.mjs",
     "start": "next start",
     "lint": "eslint",
     "test:verif": "npx tsx scripts/test-verif.ts",
@@ -82,6 +82,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "cross-env": "^10.1.0",
     "electron": "^44.3.0",
     "electron-builder": "^26.15.3",
     "eslint": "^9",

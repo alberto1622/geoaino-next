@@ -5,6 +5,18 @@ directories:
 files:
   - desktop/dist/**/*
   - package.json
+  # electron-builder copie par defaut l'arbre production node_modules complet
+  # dans app.asar, independamment de `files` ci-dessus (revue finale,
+  # Finding 3) : une TROISIEME copie de node_modules, a cote de
+  # `resources/app/node_modules` (trace Next standalone) et
+  # `resources/node_modules` (CLI Prisma) — 555 Mo constates dans
+  # app.asar.unpacked pour des paquets (@img, @napi-rs, @next, @prisma,
+  # jszip, prisma) jamais lus par `desktop/src/main.ts`, dont la seule
+  # dependance runtime reelle (hors Node/Electron natifs) est `bcryptjs`.
+  # Le motif `!node_modules/**/*` retire la copie par defaut ; l'inclusion
+  # explicite qui suit ne rajoute que ce qui est effectivement utilise.
+  - "!node_modules/**/*"
+  - node_modules/bcryptjs/**/*
 extraResources:
   - from: desktop/vendor/pg-portable
     to: pg-portable

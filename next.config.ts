@@ -1,7 +1,17 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: "standalone",
+  // `output: "standalone"` ne doit s'appliquer QU'au build desktop
+  // (`npm run build:standalone`, invoque par `dist:desktop`) : le Dockerfile
+  // de l'app web lance un `next build` normal puis `next start` (jamais le
+  // `.next/standalone/server.js`), donc un `standalone` inconditionnel
+  // faisait produire a l'image Docker web un `.next/standalone/node_modules`
+  // trace complet en plus du `.next` normal — copie entiere et jamais lue,
+  // doublant inutilement la taille de l'image. `GEOAINO_DESKTOP_BUILD` n'est
+  // positionnee que par le script `build:standalone` (cross-env, pour rester
+  // portable Windows/POSIX) ; un `next build` nu (web/Docker) laisse `output`
+  // a `undefined`, comportement par defaut de Next.
+  output: process.env.GEOAINO_DESKTOP_BUILD ? "standalone" : undefined,
   // Sans ceci, Next.js remonte l'arborescence a la recherche d'un
   // lockfile pour deviner la racine de tracage et peut tomber sur un
   // lockfile sans rapport plus haut dans l'arborescence (ex. un
@@ -47,12 +57,16 @@ const nextConfig: NextConfig = {
   // `desktop/` (dont `desktop/vendor/pg-portable`, ~2 Go) — un gonflement
   // multi-Go entierement inutile, puisque `desktop/**` est deja embarque
   // separement et correctement via les `extraResources` de
-  // `desktop/electron-builder.yml`. Cette exclusion n'arrete que ce
-  // balayage automatique et inutile du traceur Next ; elle n'a aucun
-  // changement fonctionnel pour l'app desktop elle-meme, et ne concerne
-  // pas (a elle seule) un autre bug distinct constate separement : la copie
-  // extraResources `.next/standalone -> app` qui omet par ailleurs tout le
-  // sous-dossier `node_modules` de la sortie standalone.
+  // `desktop/electron-builder.yml`. Le meme balayage conservateur embarquait
+  // aussi (revue finale, Finding 2) tout le reste de l'arbre projet sans
+  // rapport avec le runtime standalone : `src/` (Next compile deja son
+  // contenu utile dans `.next/server`, la source brute n'est jamais lue a
+  // l'execution), `scripts/`, `ML/`, `traitements_process/` (avec un PDF de
+  // documentation interne), `docs/`, des `.md` et `.geojson` epars, et meme
+  // un `hs_err_pid*.log` de crash JVM laisse par une machine de build —
+  // livres tels quels aux clients dans l'installateur. Cette exclusion
+  // n'arrete que ce balayage automatique et inutile du traceur Next ; elle
+  // n'a aucun changement fonctionnel pour l'app desktop elle-meme.
   // La cle `"**"` ci-dessous est LOAD-BEARING et n'est PAS interchangeable
   // avec l'idiome documente par Next `/*` : verifie dans le code de Next
   // (`collect-build-traces.js`) que seule `"**"` atteint la liste
@@ -63,7 +77,17 @@ const nextConfig: NextConfig = {
   // picomatch. Ne PAS « simplifier » cette cle vers `/*` : cela reactiverait
   // silencieusement le gonflement multi-Go decrit ci-dessus.
   outputFileTracingExcludes: {
-    "**": ["./desktop/**"],
+    "**": [
+      "./desktop/**",
+      "./src/**",
+      "./scripts/**",
+      "./ML/**",
+      "./traitements_process/**",
+      "./docs/**",
+      "./*.md",
+      "./*.geojson",
+      "./*.log",
+    ],
   },
   experimental: {
     serverActions: { bodySizeLimit: "500mb" },
