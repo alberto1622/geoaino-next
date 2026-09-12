@@ -67,5 +67,12 @@ export function construireEnvRuntime(options: {
     NEXTAUTH_URL: `http://127.0.0.1:${options.portNext}`,
     NEXTAUTH_SECRET: secretAuthPersiste(),
     GEOAINO_TESSERACT_LANG_PATH: amorcerCacheTesseract(options.cheminRessources),
+    // Dans le process principal Electron, `process.execPath` designe le
+    // binaire Electron lui-meme, pas un Node.js classique : le relancer via
+    // `spawn`/`spawnSync` sans cette variable demarre une seconde instance
+    // complete de l'app plutot que d'executer le script donne comme Node.
+    // Necessaire pour tout process enfant lance avec `process.execPath`
+    // (serveur Next standalone, CLI Prisma pour les migrations).
+    ELECTRON_RUN_AS_NODE: "1",
   };
 }

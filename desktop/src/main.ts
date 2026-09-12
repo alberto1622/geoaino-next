@@ -49,7 +49,11 @@ function appliquerMigrations(env: NodeJS.ProcessEnv): void {
       "--schema",
       path.join(cheminRessources, "prisma", "schema.prisma"),
     ],
-    { env, cwd: cheminRessources },
+    // `timeout` : filet de securite contre un blocage indefini (cf. Tasks 1/2
+    // pour des cas similaires d'attente non bornee) — une migration qui n'a
+    // pas termine en 60s est anormale et doit echouer plutot que geler
+    // durablement le demarrage de l'app.
+    { env, cwd: cheminRessources, timeout: 60_000 },
   );
   if (migrate.status !== 0) {
     throw new Error(`prisma migrate deploy a echoue : ${migrate.stderr?.toString() || migrate.stdout?.toString()}`);
@@ -81,7 +85,11 @@ async function amorcerCompteAdmin(port: number): Promise<string | null> {
   const insertion = executerPsql(port, [
     "-d", "geoaino",
     "-c",
-    `INSERT INTO "User" (id, email, password, role, "lastSignedIn") VALUES (gen_random_uuid()::text, '${email}', '${hachage}', 'ADMIN', now());`,
+    // "updatedAt" est NOT NULL sans DEFAULT en base (@updatedAt n'est gere
+    // qu'au niveau applicatif par Prisma Client, jamais absent ici) : doit
+    // etre fourni explicitement, sinon l'insertion echoue des le tout
+    // premier lancement.
+    `INSERT INTO "User" (id, email, password, role, "lastSignedIn", "updatedAt") VALUES (gen_random_uuid()::text, '${email}', '${hachage}', 'ADMIN', now(), now());`,
   ]);
   if (insertion.status !== 0) {
     throw new Error(`Creation du compte ADMIN initial echouee : ${insertion.stderr?.toString()}`);
@@ -132,6 +140,10 @@ async function demarrerApplication(): Promise<void> {
 app.on("ready", () => {
   demarrerApplication().catch((err) => {
     console.error("Echec du demarrage :", err);
+    // Une app GUI empaquetee n'a pas de console visible : sans cette boite
+    // de dialogue, un echec de demarrage (ex. Critical #1 avant correctif)
+    // disparaissait silencieusement, sans aucun retour pour l'operateur.
+    dialog.showErrorBox("Echec du demarrage", String(err));
     app.quit();
   });
 });
@@ -142,11 +154,17 @@ app.on("before-quit", (event) => {
   arretEnCours = true;
   event.preventDefault();
   (async () => {
-    if (serveurNext) await serveurNext.arreter();
-    if (clusterPg) await clusterPg.arreter();
-    serveurNext = null;
-    clusterPg = null;
-    app.quit();
+    // `finally` : si l'arret du serveur Next ou du cluster Postgres rejette,
+    // l'app doit tout de meme redevenir quittable (sinon seul le
+    // Gestionnaire des taches permet de la fermer, avec Postgres reste actif).
+    try {
+      if (serveurNext) await serveurNext.arreter();
+      if (clusterPg) await clusterPg.arreter();
+    } finally {
+      serveurNext = null;
+      clusterPg = null;
+      app.quit();
+    }
   })();
 });
 
