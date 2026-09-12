@@ -1,3 +1,8 @@
+// desktop : `prisma generate` cible nativement la machine qui l'execute.
+// Le bureau autonome est construit sur/pour Windows (cf. docs/superpowers/
+// specs/2026-09-11-bureau-autonome-design.md) : aucun `binaryTargets`
+// explicite n'est necessaire tant que le build reste natif. A revoir si
+// une CI cross-plateforme est introduite un jour.
 generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["postgresqlExtensions"]
