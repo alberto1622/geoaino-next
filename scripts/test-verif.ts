@@ -13,6 +13,8 @@
  *  4. corrections PERMUTER_XY / DIVISER_1000 ;
  *  6. tolérance de superficie (limite, > T, > 2T, plancher).
  */
+import path from "node:path";
+import { existsSync } from "node:fs";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { createCanvas } from "@napi-rs/canvas";
 import { prisma } from "../src/lib/prisma";
@@ -558,6 +560,52 @@ async function testOcrImage() {
   );
 }
 
+// --- 13. OCR image avec langPath local (bureau autonome) -----------------
+
+/**
+ * Verifie que passer GEOAINO_TESSERACT_LANG_PATH fait toujours fonctionner
+ * le pipeline (chemin emprunte par le bureau autonome, cf. ocr.ts). Ne
+ * prouve pas l'absence de reseau (hors de portee d'un test unitaire sans
+ * mock reseau) — la verification hors-ligne reelle se fait manuellement
+ * sur l'app empaquetee (cf. Task 11, checklist de desinstallation/tests).
+ */
+async function testOcrImageLangPathLocal() {
+  console.log("\n[13] Import image directe — langPath local (desktop)");
+
+  const cheminLangue = path.resolve(__dirname, "../desktop/vendor/tesseract-lang");
+  if (!existsSync(path.join(cheminLangue, "eng.traineddata.gz"))) {
+    console.log("  (desktop/vendor/tesseract-lang absent — executer Task 5, Step 1 ; test ignore)");
+    return;
+  }
+
+  const ancien = process.env.GEOAINO_TESSERACT_LANG_PATH;
+  process.env.GEOAINO_TESSERACT_LANG_PATH = cheminLangue;
+  try {
+    const canvas = createCanvas(800, 100);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, 800, 100);
+    ctx.fillStyle = "#000000";
+    ctx.font = "28px sans-serif";
+    ctx.fillText("B1 500000.0000 1600100.0000", 20, 50);
+    const png = canvas.toBuffer("image/png");
+
+    let erreur: unknown = null;
+    try {
+      await ocrImageCoordonnees(png);
+    } catch (e) {
+      erreur = e;
+    }
+    check(
+      "le pipeline fonctionne avec un langPath local",
+      erreur === null,
+      erreur instanceof Error ? erreur.message : String(erreur),
+    );
+  } finally {
+    process.env.GEOAINO_TESSERACT_LANG_PATH = ancien;
+  }
+}
+
 async function main() {
   await testAllerRetour();
   testParsing();
@@ -569,6 +617,7 @@ async function main() {
   await testPdfCartouche();
   await testOcr();
   await testOcrImage();
+  await testOcrImageLangPathLocal();
 
   console.log(`\n${ok} assertion(s) OK, ${ko} en échec.`);
   await prisma.$disconnect();

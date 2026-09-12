@@ -39,6 +39,14 @@ const ECHELLE_RASTER = 4;
 const LISTE_BLANCHE = "0123456789.B";
 
 /**
+ * Chemin local des donnees de langue tesseract (eng.traineddata.gz),
+ * fourni par le process principal Electron sur le bureau autonome (cf.
+ * desktop/src/runtime-env.ts). Absent en web : comportement inchange,
+ * tesseract.js recupere la donnee sur son CDN par defaut.
+ */
+const CHEMIN_LANGUE_OCR = process.env.GEOAINO_TESSERACT_LANG_PATH;
+
+/**
  * Charge un paquet optionnel. Le spécificateur passe par une **variable** :
  * c'est délibéré, un `import()` littéral serait résolu statiquement par le
  * bundler et l'absence du paquet deviendrait une erreur de compilation, alors
@@ -80,6 +88,7 @@ async function reconnaitreImage(
 ): Promise<string> {
   const { data } = await tesseract.recognize(image, "eng", {
     tessedit_char_whitelist: LISTE_BLANCHE,
+    ...(CHEMIN_LANGUE_OCR ? { langPath: CHEMIN_LANGUE_OCR, cachePath: CHEMIN_LANGUE_OCR } : {}),
   });
   return nettoyerTexteOcr(data?.text ?? "");
 }
