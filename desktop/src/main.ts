@@ -39,15 +39,35 @@ function assurerBaseEtExtension(port: number): void {
   }
 }
 
-function appliquerMigrations(env: NodeJS.ProcessEnv): void {
+// L'historique `prisma/migrations/` contient une lacune reelle et anterieure
+// a ce correctif : aucune migration ne cree la table `limite_section`, alors
+// qu'une migration ulterieure tente d'indexer cette meme table — contre une
+// base fraichement vide, `prisma migrate deploy` echoue donc systematiquement
+// (P3018 : relation "limite_section" does not exist). Corriger l'historique
+// partage toucherait aussi la base de la webapp deployee ; l'utilisateur a
+// choisi plutot de faire demarrer l'app desktop autrement.
+// `prisma db push` compare directement `schema.prisma` a l'etat reel de la
+// base et applique la difference : il ne rejoue jamais l'historique de
+// migrations, donc la lacune ci-dessus ne le concerne pas — il fonctionne
+// correctement meme sur une base fraiche/vide.
+// Contrepartie acceptee : `--accept-data-loss` est necessaire pour rester
+// non-interactif (aucun prompt possible dans une app GUI empaquetee). Sans
+// consequence au tout premier lancement (base vide), mais signifie qu'une
+// evolution de schema qui supprimerait des donnees lors d'une mise a jour
+// ulterieure de l'app s'appliquerait silencieusement plutot que de demander
+// confirmation — compromis assume explicitement par l'utilisateur, pas un
+// oubli.
+function synchroniserSchema(env: NodeJS.ProcessEnv): void {
   const migrate = spawnSync(
     process.execPath,
     [
       path.join(cheminRessources, "prisma-cli", "build", "index.js"),
-      "migrate",
-      "deploy",
+      "db",
+      "push",
       "--schema",
       path.join(cheminRessources, "prisma", "schema.prisma"),
+      "--accept-data-loss",
+      "--skip-generate",
     ],
     // `timeout` : filet de securite contre un blocage indefini (cf. Tasks 1/2
     // pour des cas similaires d'attente non bornee) — une migration qui n'a
@@ -56,7 +76,7 @@ function appliquerMigrations(env: NodeJS.ProcessEnv): void {
     { env, cwd: cheminRessources, timeout: 60_000 },
   );
   if (migrate.status !== 0) {
-    throw new Error(`prisma migrate deploy a echoue : ${migrate.stderr?.toString() || migrate.stdout?.toString()}`);
+    throw new Error(`prisma db push a echoue : ${migrate.stderr?.toString() || migrate.stdout?.toString()}`);
   }
 }
 
@@ -67,7 +87,7 @@ function appliquerMigrations(env: NodeJS.ProcessEnv): void {
  * demarrage). Insertion SQL directe plutot que via Prisma Client : le
  * process principal Electron n'a besoin d'aucune autre dependance a
  * Prisma que le CLI deja invoque pour les migrations (cf.
- * appliquerMigrations). Le hachage utilise `bcryptjs` — meme algorithme
+ * synchroniserSchema). Le hachage utilise `bcryptjs` — meme algorithme
  * que `CredentialsProvider` (src/lib/auth.ts) — pour qu'un mot de passe
  * cree ici s'authentifie normalement une fois l'app ouverte.
  * Renvoie `email / mot de passe` si un compte a ete cree, sinon `null`.
@@ -113,7 +133,7 @@ async function demarrerApplication(): Promise<void> {
     cheminRessources,
   });
 
-  appliquerMigrations(env);
+  synchroniserSchema(env);
 
   const identifiantsInitiaux = await amorcerCompteAdmin(clusterPg.port);
   if (identifiantsInitiaux) {
