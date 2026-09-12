@@ -13,7 +13,9 @@ extraResources:
   - from: .next/standalone
     to: app
   - from: node_modules/prisma
-    to: prisma-cli
+    to: node_modules/prisma
+  - from: node_modules/@prisma
+    to: node_modules/@prisma
   - from: prisma
     to: prisma
 win:

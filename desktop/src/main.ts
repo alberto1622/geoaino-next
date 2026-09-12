@@ -61,7 +61,7 @@ function synchroniserSchema(env: NodeJS.ProcessEnv): void {
   const migrate = spawnSync(
     process.execPath,
     [
-      path.join(cheminRessources, "prisma-cli", "build", "index.js"),
+      path.join(cheminRessources, "node_modules", "prisma", "build", "index.js"),
       "db",
       "push",
       "--schema",
