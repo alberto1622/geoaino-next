@@ -37,6 +37,25 @@ const nextConfig: NextConfig = {
       "./node_modules/@napi-rs/canvas-win32-x64-msvc/**/*",
     ],
   },
+  // `src/lib/import/storage.ts` construit UPLOAD_DIR a partir d'un chemin
+  // DYNAMIQUE (process.env.IMPORT_UPLOADS_DIR ?? path.join(process.cwd(), ...))
+  // passe a fs.mkdir/fs.readFile : le traceur de fichiers de Next ne peut pas
+  // resoudre ce chemin statiquement, donc il balaie par prudence tout
+  // l'arbre sous `outputFileTracingRoot` (cf. ci-dessus, fixe a process.cwd()
+  // pour Task 9/10) des qu'une route importe ce module. Consequence
+  // concrete constatee : `.next/standalone` embarquait une copie complete de
+  // `desktop/` (dont `desktop/vendor/pg-portable`, ~2 Go) — un gonflement
+  // multi-Go entierement inutile, puisque `desktop/**` est deja embarque
+  // separement et correctement via les `extraResources` de
+  // `desktop/electron-builder.yml`. Cette exclusion n'arrete que ce
+  // balayage automatique et inutile du traceur Next ; elle n'a aucun
+  // changement fonctionnel pour l'app desktop elle-meme, et ne concerne
+  // pas (a elle seule) un autre bug distinct constate separement : la copie
+  // extraResources `.next/standalone -> app` qui omet par ailleurs tout le
+  // sous-dossier `node_modules` de la sortie standalone.
+  outputFileTracingExcludes: {
+    "**": ["./desktop/**"],
+  },
   experimental: {
     serverActions: { bodySizeLimit: "500mb" },
   },
