@@ -58,7 +58,7 @@ function assurerBaseEtExtension(port: number): void {
 // confirmation — compromis assume explicitement par l'utilisateur, pas un
 // oubli.
 function synchroniserSchema(env: NodeJS.ProcessEnv): void {
-  const migrate = spawnSync(
+  const sync = spawnSync(
     process.execPath,
     [
       path.join(cheminRessources, "node_modules", "prisma", "build", "index.js"),
@@ -70,13 +70,50 @@ function synchroniserSchema(env: NodeJS.ProcessEnv): void {
       "--skip-generate",
     ],
     // `timeout` : filet de securite contre un blocage indefini (cf. Tasks 1/2
-    // pour des cas similaires d'attente non bornee) — une migration qui n'a
-    // pas termine en 60s est anormale et doit echouer plutot que geler
-    // durablement le demarrage de l'app.
+    // pour des cas similaires d'attente non bornee) — une synchronisation de
+    // schema qui n'a pas termine en 60s est anormale et doit echouer plutot
+    // que geler durablement le demarrage de l'app.
     { env, cwd: cheminRessources, timeout: 60_000 },
   );
-  if (migrate.status !== 0) {
-    throw new Error(`prisma db push a echoue : ${migrate.stderr?.toString() || migrate.stdout?.toString()}`);
+  if (sync.status !== 0) {
+    // `sync.error` : renseigne specifiquement en cas de timeout (le process
+    // est alors tue avant meme de produire un stdout/stderr exploitable —
+    // sans ce champ, l'erreur levee ici serait vide et donc indiagnostiquable).
+    throw new Error(
+      `prisma db push a echoue : ${sync.stderr?.toString() || sync.stdout?.toString() || sync.error?.message}`,
+    );
+  }
+}
+
+// `db push` diffe `schema.prisma` contre la base reelle (cf. synchroniserSchema
+// ci-dessus) mais ne peut pas creer les 8 index spatiaux GIST du projet : les
+// colonnes de geometrie sont typees `Unsupported(...)` en Prisma (limitation
+// du schema Prisma lui-meme, pas de `db push`), donc aucun index dessus ne
+// peut etre exprime dans schema.prisma — seules les migrations SQL manuelles
+// (`prisma/migrations/**/migration.sql`) les contenaient jusqu'ici, et `db
+// push` ne les rejoue jamais. Consequence si on ne fait rien : chaque table
+// geometrique se retrouve creee SANS son index GIST, invisible sur une base
+// vide de smoke-test mais catastrophique en usage reel (jointures spatiales
+// sur des dizaines/centaines de milliers de parcelles qui degenerent en scan
+// sequentiel). Ces `CREATE INDEX IF NOT EXISTS` sont executes a CHAQUE
+// lancement (pas seulement le premier) : idempotents par construction, et
+// auto-reparateurs si une future mise a jour de l'app par `db push
+// --accept-data-loss` supprimait un jour l'un de ces index en modifiant le
+// schema.
+function creerIndexSpatiaux(port: number): void {
+  const instructions = [
+    'CREATE INDEX IF NOT EXISTS "Parcelle_geom_idx" ON "Parcelle" USING GIST ("geom");',
+    'CREATE INDEX IF NOT EXISTS "cad_communes_2013_geom_idx" ON "cad_communes_2013" USING GIST ("geom");',
+    'CREATE INDEX IF NOT EXISTS "cad_communes_2026_geom_idx" ON "cad_communes_2026" USING GIST ("geom");',
+    'CREATE INDEX IF NOT EXISTS "cad_sections_geom_idx" ON "cad_sections" USING GIST ("geom");',
+    'CREATE INDEX IF NOT EXISTS "cad_parcelles_geom_idx" ON "cad_parcelles" USING GIST ("geom");',
+    'CREATE INDEX IF NOT EXISTS "limite_section_geom_idx" ON "limite_section" USING GIST ("geom");',
+    'CREATE INDEX IF NOT EXISTS "cad_arrondissements_geom_idx" ON "cad_arrondissements" USING GIST ("geom");',
+    'CREATE INDEX IF NOT EXISTS "cad_verifications_geom_idx" ON "cad_verifications" USING GIST ("geom");',
+  ].join(" ");
+  const resultat = executerPsql(port, ["-d", "geoaino", "-c", instructions]);
+  if (resultat.status !== 0) {
+    throw new Error(`Creation des index spatiaux echouee : ${resultat.stderr?.toString()}`);
   }
 }
 
@@ -86,7 +123,7 @@ function synchroniserSchema(env: NodeJS.ProcessEnv): void {
  * aucun moyen de se connecter a une installation neuve (spec, § Cycle de
  * demarrage). Insertion SQL directe plutot que via Prisma Client : le
  * process principal Electron n'a besoin d'aucune autre dependance a
- * Prisma que le CLI deja invoque pour les migrations (cf.
+ * Prisma que le CLI deja invoque pour la synchronisation du schema (cf.
  * synchroniserSchema). Le hachage utilise `bcryptjs` — meme algorithme
  * que `CredentialsProvider` (src/lib/auth.ts) — pour qu'un mot de passe
  * cree ici s'authentifie normalement une fois l'app ouverte.
@@ -134,6 +171,7 @@ async function demarrerApplication(): Promise<void> {
   });
 
   synchroniserSchema(env);
+  creerIndexSpatiaux(clusterPg.port);
 
   const identifiantsInitiaux = await amorcerCompteAdmin(clusterPg.port);
   if (identifiantsInitiaux) {

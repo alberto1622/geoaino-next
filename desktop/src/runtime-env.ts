@@ -92,7 +92,7 @@ export function construireEnvRuntime(options: {
     // `spawn`/`spawnSync` sans cette variable demarre une seconde instance
     // complete de l'app plutot que d'executer le script donne comme Node.
     // Necessaire pour tout process enfant lance avec `process.execPath`
-    // (serveur Next standalone, CLI Prisma pour les migrations).
+    // (serveur Next standalone, CLI Prisma pour la synchronisation du schema).
     ELECTRON_RUN_AS_NODE: "1",
   };
 }

@@ -53,6 +53,15 @@ const nextConfig: NextConfig = {
   // pas (a elle seule) un autre bug distinct constate separement : la copie
   // extraResources `.next/standalone -> app` qui omet par ailleurs tout le
   // sous-dossier `node_modules` de la sortie standalone.
+  // La cle `"**"` ci-dessous est LOAD-BEARING et n'est PAS interchangeable
+  // avec l'idiome documente par Next `/*` : verifie dans le code de Next
+  // (`collect-build-traces.js`) que seule `"**"` atteint la liste
+  // d'exclusion du bundle `next-server` (sans l'option `contains: true`
+  // que `/*` necessiterait pour produire le meme effet) ; le chemin de
+  // filtrage par route (l'autre mecanisme cense honorer `/*`) est par
+  // ailleurs inerte sur Windows a cause d'une incompatibilite backslash vs
+  // picomatch. Ne PAS « simplifier » cette cle vers `/*` : cela reactiverait
+  // silencieusement le gonflement multi-Go decrit ci-dessus.
   outputFileTracingExcludes: {
     "**": ["./desktop/**"],
   },
