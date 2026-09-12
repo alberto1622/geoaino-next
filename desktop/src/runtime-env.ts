@@ -66,6 +66,16 @@ export function construireEnvRuntime(options: {
     DATABASE_URL: `postgresql://postgres@127.0.0.1:${options.portPostgres}/geoaino?schema=public`,
     NEXTAUTH_URL: `http://127.0.0.1:${options.portNext}`,
     NEXTAUTH_SECRET: secretAuthPersiste(),
+    // Le `server.js` standalone de Next se lie a `process.env.HOSTNAME`
+    // quand elle est definie (au lieu de retomber sur `0.0.0.0`) — or toute
+    // l'architecture de l'app suppose une adresse loopback uniquement
+    // (Postgres, `attendreServeurPret`, la BrowserWindow visent tous
+    // `127.0.0.1`). Un `HOSTNAME` ambiant herite de `...process.env`
+    // (ex. nom de machine Windows resolu vers un adaptateur reseau virtuel
+    // WSL/Hyper-V) rendrait alors le serveur silencieusement injoignable a
+    // l'adresse attendue. Fixe explicitement apres le spread pour ecraser
+    // toute valeur ambiante.
+    HOSTNAME: "127.0.0.1",
     GEOAINO_TESSERACT_LANG_PATH: amorcerCacheTesseract(options.cheminRessources),
     // Dans le process principal Electron, `process.execPath` designe le
     // binaire Electron lui-meme, pas un Node.js classique : le relancer via
