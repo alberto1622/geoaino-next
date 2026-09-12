@@ -11,7 +11,8 @@
     "lint": "eslint",
     "test:verif": "npx tsx scripts/test-verif.ts",
     "test:llm": "npx tsx scripts/test-llm-offline.ts",
-    "build:desktop": "tsc -p desktop/tsconfig.json"
+    "build:desktop": "tsc -p desktop/tsconfig.json",
+    "dist:desktop": "npm run build:standalone && npm run build:desktop && electron-builder --config desktop/electron-builder.yml"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",

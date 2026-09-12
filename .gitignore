@@ -60,3 +60,7 @@ __pycache__/
 # « Vérifier des bornes », voie pdf-ocr) — mis en cache au répertoire courant
 # par défaut, reproductible à la demande, pas versionné (~5 Mo par langue).
 *.traineddata
+
+# electron-builder : sortie d'empaquetage desktop (installateur NSIS,
+# win-unpacked) — régénérée à la demande via `npm run dist:desktop`.
+desktop/dist-installer/

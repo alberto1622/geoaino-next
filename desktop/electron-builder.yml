@@ -1,0 +1,24 @@
+appId: com.geoaino.desktop
+productName: GeoAino
+directories:
+  output: desktop/dist-installer
+files:
+  - desktop/dist/**/*
+  - package.json
+extraResources:
+  - from: desktop/vendor/pg-portable
+    to: pg-portable
+  - from: desktop/vendor/tesseract-lang
+    to: tesseract-lang
+  - from: .next/standalone
+    to: app
+  - from: node_modules/prisma
+    to: prisma-cli
+  - from: prisma
+    to: prisma
+win:
+  target: nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
