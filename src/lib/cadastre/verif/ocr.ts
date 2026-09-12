@@ -39,14 +39,6 @@ const ECHELLE_RASTER = 4;
 const LISTE_BLANCHE = "0123456789.B";
 
 /**
- * Chemin local des donnees de langue tesseract (eng.traineddata.gz),
- * fourni par le process principal Electron sur le bureau autonome (cf.
- * desktop/src/runtime-env.ts). Absent en web : comportement inchange,
- * tesseract.js recupere la donnee sur son CDN par defaut.
- */
-const CHEMIN_LANGUE_OCR = process.env.GEOAINO_TESSERACT_LANG_PATH;
-
-/**
  * Charge un paquet optionnel. Le spécificateur passe par une **variable** :
  * c'est délibéré, un `import()` littéral serait résolu statiquement par le
  * bundler et l'absence du paquet deviendrait une erreur de compilation, alors
@@ -81,14 +73,21 @@ async function chargerTesseract(): Promise<any | null> {
  * prête (PNG/JPEG…), liste blanche restreinte aux caractères d'un tableau de
  * bornes. Isolé pour être partagé entre la voie PDF (rendu de page,
  * `ocrTableauCoordonnees`) et la voie image directe (`ocrImageCoordonnees`).
+ *
+ * Lit GEOAINO_TESSERACT_LANG_PATH à **l'appel** (pas au chargement du module),
+ * de sorte qu'un test ou une tâche peut basculer le chemin de langue entre
+ * appels. En production, cette variable est fixée par le process Electron avant
+ * le démarrage (cf. desktop/src/runtime-env.ts), et son absence signifie
+ * « récupérer les données sur le CDN tesseract par défaut ».
  */
 async function reconnaitreImage(
   tesseract: any,
   image: Buffer,
 ): Promise<string> {
+  const cheminLangueOcr = process.env.GEOAINO_TESSERACT_LANG_PATH;
   const { data } = await tesseract.recognize(image, "eng", {
     tessedit_char_whitelist: LISTE_BLANCHE,
-    ...(CHEMIN_LANGUE_OCR ? { langPath: CHEMIN_LANGUE_OCR, cachePath: CHEMIN_LANGUE_OCR } : {}),
+    ...(cheminLangueOcr ? { langPath: cheminLangueOcr, cachePath: cheminLangueOcr } : {}),
   });
   return nettoyerTexteOcr(data?.text ?? "");
 }
