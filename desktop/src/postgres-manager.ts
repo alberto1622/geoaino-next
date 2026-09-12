@@ -76,7 +76,22 @@ export async function demarrerPostgresPortable(options: {
   if (start.status !== 0) {
     throw new Error(`pg_ctl start a echoue (voir ${path.join(dataDir, "server.log")}).`);
   }
-  await attendrePret(binDir, port);
+  try {
+    await attendrePret(binDir, port);
+  } catch (e) {
+    // `pg_ctl start` a reussi (le process postgres.exe tourne) mais
+    // `attendrePret` a expire avant que le serveur ne reponde : sans cet
+    // arret explicite, ce process reste orphelin (jamais assigne a
+    // `clusterPg` dans main.ts, donc invisible au nettoyage de
+    // `before-quit`). Au prochain lancement, `nettoyerVerrouOrphelin`
+    // constate a raison que le PID du verrou est toujours vivant et refuse
+    // de le supprimer : `pg_ctl start` echoue alors identiquement a chaque
+    // tentative suivante, ce qui brique l'installation jusqu'a un kill
+    // manuel via le Gestionnaire des taches. On arrete donc le cluster
+    // qu'on vient de demarrer avant de propager l'erreur.
+    spawnSync(pgCtl, ["-D", dataDir, "-m", "immediate", "stop"], { stdio: "ignore" });
+    throw e;
+  }
 
   return {
     port,

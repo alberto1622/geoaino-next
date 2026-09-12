@@ -2,11 +2,12 @@ import { app, BrowserWindow, dialog } from "electron";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { hash } from "bcryptjs";
 import { demarrerPostgresPortable, type ClusterPostgres } from "./postgres-manager";
 import { trouverPortLibre } from "./port-utils";
 import { demarrerNextStandalone, attendreServeurPret, type ServeurNext } from "./next-server";
-import { construireEnvRuntime, dossierPgData, dossierLogs } from "./runtime-env";
+import { construireEnvRuntime, dossierPgData, dossierLogs, cheminIdentifiantsInitiaux } from "./runtime-env";
 
 const CANDIDATS_PORT_PG = [54329, 54330, 54331, 54332, 54333];
 const CANDIDATS_PORT_NEXT = [4173, 4174, 4175, 4176, 4177];
@@ -18,6 +19,26 @@ const cheminRessources = app.isPackaged
 let clusterPg: ClusterPostgres | null = null;
 let serveurNext: ServeurNext | null = null;
 let fenetre: BrowserWindow | null = null;
+
+// Sans verrou mono-instance, un double-clic (ou un raccourci lance deux fois)
+// demarre une deuxieme instance Electron qui tente son propre `pg_ctl start`
+// contre le MEME repertoire de donnees que la premiere instance deja active
+// — echec garanti, avec une boite de dialogue d'erreur brute et alarmante
+// (cf. Finding 6 revue finale) au lieu de simplement rebasculer sur la
+// fenetre deja ouverte. `requestSingleInstanceLock` doit etre appele avant
+// tout autre traitement significatif : la seconde instance doit quitter
+// immediatement sans jamais tenter de demarrer son propre cluster Postgres.
+const verrouAcquis = app.requestSingleInstanceLock();
+if (!verrouAcquis) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (fenetre) {
+      if (fenetre.isMinimized()) fenetre.restore();
+      fenetre.focus();
+    }
+  });
+}
 
 function executerPsql(port: number, args: string[]) {
   const psql = path.join(cheminRessources, "pg-portable", "bin", "psql.exe");
@@ -175,11 +196,34 @@ async function demarrerApplication(): Promise<void> {
 
   const identifiantsInitiaux = await amorcerCompteAdmin(clusterPg.port);
   if (identifiantsInitiaux) {
+    // Filet de secours pour un operateur non technicien qui lirait mal le
+    // mot de passe affiche une seule fois ci-dessous : sans cette copie sur
+    // disque, la seule recuperation possible etait de reinitialiser tout
+    // `pgdata` (perte de donnees). Ce n'est pas un enjeu de securite au-dela
+    // de ce que la boite de dialogue expose deja — quiconque a acces a
+    // `%APPDATA%\GeoAino` a de toute facon deja acces complet au repertoire
+    // de donnees Postgres local.
+    const cheminIdentifiants = cheminIdentifiantsInitiaux();
+    // `mode: 0o600` : restreint la lecture/ecriture au seul proprietaire du
+    // fichier — correct et significatif si ce code tourne un jour sous
+    // WSL/POSIX, mais un no-op de fait sur NTFS natif Windows (qui n'utilise
+    // pas les bits POSIX ; une vraie restriction demanderait un appel ACL
+    // separe via `icacls`/PowerShell, hors perimetre de ce seul fichier vu
+    // que `dossierDonnees()` entier — `auth.secret`, `pgdata` — partage deja
+    // la meme absence de durcissement aujourd'hui). Best-effort assume, pas
+    // une garantie sur Windows.
+    writeFileSync(
+      cheminIdentifiants,
+      `Identifiants administrateur initiaux (GeoAino)\n${identifiantsInitiaux}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
     dialog.showMessageBoxSync({
       type: "info",
       title: "Compte administrateur cree",
       message: "Un compte administrateur a ete cree pour cette installation.",
-      detail: `Identifiants (a noter, non recuperables ensuite) :\n${identifiantsInitiaux}`,
+      detail:
+        `Identifiants (a noter, non recuperables ensuite) :\n${identifiantsInitiaux}\n\n` +
+        `Ces identifiants ont egalement ete enregistres dans :\n${cheminIdentifiants}`,
     });
   }
 

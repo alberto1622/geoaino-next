@@ -20,6 +20,20 @@ export function dossierLogs(): string {
   return dir;
 }
 
+/**
+ * Fichier de secours pour les identifiants du compte ADMIN initial (cf.
+ * Finding 7 revue finale) : la boite de dialogue affichant ce mot de passe
+ * ne s'affiche qu'une seule fois, sans moyen de le recopier. Si l'operateur
+ * (non technicien) le lit mal, la seule recuperation possible sinon est de
+ * reinitialiser tout `pgdata` (perte de donnees). Ce n'est PAS un enjeu de
+ * securite au-dela de ce que la boite de dialogue expose deja : quiconque a
+ * acces a `%APPDATA%\GeoAino` a de toute facon deja acces complet au
+ * repertoire de donnees Postgres local.
+ */
+export function cheminIdentifiantsInitiaux(): string {
+  return path.join(dossierDonnees(), "identifiants-initiaux.txt");
+}
+
 export function dossierCacheTesseract(): string {
   const dir = path.join(dossierDonnees(), "tesseract-cache");
   mkdirSync(dir, { recursive: true });
