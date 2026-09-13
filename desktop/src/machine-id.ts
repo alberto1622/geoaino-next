@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import path from "node:path";
 
 // Alphabet Crockford (base32 sans caracteres ambigus : ni I/L/O — confondus
 // avec 1/1/0 — ni U — evite de former des mots avec V). Standard etabli,
@@ -39,7 +40,14 @@ export function empreinteDepuisGuid(guid: string): string {
 function lireMachineGuid(): string {
   // `reg.exe` est un binaire Windows natif independant (pas cmd.exe ni
   // powershell.exe) — evite deliberement toute dependance a un shell.
-  const sortie = execFileSync("reg", [
+  // Chemin ABSOLU (System32, pas juste "reg") : `execFileSync` sans shell ne
+  // resout pas d'extension automatiquement, mais resout tout de meme "reg"
+  // via le PATH du process — un executable malveillant nomme reg.exe place
+  // plus tot dans le PATH de l'utilisateur s'executerait alors a la place
+  // du vrai binaire systeme, avec les droits de qui lance GeoAino.exe.
+  // `%SystemRoot%` est garanti defini par Windows (jamais absent).
+  const cheminReg = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "reg.exe");
+  const sortie = execFileSync(cheminReg, [
     "query",
     "HKLM\\SOFTWARE\\Microsoft\\Cryptography",
     "/v",
