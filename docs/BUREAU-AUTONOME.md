@@ -46,6 +46,44 @@ Un seul exécutable (`GeoAino.exe`) orchestre trois choses au démarrage :
 | `desktop/electron-builder.yml` | Configuration de l'installateur NSIS (ressources embarquées, exclusions) |
 | `desktop/scripts/assemble-pg-portable.ps1` | Script one-shot (voir §4) qui télécharge/assemble le bundle PostgreSQL+PostGIS portable dans `desktop/vendor/pg-portable` |
 
+### Clé d'activation (protection de licence)
+
+Chaque installation doit être activée par une licence liée à la machine
+avant de pouvoir démarrer Postgres/Next — voir
+[`docs/superpowers/specs/2026-09-13-cle-activation-desktop-design.md`](./superpowers/specs/2026-09-13-cle-activation-desktop-design.md)
+pour le design complet. En bref :
+
+1. Au premier lancement (ou si `licence.dat` est absente/invalide), l'app
+   affiche l'empreinte de la machine (dérivée du `MachineGuid` Windows,
+   `desktop/src/machine-id.ts`) et bloque tout démarrage de Postgres/Next
+   tant qu'aucune licence valide n'est importée.
+2. Le client transmet cette empreinte au vendeur.
+3. **Vendeur** (une seule fois par installation de l'outillage) :
+   ```bash
+   npx tsx desktop/scripts/licence/generer-cle-vendeur.ts   # une seule fois, jamais rejoue
+   npx tsx desktop/scripts/licence/generer-licence.ts "<empreinte du client>" "<nom du client>"
+   npx tsx desktop/scripts/licence/verifier-licence.ts licence-<nom>.geoaino
+   ```
+   La clé privée générée par `generer-cle-vendeur.ts` est écrite par défaut
+   sous `~/.geoaino-vendeur/cle-privee-vendeur.pem` (hors du dépôt), pas dans
+   `desktop/scripts/licence/` — chemin personnalisable via la variable
+   d'environnement `GEOAINO_CLE_PRIVEE_VENDEUR`.
+4. Le fichier `licence-<nom>.geoaino` produit est transmis au client (email,
+   clé USB), qui l'importe via le bouton « Importer une licence ».
+5. La licence est enregistrée dans `%APPDATA%\GeoAino\licence.dat` et
+   revalidée (signature + empreinte) à chaque lancement suivant.
+
+**Limitations assumées** (cf. spec pour le détail) :
+- Perte/compromission de la clé privée vendeur (`cle-privee-vendeur.pem`,
+  jamais committée) → toutes les licences déjà émises deviennent invalides
+  après rotation de la clé, il faut republier l'app avec la nouvelle clé
+  publique et réémettre une licence à chaque client existant.
+- Réinstallation de Windows ou changement de disque sur le poste client →
+  nouvelle empreinte machine → l'ancienne licence ne fonctionne plus, il
+  faut en émettre une nouvelle.
+- Aucune révocation à distance d'une licence déjà activée (cohérent avec le
+  choix « 100% hors ligne, perpétuelle »).
+
 ### Emplacement des données persistantes
 
 Tout ce qui doit survivre à une mise à jour (ou une désinstallation) vit sous
@@ -129,7 +167,10 @@ directement sur le code source :
 | `npm run test:llm` | Détection d'erreur réseau vs erreur applicative pour le fallback LLM hors ligne (`LLMIndisponibleError`) — 4 assertions |
 | `npx tsc --noEmit` | Vérification TypeScript du code web (`src/`) |
 | `npx tsc -p desktop/tsconfig.json --noEmit` | Vérification TypeScript du code Electron (`desktop/src/`) — **à lancer séparément**, tsconfig dédié (types `node`+`electron`) |
+| `npx tsc -p desktop/tsconfig.scripts.json --noEmit` | Vérification TypeScript de l'outillage vendeur (`desktop/scripts/`), non couvert par `desktop/tsconfig.json` (qui n'inclut que `src/`) |
 | `npx tsx desktop/scripts/test-postgres-manager.ts` | Test d'intégration réel : démarre/arrête un vrai cluster Postgres portable via `demarrerPostgresPortable` (nécessite `desktop/vendor/pg-portable` déjà assemblé, §2) |
+| `npx tsx desktop/scripts/test-machine-id.ts` | Format/déterminisme/unicité de l'empreinte machine — pur, sans toucher au registre Windows |
+| `npx tsx desktop/scripts/test-licence.ts` | Vérification de signature Ed25519 (acceptation/rejet) — clé de test jetable, sans dépendre de la vraie clé vendeur |
 
 **Avant tout build de distribution**, lancer dans l'ordre :
 
@@ -152,6 +193,11 @@ réellement l'app (voir §5 et §6).
 Il n'existe pas de mode automatisé pour ces trois étapes — à faire à la main
 après chaque changement touchant `desktop/src/*.ts` ou
 `desktop/electron-builder.yml` :
+
+Avant toute chose : le premier lancement affichera la boîte d'activation
+décrite ci-dessus (section « Clé d'activation ») — générer une licence de
+test pour l'empreinte affichée (`generer-licence.ts`) avant de pouvoir
+poursuivre les étapes ci-dessous.
 
 1. **Installer réellement** (pas seulement lancer `win-unpacked`) :
    ```
@@ -243,6 +289,10 @@ est sensible) avant de livrer une mise à jour qui modifie `prisma/schema.prisma
   fichier est aussi perdu autrement que par réinitialisation complète de
   `pgdata` (perte de données).
 - **Pas d'auto-update** — mise à jour = réinstallation manuelle (§6).
+- **Licence liée à la machine, gestion manuelle par le vendeur** — pas
+  d'auto-activation ni de portail client ; chaque licence est générée à la
+  main par le vendeur via `desktop/scripts/licence/generer-licence.ts`
+  (voir la section « Clé d'activation » ci-dessus).
 
 ---
 

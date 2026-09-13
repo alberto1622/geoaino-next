@@ -24,6 +24,10 @@
 .DS_Store
 *.pem
 
+# cle d'activation desktop : fichiers de licence generes localement (jamais
+# a committer, qu'ils soient de test ou reels)
+*.geoaino
+
 # debug
 npm-debug.log*
 yarn-debug.log*
@@ -64,6 +68,7 @@ __pycache__/
 # electron-builder : sortie d'empaquetage desktop (installateur NSIS,
 # win-unpacked) — régénérée à la demande via `npm run dist:desktop`.
 desktop/dist-installer/
+desktop/dist/
 
 cle-privee-vendeur.pem
 .key

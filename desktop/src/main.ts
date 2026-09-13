@@ -2,12 +2,14 @@ import { app, BrowserWindow, dialog } from "electron";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { hash } from "bcryptjs";
 import { demarrerPostgresPortable, type ClusterPostgres } from "./postgres-manager";
 import { trouverPortLibre } from "./port-utils";
 import { demarrerNextStandalone, attendreServeurPret, type ServeurNext } from "./next-server";
 import { construireEnvRuntime, dossierPgData, dossierLogs, cheminIdentifiantsInitiaux } from "./runtime-env";
+import { empreinteMachine } from "./machine-id";
+import { chargerLicenceEnregistree, enregistrerLicence, licenceEstValide, type Licence } from "./licence";
 
 const CANDIDATS_PORT_PG = [54329, 54330, 54331, 54332, 54333];
 const CANDIDATS_PORT_NEXT = [4173, 4174, 4175, 4176, 4177];
@@ -216,7 +218,68 @@ async function amorcerCompteAdmin(port: number): Promise<string | null> {
   return `${email} / ${motDePasse}`;
 }
 
+/**
+ * Verifie qu'une licence valide est presente pour CETTE machine avant tout
+ * demarrage de Postgres/Next (cf. spec cle d'activation) — boucle de
+ * dialogues natifs (meme pattern que les identifiants admin plus bas) tant
+ * qu'aucune licence valide n'est importee. Renvoie `false` si l'utilisateur
+ * a choisi de quitter (`app.quit()` deja appele : `demarrerApplication` ne
+ * doit alors PAS continuer).
+ */
+function assurerLicenceActivee(): boolean {
+  const empreinte = empreinteMachine();
+  let licence = chargerLicenceEnregistree();
+
+  while (!licenceEstValide(licence)) {
+    const choix = dialog.showMessageBoxSync({
+      type: "info",
+      title: "Activation requise",
+      message: "Cette installation n'est pas activee.",
+      detail:
+        `Empreinte de cette machine :\n${empreinte}\n\n` +
+        "Transmettez ce code a votre fournisseur pour obtenir votre fichier " +
+        "de licence (.geoaino), puis importez-le ci-dessous.",
+      buttons: ["Importer une licence", "Quitter"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+
+    if (choix === 1) {
+      app.quit();
+      return false;
+    }
+
+    const fichiers = dialog.showOpenDialogSync({
+      title: "Selectionner le fichier de licence",
+      filters: [{ name: "Licence GeoAino", extensions: ["geoaino"] }],
+      properties: ["openFile"],
+    });
+    if (!fichiers || fichiers.length === 0) continue; // annule -> reboucle sur le message
+
+    try {
+      const candidate = JSON.parse(readFileSync(fichiers[0], "utf8")) as Licence;
+      if (licenceEstValide(candidate)) {
+        enregistrerLicence(candidate);
+        licence = candidate;
+        continue; // la boucle while re-teste licenceEstValide(licence) -> sort cette fois
+      }
+      dialog.showErrorBox(
+        "Licence invalide",
+        "Fichier de licence invalide ou ne correspondant pas a cette machine.",
+      );
+    } catch {
+      dialog.showErrorBox(
+        "Licence invalide",
+        "Fichier de licence invalide ou ne correspondant pas a cette machine.",
+      );
+    }
+  }
+  return true;
+}
+
 async function demarrerApplication(): Promise<void> {
+  if (!assurerLicenceActivee()) return;
+
   clusterPg = await demarrerPostgresPortable({
     binDir: path.join(cheminRessources, "pg-portable", "bin"),
     dataDir: dossierPgData(),
