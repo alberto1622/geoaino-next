@@ -85,5 +85,9 @@
     "mysql2": "^3.22.5",
     "tailwindcss": "^4",
     "typescript": "^5"
-  }
+  },
+  "trustedDependencies": [
+    "core-js",
+    "unrs-resolver"
+  ]
 }
