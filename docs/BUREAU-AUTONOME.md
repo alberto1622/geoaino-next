@@ -2,9 +2,9 @@
 
 Documentation du packaging desktop de geoaino-next : un installateur Windows
 **mono-poste**, **hors ligne**, avec **parité fonctionnelle complète** avec le
-web (y compris le module « Vérifier des bornes »), destiné à la
-distribution/vente à des tiers (mairies, cabinets de géomètres, etc.) qui ne
-veulent/peuvent pas héberger l'app web + PostGIS eux-mêmes.
+web, destiné à la distribution/vente à des tiers (mairies, cabinets de
+géomètres, etc.) qui ne veulent/peuvent pas héberger l'app web + PostGIS
+eux-mêmes.
 
 > Spec d'architecture complète : [`docs/superpowers/specs/2026-09-11-bureau-autonome-design.md`](./superpowers/specs/2026-09-11-bureau-autonome-design.md)
 > Plan d'implémentation (11 tâches) : [`docs/superpowers/plans/2026-09-11-bureau-autonome.md`](./superpowers/plans/2026-09-11-bureau-autonome.md)
@@ -95,7 +95,6 @@ ménagement à chaque mise à jour/désinstallation :
 %APPDATA%\GeoAino\
 ├── pgdata\                      Cluster PostgreSQL/PostGIS complet
 ├── logs\next.log                Sortie du serveur Next.js standalone
-├── tesseract-cache\             Modèle de langue OCR (copié une fois depuis les ressources)
 ├── auth.secret                  NEXTAUTH_SECRET généré une seule fois (stable entre lancements)
 └── identifiants-initiaux.txt    Filet de secours : email/mot de passe admin (créé une seule fois)
 ```
@@ -123,10 +122,6 @@ télécharge les zips EDB (PostgreSQL) et OSGeo (PostGIS) puis les fusionne —
 voir le script pour le détail. **Une seule fois par machine de build** (le
 résultat est réutilisé par tous les builds suivants tant que `desktop/vendor/`
 n'est pas supprimé).
-
-Le modèle de langue OCR Tesseract embarqué (`desktop/vendor/tesseract-lang/eng.traineddata.gz`)
-doit exister au même titre (cf. Task 5 du plan) pour que le module « Vérifier
-des bornes » fonctionne hors ligne.
 
 ---
 
@@ -163,7 +158,6 @@ directement sur le code source :
 
 | Commande | Couverture |
 | --- | --- |
-| `npm run test:verif` | Pipeline « Vérifier des bornes » (OCR, import PDF/image, tableaux de bornes, anomalies) — 42 assertions |
 | `npm run test:llm` | Détection d'erreur réseau vs erreur applicative pour le fallback LLM hors ligne (`LLMIndisponibleError`) — 4 assertions |
 | `npx tsc --noEmit` | Vérification TypeScript du code web (`src/`) |
 | `npx tsc -p desktop/tsconfig.json --noEmit` | Vérification TypeScript du code Electron (`desktop/src/`) — **à lancer séparément**, tsconfig dédié (types `node`+`electron`) |
@@ -175,7 +169,6 @@ directement sur le code source :
 **Avant tout build de distribution**, lancer dans l'ordre :
 
 ```bash
-npm run test:verif
 npm run test:llm
 npx tsc --noEmit
 npx tsc -p desktop/tsconfig.json --noEmit
@@ -212,8 +205,8 @@ poursuivre les étapes ci-dessous.
      (`admin@geoaino.local` / mot de passe généré) — les noter, ils ne sont
      plus jamais réaffichés (filet de secours dans
      `%APPDATA%\GeoAino\identifiants-initiaux.txt`).
-   - `%APPDATA%\GeoAino\pgdata`, `logs\next.log`, `tesseract-cache\`,
-     `auth.secret` existent tous.
+   - `%APPDATA%\GeoAino\pgdata`, `logs\next.log`, `auth.secret` existent
+     tous.
    - Connexion possible avec les identifiants affichés.
 
 3. **Second lancement** (fermer puis relancer l'app) — vérifier :

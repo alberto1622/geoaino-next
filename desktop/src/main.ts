@@ -292,7 +292,6 @@ async function demarrerApplication(): Promise<void> {
   const env = construireEnvRuntime({
     portPostgres: clusterPg.port,
     portNext,
-    cheminRessources,
   });
 
   synchroniserSchema(env);

@@ -20,8 +20,6 @@ files:
 extraResources:
   - from: desktop/vendor/pg-portable
     to: pg-portable
-  - from: desktop/vendor/tesseract-lang
-    to: tesseract-lang
   - from: .next/standalone
     to: app
   # electron-builder exclut inconditionnellement tout dossier nomme

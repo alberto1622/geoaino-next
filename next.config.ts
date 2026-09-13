@@ -20,33 +20,7 @@ const nextConfig: NextConfig = {
   // node_modules a sa racine, ce qui casse le contrat consomme par
   // Task 9 (next-server.ts) et Task 10 (electron-builder.yml).
   outputFileTracingRoot: process.cwd(),
-  serverExternalPackages: [
-    "shapefile",
-    "jszip",
-    "proj4",
-    // Module « Vérifier des bornes » — import PDF : lus dynamiquement côté
-    // serveur, jamais bundlés (binaire natif, workers, WASM).
-    "pdf-lib",
-    "pdfjs-dist",
-    "tesseract.js",
-    "@napi-rs/canvas",
-  ],
-  // Le module de verification de bornes charge pdfjs-dist/tesseract.js/
-  // @napi-rs/canvas via un import() a specificateur VARIABLE (cf. ocr.ts,
-  // pdfTableauTexte.ts) — delibere pour que leur absence soit toleree en
-  // web. Consequence : le tracage de fichiers de `output: standalone` ne
-  // les detecte pas par analyse statique et les omettrait du bundle. Sur
-  // le bureau autonome, ces paquets doivent reellement fonctionner
-  // (parite complete) : on les inclut donc explicitement.
-  outputFileTracingIncludes: {
-    "/api/cadastre/verif/**": [
-      "./node_modules/pdfjs-dist/**/*",
-      "./node_modules/tesseract.js/**/*",
-      "./node_modules/tesseract.js-core/**/*",
-      "./node_modules/@napi-rs/canvas/**/*",
-      "./node_modules/@napi-rs/canvas-win32-x64-msvc/**/*",
-    ],
-  },
+  serverExternalPackages: ["shapefile", "jszip", "proj4"],
   // `src/lib/import/storage.ts` construit UPLOAD_DIR a partir d'un chemin
   // DYNAMIQUE (process.env.IMPORT_UPLOADS_DIR ?? path.join(process.cwd(), ...))
   // passe a fs.mkdir/fs.readFile : le traceur de fichiers de Next ne peut pas
@@ -87,6 +61,16 @@ const nextConfig: NextConfig = {
       "./*.md",
       "./*.geojson",
       "./*.log",
+      // `uploads/` (racine du depot) accumule les fichiers DXF/shapefile
+      // reellement importes via l'app web — donnees clients, potentiellement
+      // des dizaines de Go. Meme cause que les exclusions ci-dessus (chemin
+      // DYNAMIQUE dans src/lib/import/storage.ts) : sans cette entree,
+      // `.next/standalone` embarquait la totalite de ce dossier (constate :
+      // 24 Go dans resources/app, a l'origine d'un echec de packaging NSIS —
+      // makensis.exe, 32 bits, ne peut pas mmap un payload > ~2 Go). Absente
+      // de la revue finale du chantier bureau autonome initial car ce
+      // dossier etait alors vide/petit sur la machine de build.
+      "./uploads/**",
     ],
   },
   experimental: {
