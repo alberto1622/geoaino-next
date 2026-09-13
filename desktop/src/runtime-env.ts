@@ -34,6 +34,11 @@ export function cheminIdentifiantsInitiaux(): string {
   return path.join(dossierDonnees(), "identifiants-initiaux.txt");
 }
 
+/** Chemin de la licence d'activation persistee (revalidee a chaque lancement). */
+export function cheminLicence(): string {
+  return path.join(dossierDonnees(), "licence.dat");
+}
+
 export function dossierCacheTesseract(): string {
   const dir = path.join(dossierDonnees(), "tesseract-cache");
   mkdirSync(dir, { recursive: true });
