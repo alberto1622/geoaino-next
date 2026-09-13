@@ -19,3 +19,7 @@ Dockerfile
 desktop/vendor
 desktop/dist-installer
 desktop/dist
+
+cle-privee-vendeur.pem
+
+.key
