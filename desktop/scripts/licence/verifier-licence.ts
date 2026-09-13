@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { verifierSignature, CLE_PUBLIQUE_VENDEUR_PEM, type Licence } from "../../src/licence";
+import { verifierSignature, CLE_PUBLIQUE_VENDEUR_PEM, type Licence } from "../../src/licence-format";
 
 const [, , cheminFichier] = process.argv;
 if (!cheminFichier) {

@@ -1,8 +1,15 @@
 import { generateKeyPairSync } from "node:crypto";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
-const cheminClePrivee = path.join(__dirname, "cle-privee-vendeur.pem");
+// Par defaut, ecrite hors du depot git (sous le profil utilisateur), pour
+// eviter tout risque d'y toucher/committer par erreur — surchargeable via
+// GEOAINO_CLE_PRIVEE_VENDEUR pour les configurations particulieres (poste de
+// build partage, chemin reseau, etc.).
+const cheminClePrivee =
+  process.env.GEOAINO_CLE_PRIVEE_VENDEUR ??
+  path.join(os.homedir(), ".geoaino-vendeur", "cle-privee-vendeur.pem");
 
 if (existsSync(cheminClePrivee)) {
   console.error(
@@ -20,6 +27,7 @@ const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const clePriveePem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
 const clePubliquePem = publicKey.export({ type: "spki", format: "pem" }).toString();
 
+mkdirSync(path.dirname(cheminClePrivee), { recursive: true });
 writeFileSync(cheminClePrivee, clePriveePem, { encoding: "utf8", mode: 0o600 });
 
 console.log(`Cle privee ecrite dans : ${cheminClePrivee}`);

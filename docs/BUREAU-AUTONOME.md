@@ -64,6 +64,10 @@ pour le design complet. En bref :
    npx tsx desktop/scripts/licence/generer-licence.ts "<empreinte du client>" "<nom du client>"
    npx tsx desktop/scripts/licence/verifier-licence.ts licence-<nom>.geoaino
    ```
+   La clé privée générée par `generer-cle-vendeur.ts` est écrite par défaut
+   sous `~/.geoaino-vendeur/cle-privee-vendeur.pem` (hors du dépôt), pas dans
+   `desktop/scripts/licence/` — chemin personnalisable via la variable
+   d'environnement `GEOAINO_CLE_PRIVEE_VENDEUR`.
 4. Le fichier `licence-<nom>.geoaino` produit est transmis au client (email,
    clé USB), qui l'importe via le bouton « Importer une licence ».
 5. La licence est enregistrée dans `%APPDATA%\GeoAino\licence.dat` et
@@ -163,6 +167,7 @@ directement sur le code source :
 | `npm run test:llm` | Détection d'erreur réseau vs erreur applicative pour le fallback LLM hors ligne (`LLMIndisponibleError`) — 4 assertions |
 | `npx tsc --noEmit` | Vérification TypeScript du code web (`src/`) |
 | `npx tsc -p desktop/tsconfig.json --noEmit` | Vérification TypeScript du code Electron (`desktop/src/`) — **à lancer séparément**, tsconfig dédié (types `node`+`electron`) |
+| `npx tsc -p desktop/tsconfig.scripts.json --noEmit` | Vérification TypeScript de l'outillage vendeur (`desktop/scripts/`), non couvert par `desktop/tsconfig.json` (qui n'inclut que `src/`) |
 | `npx tsx desktop/scripts/test-postgres-manager.ts` | Test d'intégration réel : démarre/arrête un vrai cluster Postgres portable via `demarrerPostgresPortable` (nécessite `desktop/vendor/pg-portable` déjà assemblé, §2) |
 | `npx tsx desktop/scripts/test-machine-id.ts` | Format/déterminisme/unicité de l'empreinte machine — pur, sans toucher au registre Windows |
 | `npx tsx desktop/scripts/test-licence.ts` | Vérification de signature Ed25519 (acceptation/rejet) — clé de test jetable, sans dépendre de la vraie clé vendeur |

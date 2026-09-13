@@ -68,3 +68,4 @@ __pycache__/
 # electron-builder : sortie d'empaquetage desktop (installateur NSIS,
 # win-unpacked) — régénérée à la demande via `npm run dist:desktop`.
 desktop/dist-installer/
+desktop/dist/

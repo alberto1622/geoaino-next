@@ -1,5 +1,5 @@
 import { generateKeyPairSync, sign } from "node:crypto";
-import { messageCanonique, verifierSignature, type Licence } from "../src/licence";
+import { messageCanonique, verifierSignature, type Licence } from "../src/licence-format";
 
 let echecs = 0;
 function verifier(condition: boolean, message: string) {

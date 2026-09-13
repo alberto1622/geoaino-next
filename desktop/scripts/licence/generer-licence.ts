@@ -1,7 +1,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { createPrivateKey, sign } from "node:crypto";
+import os from "node:os";
 import path from "node:path";
-import { messageCanonique, type Licence } from "../../src/licence";
+import { messageCanonique, type Licence } from "../../src/licence-format";
 
 const [, , machineId, client] = process.argv;
 if (!machineId || !client) {
@@ -10,7 +11,9 @@ if (!machineId || !client) {
   process.exit(1);
 }
 
-const cheminClePrivee = path.join(__dirname, "cle-privee-vendeur.pem");
+const cheminClePrivee =
+  process.env.GEOAINO_CLE_PRIVEE_VENDEUR ??
+  path.join(os.homedir(), ".geoaino-vendeur", "cle-privee-vendeur.pem");
 const clePrivee = createPrivateKey(readFileSync(cheminClePrivee, "utf8"));
 
 const emisLe = new Date().toISOString();
