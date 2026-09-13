@@ -38,6 +38,47 @@ if (!verrouAcquis) {
       fenetre.focus();
     }
   });
+
+  // `app.quit()` appele AVANT que l'app soit "ready" ne supprime pas
+  // l'evenement "ready" a venir (comportement documente d'Electron) : ces
+  // handlers doivent donc rester a l'interieur de ce bloc `else`, sinon
+  // l'instance perdante peut quand meme tenter de demarrer son propre
+  // cluster Postgres contre le repertoire de donnees deja tenu par la
+  // premiere instance (residu de la revue finale, Finding #5).
+  app.on("ready", () => {
+    demarrerApplication().catch((err) => {
+      console.error("Echec du demarrage :", err);
+      // Une app GUI empaquetee n'a pas de console visible : sans cette boite
+      // de dialogue, un echec de demarrage (ex. Critical #1 avant correctif)
+      // disparaissait silencieusement, sans aucun retour pour l'operateur.
+      dialog.showErrorBox("Echec du demarrage", String(err));
+      app.quit();
+    });
+  });
+
+  let arretEnCours = false;
+  app.on("before-quit", (event) => {
+    if (arretEnCours || (!serveurNext && !clusterPg)) return;
+    arretEnCours = true;
+    event.preventDefault();
+    (async () => {
+      // `finally` : si l'arret du serveur Next ou du cluster Postgres rejette,
+      // l'app doit tout de meme redevenir quittable (sinon seul le
+      // Gestionnaire des taches permet de la fermer, avec Postgres reste actif).
+      try {
+        if (serveurNext) await serveurNext.arreter();
+        if (clusterPg) await clusterPg.arreter();
+      } finally {
+        serveurNext = null;
+        clusterPg = null;
+        app.quit();
+      }
+    })();
+  });
+
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") app.quit();
+  });
 }
 
 function executerPsql(port: number, args: string[]) {
@@ -238,38 +279,3 @@ async function demarrerApplication(): Promise<void> {
   await fenetre.loadURL(`http://127.0.0.1:${portNext}`);
   fenetre.show();
 }
-
-app.on("ready", () => {
-  demarrerApplication().catch((err) => {
-    console.error("Echec du demarrage :", err);
-    // Une app GUI empaquetee n'a pas de console visible : sans cette boite
-    // de dialogue, un echec de demarrage (ex. Critical #1 avant correctif)
-    // disparaissait silencieusement, sans aucun retour pour l'operateur.
-    dialog.showErrorBox("Echec du demarrage", String(err));
-    app.quit();
-  });
-});
-
-let arretEnCours = false;
-app.on("before-quit", (event) => {
-  if (arretEnCours || (!serveurNext && !clusterPg)) return;
-  arretEnCours = true;
-  event.preventDefault();
-  (async () => {
-    // `finally` : si l'arret du serveur Next ou du cluster Postgres rejette,
-    // l'app doit tout de meme redevenir quittable (sinon seul le
-    // Gestionnaire des taches permet de la fermer, avec Postgres reste actif).
-    try {
-      if (serveurNext) await serveurNext.arreter();
-      if (clusterPg) await clusterPg.arreter();
-    } finally {
-      serveurNext = null;
-      clusterPg = null;
-      app.quit();
-    }
-  })();
-});
-
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
