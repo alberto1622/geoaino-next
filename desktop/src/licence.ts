@@ -16,11 +16,14 @@ export type Licence = {
  * docs/BUREAU-AUTONOME.md). Une cle PUBLIQUE n'a pas besoin d'etre secrete :
  * elle peut etre committee sans risque, contrairement a la cle privee
  * correspondante qui ne doit JAMAIS quitter la machine du vendeur ni etre
- * embarquee dans l'installateur. Vide jusqu'a Task 3 : `licenceEstValide`
- * rejette alors systematiquement (createPublicKey("") leve), ce qui est le
- * comportement surattendu tant qu'aucune vraie cle n'est branchee.
+ * embarquee dans l'installateur. Si ce champ redevient vide un jour,
+ * `licenceEstValide` rejette alors systematiquement (createPublicKey("")
+ * leve) — comportement surattendu tant qu'aucune vraie cle n'est branchee.
  */
-export const CLE_PUBLIQUE_VENDEUR_PEM = "";
+export const CLE_PUBLIQUE_VENDEUR_PEM = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAdrmov2p1AeUeLs63FHVW4XUlU8nQJismN+s4VisWTwY=
+-----END PUBLIC KEY-----
+`;
 
 /**
  * Serialisation deterministe utilisee a la fois pour signer (outillage

@@ -24,6 +24,10 @@
 .DS_Store
 *.pem
 
+# cle d'activation desktop : fichiers de licence generes localement (jamais
+# a committer, qu'ils soient de test ou reels)
+*.geoaino
+
 # debug
 npm-debug.log*
 yarn-debug.log*
