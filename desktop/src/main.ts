@@ -150,7 +150,7 @@ function synchroniserSchema(env: NodeJS.ProcessEnv): void {
 }
 
 // `db push` diffe `schema.prisma` contre la base reelle (cf. synchroniserSchema
-// ci-dessus) mais ne peut pas creer les 8 index spatiaux GIST du projet : les
+// ci-dessus) mais ne peut pas creer les 7 index spatiaux GIST du projet : les
 // colonnes de geometrie sont typees `Unsupported(...)` en Prisma (limitation
 // du schema Prisma lui-meme, pas de `db push`), donc aucun index dessus ne
 // peut etre exprime dans schema.prisma — seules les migrations SQL manuelles
@@ -173,7 +173,6 @@ function creerIndexSpatiaux(port: number): void {
     'CREATE INDEX IF NOT EXISTS "cad_parcelles_geom_idx" ON "cad_parcelles" USING GIST ("geom");',
     'CREATE INDEX IF NOT EXISTS "limite_section_geom_idx" ON "limite_section" USING GIST ("geom");',
     'CREATE INDEX IF NOT EXISTS "cad_arrondissements_geom_idx" ON "cad_arrondissements" USING GIST ("geom");',
-    'CREATE INDEX IF NOT EXISTS "cad_verifications_geom_idx" ON "cad_verifications" USING GIST ("geom");',
   ].join(" ");
   const resultat = executerPsql(port, ["-d", "geoaino", "-c", instructions]);
   if (resultat.status !== 0) {
