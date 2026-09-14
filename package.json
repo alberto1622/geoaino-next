@@ -11,7 +11,7 @@
     "lint": "eslint",
     "test:llm": "npx tsx scripts/test-llm-offline.ts",
     "build:desktop": "tsc -p desktop/tsconfig.json",
-    "dist:desktop": "npm run build:standalone && npm run build:desktop && electron-builder --config desktop/electron-builder.yml"
+    "dist:desktop": "npm run build:standalone && npm run build:desktop && node -e \"if(!require('fs').existsSync('desktop/vendor/referentiels/referentiels.sql')) { console.error('desktop/vendor/referentiels/referentiels.sql manquant -- lancer npx tsx desktop/scripts/generer-referentiels.ts --url <DATABASE_URL> avant de construire l\\'installateur.'); process.exit(1); }\" && electron-builder --config desktop/electron-builder.yml"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",

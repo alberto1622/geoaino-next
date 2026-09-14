@@ -206,9 +206,24 @@ function chargerReferentiels(port: number): void {
   // en cours de script et ne renvoie pas de code de sortie non-nul --
   // masquerait un dump partiellement corrompu ou une incompatibilite de
   // schema plutot que d'echouer bruyamment.
+  // `--single-transaction` : le dump contient 4 blocs `COPY ... FROM stdin`
+  // independants (un par table), sans BEGIN/COMMIT explicite -- chaque COPY
+  // autocommit isolement. Sans ce drapeau, une interruption en cours de
+  // fichier (timeout de 60s ci-dessous, kill utilisateur, crash, coupure
+  // secteur) entre deux COPY laisserait les tables partiellement chargees ;
+  // or la garde d'idempotence ci-dessus ne verifie qu'une seule table
+  // (cad_communes_2026, 2e du fichier). Selon l'endroit de l'interruption,
+  // ca provoque soit (a) au relancement, un replay integral du dump alors
+  // que cad_communes_2013 (1ere table) contient deja des lignes -> violation
+  // de cle primaire -> ON_ERROR_STOP=1 fait echouer psql -> boucle de crash
+  // permanente, soit (b) cad_communes_2026 deja chargee -> la garde saute le
+  // chargement pour toujours, laissant les 2 autres tables vides sans aucune
+  // erreur. `--single-transaction` enveloppe tout le fichier dans une seule
+  // transaction : toute interruption annule l'ensemble, cad_communes_2026
+  // reste a 0 et le prochain lancement relance proprement tout le chargement.
   const resultat = spawnSync(psql, [
     "-h", "127.0.0.1", "-p", String(port), "-U", "postgres", "-d", "geoaino",
-    "-v", "ON_ERROR_STOP=1", "-f", cheminDump,
+    "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", cheminDump,
   ], { timeout: 60_000 });
   if (resultat.status !== 0) {
     throw new Error(`Chargement des referentiels echoue : ${resultat.stderr?.toString() || resultat.error?.message}`);
