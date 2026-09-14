@@ -20,6 +20,8 @@ files:
 extraResources:
   - from: desktop/vendor/pg-portable
     to: pg-portable
+  - from: desktop/vendor/referentiels
+    to: referentiels
   - from: .next/standalone
     to: app
   # electron-builder exclut inconditionnellement tout dossier nomme

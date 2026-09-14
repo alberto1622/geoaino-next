@@ -180,6 +180,41 @@ function creerIndexSpatiaux(port: number): void {
   }
 }
 
+// Les 4 referentiels administratifs statiques (cad_communes_2013/2026,
+// cad_arrondissements, cad_correspondance_2013_2026) ne sont jamais crees
+// par `db push` (ce sont des DONNEES, pas un changement de schema) : sur une
+// base neuve, ils sont vides. Consequence reelle constatee : `build-sections.ts`
+// resout `syscolCommune` par jointure spatiale sur `cad_communes_2026` --
+// contre une table vide, chaque section construite recoit `syscolCommune:
+// null`, et `assign-nicad-2026.ts` ne peut alors jamais construire de NICAD
+// (cf. docs/superpowers/specs/2026-09-13-referentiels-bureau-autonome-design.md).
+// Charge une seule fois (verifie sur `cad_communes_2026`, comme
+// `amorcerCompteAdmin` verifie sur `User`) depuis un dump SQL pre-genere
+// (`generer-referentiels.ts`) embarque via `extraResources` -- jamais les
+// scripts `load-*.ts` web (necessiteraient Prisma Client complet au runtime
+// desktop pour un gain nul, la donnee cible etant deja correcte cote web).
+function chargerReferentiels(port: number): void {
+  const dejaCharge = executerPsql(port, ["-d", "geoaino", "-tAc", "SELECT count(*) FROM cad_communes_2026"]);
+  if (dejaCharge.status !== 0) {
+    throw new Error(`Verification des referentiels echouee : ${dejaCharge.stderr?.toString()}`);
+  }
+  if (Number(dejaCharge.stdout?.toString().trim()) > 0) return;
+
+  const cheminDump = path.join(cheminRessources, "referentiels", "referentiels.sql");
+  const psql = path.join(cheminRessources, "pg-portable", "bin", "psql.exe");
+  // `-v ON_ERROR_STOP=1` : sans ca, `psql -f` continue apres une erreur SQL
+  // en cours de script et ne renvoie pas de code de sortie non-nul --
+  // masquerait un dump partiellement corrompu ou une incompatibilite de
+  // schema plutot que d'echouer bruyamment.
+  const resultat = spawnSync(psql, [
+    "-h", "127.0.0.1", "-p", String(port), "-U", "postgres", "-d", "geoaino",
+    "-v", "ON_ERROR_STOP=1", "-f", cheminDump,
+  ], { timeout: 60_000 });
+  if (resultat.status !== 0) {
+    throw new Error(`Chargement des referentiels echoue : ${resultat.stderr?.toString() || resultat.error?.message}`);
+  }
+}
+
 /**
  * Cree un compte ADMIN initial si la base ne contient encore aucun
  * utilisateur (premier lancement seulement) — sans ca, l'operateur n'a
@@ -295,6 +330,7 @@ async function demarrerApplication(): Promise<void> {
 
   synchroniserSchema(env);
   creerIndexSpatiaux(clusterPg.port);
+  chargerReferentiels(clusterPg.port);
 
   const identifiantsInitiaux = await amorcerCompteAdmin(clusterPg.port);
   if (identifiantsInitiaux) {
