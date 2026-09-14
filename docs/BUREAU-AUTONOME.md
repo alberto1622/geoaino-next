@@ -84,6 +84,38 @@ pour le design complet. En bref :
 - Aucune révocation à distance d'une licence déjà activée (cohérent avec le
   choix « 100% hors ligne, perpétuelle »).
 
+### Référentiels administratifs (communes, arrondissements)
+
+La construction du NICAD (Syscol + section) dépend de 4 référentiels
+administratifs statiques (`cad_communes_2013`, `cad_communes_2026`,
+`cad_arrondissements`, `cad_correspondance_2013_2026`) — sans eux, aucune
+section ne peut être résolue par jointure spatiale (`build-sections.ts`),
+et aucun NICAD n'est jamais assigné aux parcelles importées.
+
+Ces référentiels sont chargés **une seule fois**, au premier lancement,
+depuis un dump SQL pré-généré au moment du build :
+
+```bash
+npx tsx desktop/scripts/generer-referentiels.ts --url "postgresql://postgres:PASSWORD@HOST:PORT/DB_WEB"
+```
+
+Résultat attendu : `desktop/vendor/referentiels/referentiels.sql` (plusieurs
+Mo). **À régénérer avant chaque build de distribution** si la base web a
+reçu des corrections de référentiels depuis le dernier dump — sinon
+l'installateur embarque des données obsolètes.
+
+**Limitations assumées :**
+- Référentiels **figés à la date du dump** : aucune synchronisation
+  automatique ultérieure. Une correction des limites administratives
+  nécessite de régénérer le dump et de republier l'app.
+- Une installation qui a déjà utilisé « Gestion des sections » **avant**
+  ce correctif garde des sections avec `syscolCommune: null` — il faut les
+  reconstruire après la mise à jour de l'app pour qu'elles obtiennent un
+  Syscol correct.
+- `limite_section` (les limites de section elles-mêmes) reste **hors** de
+  ce chargement — construit à la demande par l'utilisateur via « Gestion
+  des sections », pas un référentiel statique national.
+
 ### Emplacement des données persistantes
 
 Tout ce qui doit survivre à une mise à jour (ou une désinstallation) vit sous
@@ -122,6 +154,13 @@ télécharge les zips EDB (PostgreSQL) et OSGeo (PostGIS) puis les fusionne —
 voir le script pour le détail. **Une seule fois par machine de build** (le
 résultat est réutilisé par tous les builds suivants tant que `desktop/vendor/`
 n'est pas supprimé).
+
+Les référentiels administratifs (voir section dédiée plus haut) doivent
+également être générés avant un build de distribution :
+
+```bash
+npx tsx desktop/scripts/generer-referentiels.ts --url "postgresql://postgres:PASSWORD@HOST:PORT/DB_WEB"
+```
 
 ---
 
@@ -208,6 +247,8 @@ poursuivre les étapes ci-dessous.
    - `%APPDATA%\GeoAino\pgdata`, `logs\next.log`, `auth.secret` existent
      tous.
    - Connexion possible avec les identifiants affichés.
+   - `SELECT count(*) FROM cad_communes_2026` sur la base desktop retourne
+     un nombre > 0 (référentiels administratifs chargés).
 
 3. **Second lancement** (fermer puis relancer l'app) — vérifier :
    - Pas de nouvelle boîte d'identifiants (le compte existe déjà).
