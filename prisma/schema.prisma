@@ -373,6 +373,21 @@ model CadArrondissement {
   @@map("cad_arrondissements")
 }
 
+// Centres de services fiscaux (CSF) — référentiel limites administratives
+// 2023 (DGID), géométrie propre. Chargé depuis un shapefile dédié
+// (Limites_CSF_2023.shp, 26 features), pas dérivé des autres référentiels.
+model CadCentreServiceFiscal {
+  id        Int      @id @default(autoincrement())
+  nomCsf    String
+  region    String?
+  geojson   String?  @db.Text
+  geom      Unsupported("geometry(MultiPolygon, 4326)")?
+  createdAt DateTime @default(now())
+
+  @@index([region])
+  @@map("cad_centres_services_fiscaux")
+}
+
 // Sections cadastrales (une section ∈ une commune)
 model CadSection {
   id            Int      @id @default(autoincrement())
