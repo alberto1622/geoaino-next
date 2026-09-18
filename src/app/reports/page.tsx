@@ -2,6 +2,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import ReportsClient from "@/components/ReportsClient";
 
+export const dynamic = "force-dynamic";
 export const metadata = { title: "Rapports" };
 
 export default async function ReportsPage() {

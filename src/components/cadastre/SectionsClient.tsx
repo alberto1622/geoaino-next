@@ -2,6 +2,7 @@
 
 import "leaflet/dist/leaflet.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getTileUrlTemplate } from "@/lib/tiles-url";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CadHistoryPanel } from "@/components/cadastre/CadHistoryPanel";
 import { JobProgressSteps, type JobProgressStep } from "@/components/import/JobProgressSteps";
@@ -416,7 +417,7 @@ export default function SectionsClient() {
         [12.3, -17.6],
         [16.7, -11.3],
       ]);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      L.tileLayer(getTileUrlTemplate(), {
         attribution: "© OpenStreetMap",
         maxZoom: 19,
       }).addTo(map);

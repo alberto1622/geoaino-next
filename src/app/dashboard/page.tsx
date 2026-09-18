@@ -2,6 +2,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import DashboardClient from "@/components/DashboardClient";
 
+export const dynamic = "force-dynamic";
 export const metadata = { title: "Tableau de bord" };
 
 type Period = "TODAY" | "WEEK" | "MONTH" | "ALL";

@@ -10,6 +10,7 @@ import { demarrerNextStandalone, attendreServeurPret, type ServeurNext } from ".
 import { construireEnvRuntime, dossierPgData, dossierLogs, cheminIdentifiantsInitiaux } from "./runtime-env";
 import { empreinteMachine } from "./machine-id";
 import { chargerLicenceEnregistree, enregistrerLicence, licenceEstValide, type Licence } from "./licence";
+import { demarrerServeurTuiles, type ServeurTuiles } from "./tiles-server";
 
 const CANDIDATS_PORT_PG = [54329, 54330, 54331, 54332, 54333];
 const CANDIDATS_PORT_NEXT = [4173, 4174, 4175, 4176, 4177];
@@ -20,6 +21,7 @@ const cheminRessources = app.isPackaged
 
 let clusterPg: ClusterPostgres | null = null;
 let serveurNext: ServeurNext | null = null;
+let serveurTuiles: ServeurTuiles | null = null;
 let fenetre: BrowserWindow | null = null;
 
 // Sans verrou mono-instance, un double-clic (ou un raccourci lance deux fois)
@@ -60,7 +62,7 @@ if (!verrouAcquis) {
 
   let arretEnCours = false;
   app.on("before-quit", (event) => {
-    if (arretEnCours || (!serveurNext && !clusterPg)) return;
+    if (arretEnCours || (!serveurNext && !clusterPg && !serveurTuiles)) return;
     arretEnCours = true;
     event.preventDefault();
     (async () => {
@@ -70,9 +72,11 @@ if (!verrouAcquis) {
       try {
         if (serveurNext) await serveurNext.arreter();
         if (clusterPg) await clusterPg.arreter();
+        if (serveurTuiles) await serveurTuiles.arreter();
       } finally {
         serveurNext = null;
         clusterPg = null;
+        serveurTuiles = null;
         app.quit();
       }
     })();
@@ -338,9 +342,21 @@ async function demarrerApplication(): Promise<void> {
   assurerBaseEtExtension(clusterPg.port);
 
   const portNext = await trouverPortLibre(CANDIDATS_PORT_NEXT);
+
+  // Démarre le serveur de tuiles local (tileserver-gl) pour le mode offline.
+  // Démarré avant Next afin qu'il soit prêt quand l'app charge les cartes.
+  let portTuiles: number | undefined;
+  try {
+    serveurTuiles = await demarrerServeurTuiles();
+    portTuiles = serveurTuiles.port;
+  } catch (err) {
+    console.warn("[tiles] Serveur de tuiles non disponible, cartes non fonctionnelles en mode offline :", err);
+  }
+
   const env = construireEnvRuntime({
     portPostgres: clusterPg.port,
     portNext,
+    portTuiles,
   });
 
   synchroniserSchema(env);

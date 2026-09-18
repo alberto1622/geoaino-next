@@ -194,15 +194,9 @@ const NewAnalysisPanel = forwardRef<
           conformityScore: job.report?.conformityScore ?? 0,
         });
         if (warnings.length) {
-          // Console EN PLUS du toast (persiste dans les DevTools, contrairement
-          // au toast qui disparaît) — pratique pour copier le rapport complet.
+          // Console pour le debug — les warnings techniques restent accessibles
+          // dans le rapport d'analyse détaillé (onglet erreurs/rapport).
           console.log(`[import job ${jobId}] avertissements :`, warnings);
-          // Tous les avertissements (pas seulement les 3 premiers) — même
-          // correctif que le chemin synchrone `upload-geo`, cf. plus haut.
-          toast.warning("Vérifications", {
-            description: warnings.join(" · "),
-            duration: 20000,
-          });
         }
         toast.success("Traitement terminé", {
           description: `${job.totalBuilt} parcelles · ${errorCount} erreur(s)`,

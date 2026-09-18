@@ -22,7 +22,10 @@ function resolveTool(binaryName: "ogr2ogr" | "ogrinfo"): string {
   if (process.env[envVar]) candidates.push(process.env[envVar] as string);
 
   if (process.platform === "win32") {
-    const pgRoot = "C:\\Program Files\\PostgreSQL";
+    // Découpé en segments pour éviter que le traceur standalone de Next/Turbopack
+    // ne traite "C:\Program Files\PostgreSQL" comme un chemin de fichiers statique
+    // a copier dans .next/standalone (cf. build error ENOENT sur ...\bin\).
+    const pgRoot = ["C:", "Program Files", "PostgreSQL"].join("\\");
     if (existsSync(pgRoot)) {
       for (const version of readdirSync(pgRoot)) {
         candidates.push(path.join(pgRoot, version, "bin", `${binaryName}.exe`));

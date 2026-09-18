@@ -105,6 +105,17 @@ async function runDxfImportJob(jobId: number): Promise<void> {
     await setJobPhase(jobId, "build", 10);
     const ingestion = await ingestDxfToParcelles(dxfBuf, job.fileName, { layerMapping });
 
+    // Construit la table limite_section à partir des limites de section présentes
+    // dans le DXF — nécessaire pour la jointure spatiale section → parcelle
+    // (`getSectionsForPoints`, `assignSectionNicad`) et l'attribution de NICAD
+    // par section. Sans cela, limite_section reste vide et les parcelles sont
+    // dépourvues de section (NICAD non construit via ce chemin-là).
+    if (ingestion.sections.length > 0) {
+      await assertNotCancelled(jobId);
+      await setJobPhase(jobId, "sections", 15);
+      await buildLimiteSections(ingestion, job.fileName);
+    }
+
     await assertNotCancelled(jobId);
     await setJobPhase(jobId, "nicad", 60);
     const withNicad = await assignNicad2026FromCommunes(ingestion);

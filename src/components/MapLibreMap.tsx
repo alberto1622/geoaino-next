@@ -7,6 +7,7 @@ import type { StyleSpecification } from "maplibre-gl";
 import { Component, useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { errorTypeColor } from "@/lib/utils";
+import { getTileUrl } from "@/lib/tiles-url";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -18,7 +19,7 @@ const MAP_STYLE: StyleSpecification = {
   sources: {
     osm: {
       type: "raster",
-      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      tiles: [getTileUrl()],
       tileSize: 256,
       // OSM ne sert des tuiles que jusqu'au zoom 19. Au-delà (parcelles/slivers
       // minuscules), MapLibre agrandit les tuiles z19 au lieu de demander des

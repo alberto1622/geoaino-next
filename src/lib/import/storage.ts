@@ -9,8 +9,10 @@
 import { promises as fs } from "fs";
 import path from "path";
 
-const UPLOAD_DIR =
-  process.env.IMPORT_UPLOADS_DIR ?? path.join(process.cwd(), "uploads", "imports");
+function getUploadDir(): string {
+  return process.env.IMPORT_UPLOADS_DIR ?? path.join(process.cwd(), "uploads", "imports");
+}
+const UPLOAD_DIR = getUploadDir();
 
 const LOCAL_PREFIX = "local:";
 
@@ -22,7 +24,7 @@ function sanitize(fileName: string): string {
 export async function saveImportUpload(fileName: string, data: Buffer): Promise<string> {
   await fs.mkdir(UPLOAD_DIR, { recursive: true });
   const finalName = `${Date.now()}_${sanitize(fileName)}`;
-  const fullPath = path.join(UPLOAD_DIR, finalName);
+  const fullPath = `${UPLOAD_DIR}/${finalName}`.replace(/\\/g, "/");
   await fs.writeFile(fullPath, data);
   return `${LOCAL_PREFIX}${fullPath}`;
 }

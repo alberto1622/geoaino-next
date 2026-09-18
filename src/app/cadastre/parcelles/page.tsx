@@ -2,6 +2,7 @@ import { PageTitle } from "@/components/PageTitle";
 import { prisma } from "@/lib/prisma";
 import ParcellesVisualisationClient from "@/components/cadastre/ParcellesVisualisationClient";
 
+export const dynamic = "force-dynamic";
 export const metadata = { title: "Visualisation des parcelles" };
 
 /**

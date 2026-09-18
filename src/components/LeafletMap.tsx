@@ -1,6 +1,7 @@
 "use client";
 import "leaflet/dist/leaflet.css";
 import { useEffect, useRef, useState, useCallback } from "react";
+import { getTileUrl } from "@/lib/tiles-url";
 import { Layers } from "lucide-react";
 
 const ERROR_COLORS: Record<string, string> = {
@@ -97,7 +98,7 @@ export default function LeafletMap({ geoJson, errors, selectedErrorId, onFeature
 
     const map = L.map(mapRef.current, { center: [14.6928, -17.4467], zoom: 10, zoomControl: true });
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    L.tileLayer(getTileUrl(), {
       attribution: "© OpenStreetMap", maxZoom: 20,
     }).addTo(map);
 

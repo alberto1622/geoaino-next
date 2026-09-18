@@ -1,4 +1,16 @@
+import path from "path";
 import type { NextConfig } from "next";
+
+const desktopBuild = process.env.GEOAINO_DESKTOP_BUILD === "1";
+
+// Injection des chemins absolus pour le mode desktop build. Les modules
+// geo-storage.ts et storage.ts utilisent un placeholder "/ROOT/uploads/..."
+// par défaut pour éviter les warnings Turbopack (patterns trop larges). On
+// injecte ici la valeur réelle au moment du build.
+if (desktopBuild) {
+  process.env.LOCAL_GEOJSON_DIR ??= path.join(process.cwd(), "uploads", "geojson");
+  process.env.IMPORT_UPLOADS_DIR ??= path.join(process.cwd(), "uploads", "imports");
+}
 
 const nextConfig: NextConfig = {
   // `output: "standalone"` ne doit s'appliquer QU'au build desktop
@@ -71,6 +83,11 @@ const nextConfig: NextConfig = {
       // de la revue finale du chantier bureau autonome initial car ce
       // dossier etait alors vide/petit sur la machine de build.
       "./uploads/**",
+      // Exclusion des modules de stockage qui utilisent des chemins dynamiques
+      // basés sur process.cwd() — le traceur next embarquerait tout le projet
+      // sans cela (cf. LOCAL_GEOJSON_DIR et UPLOAD_DIR)
+      "./src/lib/geo-storage.ts",
+      "./src/lib/import/storage.ts",
     ],
   },
   experimental: {

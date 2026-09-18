@@ -12,6 +12,7 @@ import { listChangementMaps } from "@/app/cadastre/_actions/correspondance";
 import { parcellesBySyscol, parcelleByCoords } from "@/app/cadastre/_actions/carte";
 import { NicadDisplay } from "@/components/cadastre/NicadDisplay";
 import { SENEGAL_BBOX } from "@/lib/senegal-bounds";
+import { getTileUrlTemplate } from "@/lib/tiles-url";
 
 type Version = "2013" | "2026";
 
@@ -149,7 +150,7 @@ export default function CadastreMap() {
       if (cancelled || !mapEl.current || mapRef.current) return;
       LRef.current = L;
       const map = L.map(mapEl.current).fitBounds(SENEGAL_LEAFLET_BOUNDS);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      L.tileLayer(getTileUrlTemplate(), {
         attribution: "© OpenStreetMap",
         maxZoom: 19,
       }).addTo(map);

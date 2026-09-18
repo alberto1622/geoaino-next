@@ -168,7 +168,57 @@ Donner des propositions pour le traitement de ce genre de fichier
 - ✅appliquer une fusion sur les prcelles
 - ✅mettre l contrainte pour récupérer les 5 dernière caractère
 - ✅Pour la contrainte d'affectation de numero de section, prposer à l'utilisat la possibilité d'affecter deux numéros d'une même commune
-- ✅possibilité de déactiver les chevauchements comune-section
+- ✅possibilité de déactiver les chevauchements comune- section
 - ✅fusionner deux lignes qui se superpose pour corriger le découpage des parcelles
 - pour les fusions appliquer des intersections
 - ✅Ajouter l'action de fusion des parcelles comme la fusion de section implémenter
+
+email=admin@geoaino.local
+password=Ql1k3YMRlX3V
+password=
+
+CBK4-3D2S-E8TX-FJ1Q-9R0Y-N0KA-TM
+
+Voici les commandes actuelles pour tester et empaqueter le bureau autonome GeoAino (worktree bureau-autonome, y compris les correctifs référentiels tout juste appliqués).
+
+Prérequis (une fois par machine de build)
+
+# 1. Assembler PostgreSQL/PostGIS portable (si absent)
+
+powershell -ExecutionPolicy Bypass -File desktop/scripts/assemble-pg-portable.ps1 -PgZip <chemin_zip_pg> -PostgisZip <chemin_zip_postgis>
+
+# 2. Générer le dump des référentiels administratifs (à régénérer si la base web a changé)
+
+npx tsx desktop/scripts/generer-referentiels.ts --url "postgresql://postgres:MOTDEPASSE@HOST:PORT/DB_WEB"
+
+Tests
+
+npm run test:llm # fallback LLM hors ligne (4 assertions)
+npx tsc --noEmit # TypeScript web
+npx tsc -p desktop/tsconfig.json --noEmit # TypeScript Electron
+npx tsc -p desktop/tsconfig.scripts.json --noEmit # TypeScript outillage (desktop/scripts/)
+npx tsx desktop/scripts/test-machine-id.ts # empreinte machine (clé d'activation)
+npx tsx desktop/scripts/test-licence.ts # signature Ed25519 (clé d'activation)
+npx tsx desktop/scripts/test-postgres-manager.ts # démarre/arrête un vrai cluster Postgres portable
+
+Empaquetage (installateur complet)
+
+npm run dist:desktop
+
+Ça enchaîne :
+
+1. build:standalone → next build en mode desktop
+2. build:desktop → compile desktop/src/\*.ts
+3. Nouveau : vérification bloquante que desktop/vendor/referentiels/referentiels.sql existe (échoue avec message clair si vous avez oublié l'étape 2 des prérequis)
+4. electron-builder → produit desktop/dist-installer/GeoAino Setup 0.1.0.exe
+
+Ou séparément, si vous voulez juste rebuilder Electron sans refaire le build web :
+
+npm run build:desktop
+npx electron-builder --config desktop/electron-builder.yml
+
+Note : ce chantier référentiels n'a pas encore été fusionné dans v9.0.0 (revue finale en cours, un lot de correctifs vient d'être committé et est en re-revue). Une fois fusionné, je vous préviendrai — les commandes ci-dessus restent valables dans ce worktree dès maintenant si vous voulez tester avant fusion.
+
+BAMBA-MACHINE-1: Y3V4-AHC3-03Q3-1PPH-GWV2-T9G1-6G
+
+BAMBA-MACHINE-DGID:F2CF-HYGZ-HH91-6PKC-SYFS-J29H-KW

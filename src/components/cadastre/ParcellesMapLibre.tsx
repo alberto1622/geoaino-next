@@ -5,6 +5,7 @@ import type { MapRef, MapLayerMouseEvent } from "react-map-gl/maplibre";
 import type { StyleSpecification } from "maplibre-gl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { errorTypeColor, severityColor } from "@/lib/utils";
+import { getTileUrl } from "@/lib/tiles-url";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -17,7 +18,7 @@ const MAP_STYLE: StyleSpecification = {
   sources: {
     osm: {
       type: "raster",
-      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      tiles: [getTileUrl()],
       tileSize: 256,
       maxzoom: 19,
       attribution: "© OpenStreetMap contributors",

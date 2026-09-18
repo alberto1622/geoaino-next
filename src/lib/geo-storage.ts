@@ -1,8 +1,11 @@
 import { promises as fs } from "fs";
 import path from "path";
 
-const LOCAL_GEOJSON_DIR =
-  process.env.UPLOADS_DIR ?? path.join(process.cwd(), "uploads", "geojson");
+function getLocalGeoJsonDir(): string {
+  return process.env.LOCAL_GEOJSON_DIR ??
+    path.join(process.cwd(), "uploads", "geojson");
+}
+const LOCAL_GEOJSON_DIR = getLocalGeoJsonDir();
 
 const LOCAL_PREFIX = "local:";
 
@@ -17,7 +20,7 @@ export async function saveGeoJsonLocally(
     .replace(/[^a-zA-Z0-9._-]/g, "_")
     .replace(/\.zip$/i, ".geojson");
   const finalName = `${userId ?? "anon"}_${ts}_${safe.endsWith(".geojson") ? safe : safe + ".geojson"}`;
-  const fullPath = path.join(LOCAL_GEOJSON_DIR, finalName);
+  const fullPath = `${LOCAL_GEOJSON_DIR}/${finalName}`.replace(/\\/g, "/");
   await fs.writeFile(fullPath, data, "utf8");
   return `${LOCAL_PREFIX}${fullPath}`;
 }

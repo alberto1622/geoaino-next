@@ -42,8 +42,13 @@ extraResources:
     to: node_modules/@prisma
   - from: prisma
     to: prisma
+  # tileserver-gl embarque : tuiles OSM raster + vecteur pour le mode offline.
+  # Le vendor est buildé separement via scripts/setup-tileserver.mjs.
+  - from: desktop/vendor/tileserver
+    to: tileserver
 win:
   target: nsis
+  icon: icon.ico
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
