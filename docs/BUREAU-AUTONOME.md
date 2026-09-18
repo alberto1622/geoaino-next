@@ -84,13 +84,17 @@ pour le design complet. En bref :
 - Aucune révocation à distance d'une licence déjà activée (cohérent avec le
   choix « 100% hors ligne, perpétuelle »).
 
-### Référentiels administratifs (communes, arrondissements)
+### Référentiels administratifs (communes, arrondissements, CSF)
 
 La construction du NICAD (Syscol + section) dépend de 4 référentiels
 administratifs statiques (`cad_communes_2013`, `cad_communes_2026`,
 `cad_arrondissements`, `cad_correspondance_2013_2026`) — sans eux, aucune
 section ne peut être résolue par jointure spatiale (`build-sections.ts`),
-et aucun NICAD n'est jamais assigné aux parcelles importées.
+et aucun NICAD n'est jamais assigné aux parcelles importées. Un 5e
+référentiel, `cad_centres_services_fiscaux` (CSF), est chargé de la même
+façon mais sert uniquement à l'affichage carte (sélecteur « Limites admin »
+sur `/cadastre/sections` et `/map/`) — il n'intervient dans aucune
+résolution de NICAD.
 
 Ces référentiels sont chargés **une seule fois**, au premier lancement,
 depuis un dump SQL pré-généré au moment du build :

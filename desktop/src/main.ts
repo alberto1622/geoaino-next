@@ -177,6 +177,7 @@ function creerIndexSpatiaux(port: number): void {
     'CREATE INDEX IF NOT EXISTS "cad_parcelles_geom_idx" ON "cad_parcelles" USING GIST ("geom");',
     'CREATE INDEX IF NOT EXISTS "limite_section_geom_idx" ON "limite_section" USING GIST ("geom");',
     'CREATE INDEX IF NOT EXISTS "cad_arrondissements_geom_idx" ON "cad_arrondissements" USING GIST ("geom");',
+    'CREATE INDEX IF NOT EXISTS "cad_centres_services_fiscaux_geom_idx" ON "cad_centres_services_fiscaux" USING GIST ("geom");',
   ].join(" ");
   const resultat = executerPsql(port, ["-d", "geoaino", "-c", instructions]);
   if (resultat.status !== 0) {
@@ -184,8 +185,9 @@ function creerIndexSpatiaux(port: number): void {
   }
 }
 
-// Les 4 referentiels administratifs statiques (cad_communes_2013/2026,
-// cad_arrondissements, cad_correspondance_2013_2026) ne sont jamais crees
+// Les 5 referentiels administratifs statiques (cad_communes_2013/2026,
+// cad_arrondissements, cad_correspondance_2013_2026, cad_centres_services_fiscaux)
+// ne sont jamais crees
 // par `db push` (ce sont des DONNEES, pas un changement de schema) : sur une
 // base neuve, ils sont vides. Consequence reelle constatee : `build-sections.ts`
 // resout `syscolCommune` par jointure spatiale sur `cad_communes_2026` --
@@ -210,7 +212,7 @@ function chargerReferentiels(port: number): void {
   // en cours de script et ne renvoie pas de code de sortie non-nul --
   // masquerait un dump partiellement corrompu ou une incompatibilite de
   // schema plutot que d'echouer bruyamment.
-  // `--single-transaction` : le dump contient 4 blocs `COPY ... FROM stdin`
+  // `--single-transaction` : le dump contient 5 blocs `COPY ... FROM stdin`
   // independants (un par table), sans BEGIN/COMMIT explicite -- chaque COPY
   // autocommit isolement. Sans ce drapeau, une interruption en cours de
   // fichier (timeout de 60s ci-dessous, kill utilisateur, crash, coupure
@@ -221,7 +223,7 @@ function chargerReferentiels(port: number): void {
   // que cad_communes_2013 (1ere table) contient deja des lignes -> violation
   // de cle primaire -> ON_ERROR_STOP=1 fait echouer psql -> boucle de crash
   // permanente, soit (b) cad_communes_2026 deja chargee -> la garde saute le
-  // chargement pour toujours, laissant les 2 autres tables vides sans aucune
+  // chargement pour toujours, laissant les 3 autres tables vides sans aucune
   // erreur. `--single-transaction` enveloppe tout le fichier dans une seule
   // transaction : toute interruption annule l'ensemble, cad_communes_2026
   // reste a 0 et le prochain lancement relance proprement tout le chargement.
