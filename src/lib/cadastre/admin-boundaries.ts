@@ -1,9 +1,11 @@
 /**
  * admin-boundaries.ts — limites administratives (régions, départements,
- * communes, arrondissements) pour l'affichage carte.
+ * communes, arrondissements, centres de services fiscaux) pour l'affichage
+ * carte.
  *
- * Les communes (`cad_communes_2026`) ET les arrondissements
- * (`cad_arrondissements`, cf. scripts/load-arrondissements.ts) portent
+ * Les communes (`cad_communes_2026`), les arrondissements
+ * (`cad_arrondissements`, cf. scripts/load-arrondissements.ts) ET les CSF
+ * (`cad_centres_services_fiscaux`, cf. scripts/load-limites-csf.ts) portent
  * chacun leur propre géométrie ; départements et régions n'ont pas de
  * référentiel dédié et sont DISSOUS à la volée (`ST_Union` groupé par
  * attribut, à partir des communes) puis simplifiés
@@ -13,7 +15,12 @@
  */
 import { prisma } from "@/lib/prisma";
 
-export type AdminLevel = "regions" | "departements" | "communes" | "arrondissements";
+export type AdminLevel =
+  | "regions"
+  | "departements"
+  | "communes"
+  | "arrondissements"
+  | "centres_services_fiscaux";
 
 export interface AdminBoundaries {
   boundaries: GeoJSON.FeatureCollection;
@@ -25,6 +32,7 @@ export interface AdminBoundaries {
 const SIMPLIFY_TOLERANCE: Record<AdminLevel, number> = {
   communes: 0.0003, // ~33 m
   arrondissements: 0.0004, // ~44 m
+  centres_services_fiscaux: 0.0006, // ~66 m (26 entités, contours larges type département)
   departements: 0.0006, // ~66 m
   regions: 0.001, // ~110 m
 };
@@ -60,6 +68,15 @@ export async function getAdminBoundaries(niveau: AdminLevel): Promise<AdminBound
       FROM "cad_arrondissements"
       WHERE geom IS NOT NULL
       ORDER BY "nomArrondissement"
+    `;
+  } else if (niveau === "centres_services_fiscaux") {
+    rows = await prisma.$queryRaw<Row[]>`
+      SELECT "nomCsf" AS nom,
+             ST_AsGeoJSON(ST_SimplifyPreserveTopology(geom, ${tol}))::jsonb AS geom,
+             ST_AsGeoJSON(ST_PointOnSurface(geom))::jsonb AS pt
+      FROM "cad_centres_services_fiscaux"
+      WHERE geom IS NOT NULL
+      ORDER BY "nomCsf"
     `;
   } else if (niveau === "departements") {
     rows = await prisma.$queryRaw<Row[]>`

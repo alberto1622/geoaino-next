@@ -5367,6 +5367,93 @@ fusion, la table attributaire est vidée (`setTableRows([])`) plutôt que
 réaffichée : les indices qu'elle référence sont caducs dès qu'une feature a
 disparu du GeoJSON, exactement le même choix que « Tout effacer ».
 
+## 56. Chargement des centres de services fiscaux (CSF) : même pattern que les arrondissements (§44), pivot Python → TypeScript et correction de terminologie en cours de tâche
+
+**Problème métier** : aucun référentiel des centres de services fiscaux
+(CSF, limites administratives 2023, DGID) n'existait en base — un
+shapefile officiel dédié existe (`Limites_CSF_2023.shp`, 26 features,
+champs `CSF`/`REG`), dans le même dossier source que `Arrondissements.shp`.
+
+**Cause technique** : aucun modèle Prisma ne couvre ce niveau administratif
+(entre `cad_arrondissements` et `cad_communes_2026`/`cad_communes_2013`,
+sans hiérarchie stricte avec ces derniers) — géométrie propre requise,
+comme pour les arrondissements (§44), pas de dissolution dérivable.
+
+**Solution** :
+- Nouveau modèle `CadCentreServiceFiscal` (`cad_centres_services_fiscaux`,
+  migration `20260918085454_add_cad_centres_services_fiscaux`), même forme
+  de colonnes que `CadArrondissement` réduite aux champs source disponibles
+  (`nomCsf`, `region`, `geojson`, `geom geometry(MultiPolygon, 4326)`).
+- `scripts/load-limites-csf.ts` — copie quasi conforme de
+  `load-arrondissements.ts` (même lecture directe `shapefile` npm, même
+  `convertGeometryToWgs84` pour la reprojection UTM Zone 28N → WGS84, même
+  découpage en lots de 500, même `--fresh` optionnel). 1 des 26 features a
+  une géométrie ni `Polygon` ni `MultiPolygon` (ignorée, compteur affiché) ;
+  25 lignes chargées et vérifiées valides (`ST_IsValid`) après coup.
+
+**Pourquoi (pièges inclus)** : la demande initiale portait sur un script
+**Python** (`geopandas`/`psycopg2`, tous deux déjà installés sur la machine
+de dev, donc faisable sans nouvelle dépendance) — un script fonctionnel a
+été écrit et exécuté avec succès (25 lignes chargées), puis explicitement
+annulé (table vidée, fichiers supprimés) sur demande explicite pour
+repartir sur le pattern TypeScript déjà établi par `load-arrondissements.ts`.
+Piège à retenir : **ce dépôt n'a aucun stack Python de chargement DB
+établi** (pas de `requirements.txt` racine, pas de `.env` lu depuis Python
+ailleurs) — un script Python isolé y introduit une deuxième filière
+d'accès à la même base sans bénéfice de cohérence, alors que le stack
+TypeScript existant (`shapefile` + Prisma, déjà utilisé pour ce type exact
+de référentiel) suffit et reste la voie par défaut pour tout nouveau
+chargement de shapefile administratif. Second piège, terminologique cette
+fois : l'acronyme `CSF` a d'abord été mal déplié en « Circonscription des
+Services Fonciers » (modèle `CadCirconscriptionFonciere`, table
+`cad_circonscriptions_foncieres`) avant correction par l'utilisateur — le
+sigle désigne en réalité un **Centre de Services Fiscaux** (DGID). Comme
+la migration erronée n'avait jamais quitté la base de dev locale (jamais
+committée, jamais partagée), la correction a pu se faire par un DROP TABLE
++ suppression de l'entrée `_prisma_migrations` + nouvelle migration propre,
+plutôt que par une migration de renommage — leçon : un nom métier abrégé
+mérite d'être vérifié auprès du domaine AVANT de le figer dans un
+identifiant de schéma, une fois la migration partagée le coût de
+correction change de nature (migration de renommage ou double lecture
+temporaire, plutôt qu'un simple redémarrage à froid).
+
+## 57. Centres de services fiscaux branchés sur les sélecteurs UI (`MapAnalysisClient.tsx`, `MapLibreMap.tsx`, `SectionsClient.tsx`, `admin-boundaries.ts`)
+
+**Problème métier** : suite au §56, la table `cad_centres_services_fiscaux`
+existait mais restait invisible ailleurs que par script — aucun écran ne
+proposait ce niveau, exactement la même lacune que celle comblée pour les
+arrondissements au §45.
+
+**Solution** : même schéma de branchement qu'au §45, réappliqué à
+l'identique pour ce niveau :
+- `admin-boundaries.ts` gagne le niveau `"centres_services_fiscaux"` —
+  géométrie PROPRE lue directement sur `cad_centres_services_fiscaux`
+  (comme `arrondissements`, pas de `ST_Union`) ; `GET
+  /api/cadastre/admin-boundaries` accepte désormais
+  `?niveau=centres_services_fiscaux`.
+- Les trois définitions locales dupliquées de `AdminLevel`/`ADMIN_LEVELS`/
+  `ADMIN_STYLES` (`MapAnalysisClient.tsx`, `MapLibreMap.tsx`,
+  `SectionsClient.tsx`) gagnent chacune l'entrée `centres_services_fiscaux`
+  (couleur `#0891b2`, distincte des quatre autres niveaux). Les boucles de
+  rendu génériques sur `ADMIN_LEVELS` (§45) n'ont, comme prévu, demandé
+  aucune autre modification.
+
+**Pourquoi (pièges inclus)** : même dette de duplication qu'au §45 (trois
+fichiers à synchroniser à la main faute d'import partagé du type
+`AdminLevel` depuis `admin-boundaries.ts`) — non corrigée ici non plus,
+changement plus large que la demande. Vérifié en conditions réelles avant
+tout test navigateur : `getAdminBoundaries("centres_services_fiscaux")`
+appelé directement (hors HTTP, la route exige une session authentifiée)
+contre la vraie base de dev — 25 features, 25 labels, géométrie simplifiée
+valide. Piège d'environnement rencontré au passage : le conteneur Postgres
+de dev (`geoaino_postgres`, `docker-compose.yml`) n'était plus démarré ;
+lancer `docker-compose up` depuis CE worktree (au lieu du checkout
+principal) aurait créé un volume `bureau-autonome_pgdata` neuf et VIDE
+(le nom de projet Compose par défaut suit le nom du dossier courant) —
+la vraie base vit dans le volume `geoaino-next_pgdata`, retrouvé par
+`docker volume ls` et attaché explicitement via `docker-compose
+--project-name geoaino-next up -d postgres`.
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait

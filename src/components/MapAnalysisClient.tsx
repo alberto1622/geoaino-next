@@ -49,18 +49,25 @@ import { useAnalysisUpdateListener } from "@/lib/analyses/live-refresh";
 
 // ── Limites administratives (régions / départements / communes) ──────────────
 // Mêmes contours nationaux (cad_communes_2026) que la page /cadastre/sections.
-type AdminLevel = "regions" | "departements" | "arrondissements" | "communes";
+type AdminLevel =
+  | "regions"
+  | "departements"
+  | "arrondissements"
+  | "communes"
+  | "centres_services_fiscaux";
 const ADMIN_LEVELS: AdminLevel[] = [
   "regions",
   "departements",
   "arrondissements",
   "communes",
+  "centres_services_fiscaux",
 ];
 const ADMIN_STYLES: Record<AdminLevel, { label: string; color: string }> = {
   regions: { label: "Régions", color: "#b91c1c" },
   departements: { label: "Départements", color: "#b45309" },
   arrondissements: { label: "Arrondissements", color: "#7c3aed" },
   communes: { label: "Communes", color: "#0f766e" },
+  centres_services_fiscaux: { label: "Centres de services fiscaux", color: "#0891b2" },
 };
 
 const MapLibreMap = dynamic(() => import("@/components/MapLibreMap"), {
@@ -556,6 +563,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     departements: false,
     arrondissements: false,
     communes: false,
+    centres_services_fiscaux: false,
   });
   // Masque/affiche le panneau latéral gauche pour libérer de l'espace carte.
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);

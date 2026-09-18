@@ -121,7 +121,12 @@ interface SectionsData { boundaries: GeoJSON.FeatureCollection; labels: SectionL
 // /api/cadastre/admin-boundaries (dérivés de cad_communes_2026), plutôt que le
 // contour déduit de l'emprise de l'analyse (abandonné pour rester cohérent
 // avec la page sections).
-type AdminLevel = "regions" | "departements" | "arrondissements" | "communes";
+type AdminLevel =
+  | "regions"
+  | "departements"
+  | "arrondissements"
+  | "communes"
+  | "centres_services_fiscaux";
 const ADMIN_STYLES: Record<
   AdminLevel,
   { label: string; color: string; width: number; dasharray?: number[]; minLabelZoom: number; fontSize: number }
@@ -130,6 +135,14 @@ const ADMIN_STYLES: Record<
   departements: { label: "Départements", color: "#b45309", width: 2, dasharray: [6, 3], minLabelZoom: 7.5, fontSize: 12 },
   arrondissements: { label: "Arrondissements", color: "#7c3aed", width: 1.6, dasharray: [5, 3], minLabelZoom: 8.5, fontSize: 11 },
   communes: { label: "Communes", color: "#0f766e", width: 1.2, dasharray: [4, 3], minLabelZoom: 9, fontSize: 10 },
+  centres_services_fiscaux: {
+    label: "Centres de services fiscaux",
+    color: "#0891b2",
+    width: 1.8,
+    dasharray: [2, 2],
+    minLabelZoom: 8,
+    fontSize: 11,
+  },
 };
 interface AdminLabel { lng: number; lat: number; nom: string }
 interface AdminData { boundaries: GeoJSON.FeatureCollection; labels: AdminLabel[] }

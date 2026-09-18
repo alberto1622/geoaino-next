@@ -187,8 +187,19 @@ const BLINK_LOW_OPACITY = 0.2;
 // ── Limites administratives (régions / départements / communes) ──────────────
 // Contours + noms servis par /api/cadastre/admin-boundaries (dérivés de
 // cad_communes_2026). `minLabelZoom` évite le nuage d'étiquettes en vue large.
-type AdminLevel = "regions" | "departements" | "arrondissements" | "communes";
-const ADMIN_LEVELS: AdminLevel[] = ["regions", "departements", "arrondissements", "communes"];
+type AdminLevel =
+  | "regions"
+  | "departements"
+  | "arrondissements"
+  | "communes"
+  | "centres_services_fiscaux";
+const ADMIN_LEVELS: AdminLevel[] = [
+  "regions",
+  "departements",
+  "arrondissements",
+  "communes",
+  "centres_services_fiscaux",
+];
 const ADMIN_STYLES: Record<
   AdminLevel,
   {
@@ -230,6 +241,14 @@ const ADMIN_STYLES: Record<
     dashArray: "4 3",
     minLabelZoom: 9,
     fontSize: 10,
+  },
+  centres_services_fiscaux: {
+    label: "Centres de services fiscaux",
+    color: "#0891b2",
+    weight: 1.8,
+    dashArray: "2 2",
+    minLabelZoom: 8,
+    fontSize: 11,
   },
 };
 
@@ -379,6 +398,7 @@ export default function SectionsClient() {
     departements: false,
     arrondissements: false,
     communes: false,
+    centres_services_fiscaux: false,
   });
   const adminDataRef = useRef<Partial<Record<AdminLevel, AdminData>>>({});
   const adminFetchingRef = useRef<Set<AdminLevel>>(new Set());
