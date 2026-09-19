@@ -57,9 +57,10 @@ const DXF_PIPELINE_STEPS: JobProgressStep[] = [
   { key: "analyze", label: "Analyse topologique" },
 ];
 
-/** Pipeline job kind "parcelles" shapefile (`run-shapefile-job.ts`) : pas d'étape NICAD/build distincte. */
+/** Pipeline job kind "parcelles" shapefile (`run-shapefile-job.ts`) : pas d'étape "build" distincte (déjà des polygones). */
 const SHP_PARCELLES_STEPS: JobProgressStep[] = [
   { key: "read", label: "Lecture du fichier" },
+  { key: "nicad", label: "Résolution des NICAD" },
   { key: "analyze", label: "Analyse topologique" },
 ];
 

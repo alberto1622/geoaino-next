@@ -106,6 +106,14 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
       }
 
       await assertNotCancelled(jobId);
+      // Phase dédiée avant la jointure spatiale `assignSectionNicad` : sur de
+      // gros fichiers (et plus encore sur le Postgres embarqué du bureau
+      // autonome, plus lent que la base web), cette étape peut prendre
+      // plusieurs minutes. Sans ce `setJobPhase`, la barre de progression
+      // restait figée sur "Lecture du fichier" (5%) pendant toute sa durée,
+      // indiscernable d'un vrai blocage — cause directe de deux annulations
+      // utilisateur observées en usage réel (logs desktop, jobs 5 et 6).
+      await setJobPhase(jobId, "nicad", 30);
       let sectionNicad: Awaited<ReturnType<typeof assignSectionNicad>> = {
         nbConstruits: 0,
         nbSansSection: 0,
@@ -125,7 +133,7 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
         );
       }
 
-      await setJobPhase(jobId, "read", 20);
+      await setJobPhase(jobId, "nicad", 65);
       await finishParcellesJob(
         jobId,
         { fileName: job.fileName, userId: job.userId, sourceType: job.sourceType as SourceType },

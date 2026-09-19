@@ -5454,6 +5454,53 @@ la vraie base vit dans le volume `geoaino-next_pgdata`, retrouvé par
 `docker volume ls` et attaché explicitement via `docker-compose
 --project-name geoaino-next up -d postgres`.
 
+## 58. Import shapefile « parcelles » page d'accueil semblant bloqué sur le bureau autonome : jointure NICAD sans retour de progression
+
+**Problème métier** : sur la version desktop, un import shapefile depuis la
+page d'accueil (`job.kind === "parcelles"`) « prend trop de temps et semble
+bloquer », au point que l'utilisateur annule le job (confirmé en conditions
+réelles : logs `%APPDATA%\GeoAino\logs\next.log`, `[import/run-shapefile]
+Job 5 annulé par l'utilisateur.` / `Job 6 annulé par l'utilisateur.`).
+
+**Cause technique** : `SHP_PARCELLES_STEPS` (`NewAnalysisPanel.tsx`) n'a que
+2 étapes (« Lecture du fichier » / « Analyse topologique »), contre 4 pour
+le pipeline DXF équivalent (qui a une étape « Résolution des NICAD »
+dédiée). Entre `setJobPhase(jobId, "read", 5)` en tout début de job et
+`finishParcellesJob` → `setJobPhase(jobId, "analyze", 72)`,
+`run-shapefile-job.ts` fait tourner `assignSectionNicad()` — une jointure
+spatiale contre `limite_section` — sans AUCUNE mise à jour de phase
+intermédiaire. `JobProgressSteps.tsx` dérive l'étape active et l'icône
+`Loader2` animée uniquement de la clé `phase` : pendant toute la durée de
+`assignSectionNicad`, l'UI reste figée sur « Lecture du fichier » à 5 %,
+indiscernable d'un vrai blocage. Sur le bureau autonome, cette jointure
+tourne contre le Postgres embarqué (`pg-portable`) — plus lent que la base
+web hébergée — rendant cette fenêtre silencieuse assez longue pour alarmer
+l'utilisateur ; le même code sur le web est probablement juste assez rapide
+pour ne jamais être remarqué.
+
+**Solution** : `SHP_PARCELLES_STEPS` gagne une 3e étape `{ key: "nicad",
+label: "Résolution des NICAD" }` (même libellé que le pipeline DXF) ;
+`run-shapefile-job.ts` émet `setJobPhase(jobId, "nicad", 30)` juste avant
+`assignSectionNicad()` et `setJobPhase(jobId, "nicad", 65)` juste après —
+l'utilisateur voit l'icône active se déplacer sur une étape clairement
+nommée au lieu de rester sur « Lecture du fichier ».
+
+**Pourquoi (pièges inclus)** : une piste plus radicale — sauter
+entièrement `assignSectionNicad` quand le shapefile porte déjà un NICAD
+valide — a été explicitement écartée après lecture complète du fichier :
+le code NE reconstruit JAMAIS un NICAD déjà valide (`if (c.hasValidNicad)
+return;`), mais la jointure spatiale s'exécute quand même pour TOUTES les
+features, y compris déjà NICADées, afin de calculer `sectionGeolocalisee`
+et détecter une incohérence entre section déclarée et section
+géolocalisée (erreur `section_mismatch`) — comportement documenté et
+délibéré dans l'en-tête de `assign-section-nicad.ts`, pas un oubli.
+Sauter cette jointure pour les parcelles déjà NICADées aurait désactivé
+silencieusement cette détection pour tout shapefile arrivant avec des
+NICAD déjà renseignés — arbitrage refusé par l'utilisateur, qui a
+explicitement choisi de garder la vérification et de ne corriger QUE
+l'affichage de progression. Ce correctif ne réduit donc PAS le temps réel
+du job — il rend seulement sa progression visible.
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
