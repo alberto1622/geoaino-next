@@ -56,8 +56,8 @@ export interface IdentificationResult {
   commune2013?: { nomCommune: string; region: string | null; departement: string | null } | null;
   commune2026?: { nomCommune: string; region: string | null; departement: string | null } | null;
   correspondance?: {
-    syscol2026: string;
-    nomCommune2026: string;
+    syscol2026: string | null;
+    nomCommune2026: string | null;
     statut: string;
     typeChangement: string | null;
     departement2013: string | null;
@@ -257,10 +257,10 @@ export async function identifierBasculementNicad(nicadAncien: string): Promise<I
     commune2026: commune2026
       ? { nomCommune: commune2026.nomCommune, region: commune2026.region, departement: commune2026.departement }
       : null,
-    correspondance: correspondance && syscol2026
+    correspondance: correspondance
       ? {
           syscol2026,
-          nomCommune2026: correspondance.nomCommune2026 ?? "",
+          nomCommune2026: correspondance.nomCommune2026,
           statut: correspondance.statut,
           typeChangement: correspondance.typeChangement,
           departement2013: correspondance.departement,
