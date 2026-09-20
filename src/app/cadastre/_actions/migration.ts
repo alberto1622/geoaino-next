@@ -10,6 +10,7 @@ import {
   insertOperation,
   updateOperation,
 } from "@/lib/cadastre/data";
+import { basculerNicadCore } from "@/lib/cadastre/basculement";
 
 export async function previewCommune(input: { syscol2013: string }) {
   await requireUserId();
@@ -84,4 +85,68 @@ export async function executerToutes() {
     });
     throw err;
   }
+}
+
+const executerBasculementListeSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        nicadAncien: z.string().length(16),
+        syscolNouveau: z.string().min(7).max(8),
+        sectionNouvelle: z.string().min(1).max(3).optional(),
+      }),
+    )
+    .min(1)
+    .max(1000),
+});
+
+export async function executerBasculementListe(input: z.infer<typeof executerBasculementListeSchema>) {
+  const userId = await requireAdmin();
+  const data = executerBasculementListeSchema.parse(input);
+
+  const opId = await insertOperation({
+    typeOperation: "basculement",
+    statut: "en_cours",
+    description: `Migration en masse par shapefile : ${data.items.length} NICAD`,
+    createdBy: userId,
+  });
+
+  const resultats: Array<{ nicadAncien: string; success: boolean; nicadNouveau?: string; error?: string }> = [];
+  let nbMigres = 0;
+  let nbEchecs = 0;
+
+  for (const item of data.items) {
+    try {
+      const res = await basculerNicadCore({
+        nicadAncien: item.nicadAncien,
+        syscolNouveau: item.syscolNouveau,
+        sectionNouvelle: item.sectionNouvelle,
+        motif: "Migration en masse par import shapefile",
+        userId,
+      });
+      if (res.success) {
+        resultats.push({ nicadAncien: item.nicadAncien, success: true, nicadNouveau: res.nicadNouveau });
+        nbMigres++;
+      } else {
+        resultats.push({ nicadAncien: item.nicadAncien, success: false, error: res.error });
+        nbEchecs++;
+      }
+    } catch (err) {
+      resultats.push({
+        nicadAncien: item.nicadAncien,
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      nbEchecs++;
+    }
+  }
+
+  await updateOperation(opId, {
+    statut: nbEchecs === 0 ? "succes" : "echec",
+    nbTraites: nbMigres + nbEchecs,
+    nbSucces: nbMigres,
+    nbEchecs,
+  });
+
+  return { success: true as const, nbMigres, nbEchecs, resultats };
 }
