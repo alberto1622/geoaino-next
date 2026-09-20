@@ -34,6 +34,7 @@ function shapefileTargetForKind(kind: string | undefined): ShapefileTarget {
   if (kind === "cad-sections") return "cad-sections";
   if (kind === "sections") return "sections-limite";
   if (kind === "parcelles") return "parcelles-home";
+  if (kind === "bascule-nicad") return "bascule-nicad";
   return "cad-parcelles";
 }
 
@@ -115,9 +116,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         if (!userId) {
           return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
         }
-        if (!body.kind || !["cad-parcelles", "cad-sections", "sections", "parcelles"].includes(body.kind)) {
+        if (!body.kind || !["cad-parcelles", "cad-sections", "sections", "parcelles", "bascule-nicad"].includes(body.kind)) {
           return NextResponse.json(
-            { error: "kind requis pour un job shapefile (cad-parcelles|cad-sections|sections|parcelles)." },
+            { error: "kind requis pour un job shapefile (cad-parcelles|cad-sections|sections|parcelles|bascule-nicad)." },
             { status: 400 },
           );
         }

@@ -9,7 +9,7 @@ import type { ShapefileTarget } from "@/lib/import/field-mapping";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-const VALID_TARGETS: ShapefileTarget[] = ["cad-parcelles", "cad-sections", "sections-limite", "parcelles-home"];
+const VALID_TARGETS: ShapefileTarget[] = ["cad-parcelles", "cad-sections", "sections-limite", "parcelles-home", "bascule-nicad"];
 
 /**
  * POST /api/cadastre/import/inventory — inventaire des colonnes .dbf d'un

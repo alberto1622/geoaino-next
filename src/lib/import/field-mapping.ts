@@ -8,7 +8,7 @@
  */
 import { normalizeText } from "../cadastral-filter";
 
-export type ShapefileTarget = "cad-parcelles" | "cad-sections" | "sections-limite" | "parcelles-home";
+export type ShapefileTarget = "cad-parcelles" | "cad-sections" | "sections-limite" | "parcelles-home" | "bascule-nicad";
 
 export interface TargetFieldDef {
   key: string;
@@ -90,10 +90,26 @@ export const LIMITE_SECTION_TARGET_FIELDS: TargetFieldDef[] = [
   },
 ];
 
+/**
+ * Cible de mappage pour l'import "Migration en masse" par shapefile
+ * (job.kind === "bascule-nicad") : un seul champ requis, le NICAD 2013 à
+ * identifier — mêmes alias que PARCELLES_HOME_TARGET_FIELDS pour rester
+ * cohérent avec le devinage déjà en place ailleurs.
+ */
+export const BASCULE_NICAD_TARGET_FIELDS: TargetFieldDef[] = [
+  {
+    key: "nicad",
+    label: "NICAD (16 caractères)",
+    aliases: ["nicad", "nic", "num_nicad", "code_nicad", "codif"],
+    required: true,
+  },
+];
+
 export function targetFieldsFor(target: ShapefileTarget): TargetFieldDef[] {
   if (target === "cad-parcelles") return PARCELLE_TARGET_FIELDS;
   if (target === "cad-sections") return CAD_SECTION_TARGET_FIELDS;
   if (target === "parcelles-home") return PARCELLES_HOME_TARGET_FIELDS;
+  if (target === "bascule-nicad") return BASCULE_NICAD_TARGET_FIELDS;
   return LIMITE_SECTION_TARGET_FIELDS;
 }
 

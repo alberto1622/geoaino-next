@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 
 export type SourceType = "DXF" | "DGN" | "SHP";
 export type JobStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
-export type JobPhase = "read" | "build" | "nicad" | "analyze" | "sections" | "import" | "done";
+export type JobPhase = "read" | "build" | "nicad" | "analyze" | "sections" | "import" | "identify" | "done";
 /**
  * Cible du job :
  *  - "parcelles"/"sections" : pipeline DXF existant (Analysis / limite_section),
@@ -14,8 +14,12 @@ export type JobPhase = "read" | "build" | "nicad" | "analyze" | "sections" | "im
  *    sourceType "SHP" → même table limite_section, même report shape).
  *  - "cad-parcelles"/"cad-sections" : import shapefile en masse de
  *    `/cadastre/import` (écrit dans CadParcelle / CadSection).
+ *  - "bascule-nicad" : identification en masse (SANS écriture) des cibles
+ *    2026 pour une liste de NICAD 2013 fournie par shapefile — voir
+ *    run-bascule-job.ts. Le basculement réel est un acte séparé, déclenché
+ *    par l'utilisateur après revue du rapport (`executerBasculementListe`).
  */
-export type JobKind = "parcelles" | "sections" | "cad-parcelles" | "cad-sections";
+export type JobKind = "parcelles" | "sections" | "cad-parcelles" | "cad-sections" | "bascule-nicad";
 
 export async function createImportJob(input: {
   fileName: string;
