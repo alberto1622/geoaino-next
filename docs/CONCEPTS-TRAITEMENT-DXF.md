@@ -5501,6 +5501,50 @@ explicitement choisi de garder la vérification et de ne corriger QUE
 l'affichage de progression. Ce correctif ne réduit donc PAS le temps réel
 du job — il rend seulement sa progression visible.
 
+## 59. Migration en masse par import shapefile (NICAD) : réutilisation de la logique de basculement individuel
+
+**Problème métier** : « Migration en masse » (par commune, depuis la base)
+ne gérait que le cas simple (section inchangée) — un NICAD dont la section
+a été redécoupée entre 2013 et 2026 migrait vers un numéro de section
+obsolète ou incorrect. Seule la page « Basculement » (un NICAD à la fois)
+gérait correctement les deux cas, via résolution spatiale
+(`findSectionSpatialMatches`).
+
+**Cause technique** : `executerMigrationCommune` (`lib/cadastre/data.ts`)
+réutilise `p.numSection` tel quel pour TOUTES les parcelles d'une commune,
+sans jamais vérifier par jointure spatiale si la section a changé de
+numéro — logique volontairement simplifiée pour un traitement par lot
+rapide, mais incomplète face à un redécoupage réel.
+
+**Solution** : nouveau chemin d'import shapefile (`job.kind ===
+"bascule-nicad"`, `run-bascule-job.ts`) qui applique, pour chaque NICAD
+extrait du fichier, EXACTEMENT la même identification que la page
+Basculement (`identifierBasculementNicad`, extraite dans
+`lib/cadastre/basculement.ts` pour être partagée sans duplication entre
+les deux chemins). Le job ne fait AUCUNE écriture — il produit un rapport
+de prévisualisation (`job.report`) affiché en tableau sur `/cadastre/migration`,
+que l'utilisateur approuve ligne par ligne ou en bloc (uniquement les
+lignes `clean: true`, jamais les lignes à drapeau automatiquement) avant
+que `executerBasculementListe` n'applique le basculement réel
+(`basculerNicadCore`, même fonction que la page interactive).
+
+**Pourquoi (pièges inclus)** : la logique de résolution spatiale
+(`identifierBasculementNicad`) vivait jusque-là dans un fichier `"use
+server"` (`_actions/nicad.ts`), donc invocable uniquement comme Server
+Action côté client — inutilisable telle quelle depuis un job d'arrière-plan
+(`run-bascule-job.ts`, exécuté via `after()`, hors contexte de requête
+utilisateur). Extraite dans `lib/cadastre/basculement.ts`, sans `"use
+server"` ni dépendance à `requireUserId()`, elle reste identique
+bit-à-bit à ce qu'utilise la page interactive (`_actions/nicad.ts` n'est
+plus qu'un mince wrapper auth+validation) — tout futur correctif de cette
+logique profite aux deux chemins sans risque de divergence. Piège évité
+par construction (leçon du §58, correctif du même jour) : `run-bascule-job.ts`
+émet `setJobPhase("identify", ...)` toutes les 20 identifications plutôt
+qu'une seule fois en fin de job — sur un shapefile de plusieurs milliers de
+NICAD, l'identification (plusieurs requêtes DB par NICAD, dont une
+jointure spatiale) peut prendre assez longtemps pour paraître bloquée sans
+ce retour de progression régulier.
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
