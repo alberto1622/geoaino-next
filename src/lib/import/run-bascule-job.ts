@@ -1,0 +1,169 @@
+/**
+ * run-bascule-job.ts — exécution asynchrone du job d'identification en masse
+ * pour "Migration en masse" (`job.kind === "bascule-nicad"`, dispatché depuis
+ * run-shapefile-job.ts). Lit un shapefile portant une colonne NICAD (2013),
+ * et pour chaque NICAD valide, retrouve sa cible 2026 (commune + section, cas
+ * simple ET complexe) via la même logique que la page "Basculement" —
+ * `identifierBasculementNicad` (lib/cadastre/basculement.ts).
+ *
+ * AUCUNE écriture en base ici : ce job produit uniquement un rapport de
+ * prévisualisation (`job.report`). Le basculement réel est un acte séparé,
+ * déclenché par l'utilisateur après revue — `executerBasculementListe`
+ * (`_actions/migration.ts`).
+ */
+import * as shapefile from "shapefile";
+import { Prisma } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
+import { identifierBasculementNicad } from "@/lib/cadastre/basculement";
+import { validateNicadFormat } from "@/lib/cadastre/nicad-logic";
+import type { FieldMapping } from "./field-mapping";
+import { loadShapefilePair } from "./run-shapefile-job";
+import { getImportJob, setJobPhase, assertNotCancelled, markJobFailed, JobCancelledError } from "./jobs";
+
+interface BasculeNicadItem {
+  nicadAncien: string;
+  dejaAJour: boolean;
+  clean: boolean;
+  flags: string[];
+  proposition: { syscolNouveau: string; sectionNouvelle?: string } | null;
+  commune2013?: string;
+  commune2026?: string;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function pick(props: any, ...keys: string[]): string {
+  for (const k of keys) {
+    const v = props?.[k];
+    if (v !== null && v !== undefined && String(v).trim() !== "") return String(v).trim();
+  }
+  return "";
+}
+
+export async function runBasculeNicadJob(jobId: number): Promise<void> {
+  const job = await getImportJob(jobId);
+  if (!job) {
+    console.warn(`[import/run-bascule] job ${jobId} introuvable`);
+    return;
+  }
+
+  try {
+    await setJobPhase(jobId, "read", 5, "running");
+    const { shpBuf, dbfBuf } = await loadShapefilePair(job.fileKey);
+    const fieldMapping = (job.layerMapping as FieldMapping | null) ?? undefined;
+
+    const source = await shapefile.read(shpBuf, dbfBuf);
+    const features = (source.features ?? []) as GeoJSON.Feature[];
+
+    // Extraction + dédoublonnage + validation de format AVANT toute
+    // identification — un shapefile réel peut répéter le même NICAD sur
+    // plusieurs features (multi-parties), et contenir des colonnes vides
+    // ou mal formées (saisie manuelle en amont).
+    const seen = new Set<string>();
+    const nicadsValides: string[] = [];
+    let nbInvalides = 0;
+    for (const f of features) {
+      const props = f.properties ?? {};
+      const raw = fieldMapping?.nicad
+        ? pick(props, fieldMapping.nicad)
+        : pick(props, "nicad", "nic", "num_nicad", "code_nicad", "codif");
+      if (!raw) {
+        nbInvalides++;
+        continue;
+      }
+      const digits = raw.replace(/\D/g, "");
+      if (digits.length !== 16 || !validateNicadFormat(digits).valid) {
+        nbInvalides++;
+        continue;
+      }
+      if (seen.has(digits)) continue;
+      seen.add(digits);
+      nicadsValides.push(digits);
+    }
+
+    await assertNotCancelled(jobId);
+    await setJobPhase(jobId, "identify", 10);
+
+    const items: BasculeNicadItem[] = [];
+    let nbDejaAJour = 0;
+    let nbClean = 0;
+    let nbAvecDrapeaux = 0;
+
+    for (let i = 0; i < nicadsValides.length; i++) {
+      const nicadAncien = nicadsValides[i];
+      const res = await identifierBasculementNicad(nicadAncien);
+
+      if (!res.success) {
+        items.push({
+          nicadAncien,
+          dejaAJour: false,
+          clean: false,
+          flags: [res.error ?? "Identification échouée."],
+          proposition: null,
+        });
+        nbAvecDrapeaux++;
+      } else if (res.dejaAJour) {
+        items.push({
+          nicadAncien,
+          dejaAJour: true,
+          clean: false,
+          flags: res.flags,
+          proposition: null,
+          commune2026: res.commune2026?.nomCommune,
+        });
+        nbDejaAJour++;
+      } else {
+        const clean = !!res.clean;
+        items.push({
+          nicadAncien,
+          dejaAJour: false,
+          clean,
+          flags: res.flags,
+          proposition: res.proposition ?? null,
+          commune2013: res.commune2013?.nomCommune ?? undefined,
+          commune2026: res.commune2026?.nomCommune ?? undefined,
+        });
+        if (clean) nbClean++;
+        else nbAvecDrapeaux++;
+      }
+
+      // Points de contrôle toutes les 20 identifications : suffisamment
+      // fréquent pour que la barre de progression bouge visiblement (cf.
+      // leçon du §58 CONCEPTS-TRAITEMENT-DXF.md — un job qui reste figé sur
+      // la même valeur est indiscernable d'un blocage), sans réécrire la
+      // ligne en base à chaque itération individuelle.
+      if (i % 20 === 0 || i === nicadsValides.length - 1) {
+        await assertNotCancelled(jobId);
+        const pct = 10 + Math.round(((i + 1) / Math.max(nicadsValides.length, 1)) * 85);
+        await setJobPhase(jobId, "identify", Math.min(pct, 95));
+      }
+    }
+
+    await prisma.importJob.updateMany({
+      where: { id: jobId, status: { not: "cancelled" } },
+      data: {
+        status: "completed",
+        phase: "done",
+        progress: 100,
+        totalBuilt: items.length,
+        report: {
+          kind: "bascule-nicad",
+          items,
+          stats: {
+            total: features.length,
+            invalides: nbInvalides,
+            dejaAJour: nbDejaAJour,
+            clean: nbClean,
+            avecDrapeaux: nbAvecDrapeaux,
+          },
+        } as unknown as Prisma.InputJsonValue,
+      },
+    });
+  } catch (err) {
+    if (err instanceof JobCancelledError) {
+      console.log(`[import/run-bascule] ${err.message}`);
+      return;
+    }
+    console.error(`[import/run-bascule] job ${jobId} échoué:`, err);
+    await markJobFailed(jobId, err instanceof Error ? err.message : String(err));
+  }
+}

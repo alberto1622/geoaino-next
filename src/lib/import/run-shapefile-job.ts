@@ -22,8 +22,9 @@ import { getImportJob, setJobPhase, setJobProgress, markJobFailed, assertNotCanc
 import { reprojectFeaturesToWgs84 } from "./geo-parse";
 import { finishParcellesJob } from "./run-job";
 import { assignSectionNicad } from "@/lib/cadastre/assign-section-nicad";
+import { runBasculeNicadJob } from "./run-bascule-job";
 
-async function loadShapefilePair(fileKey: string): Promise<{ shpBuf: Buffer; dbfBuf: Buffer; prjBuf?: Buffer }> {
+export async function loadShapefilePair(fileKey: string): Promise<{ shpBuf: Buffer; dbfBuf: Buffer; prjBuf?: Buffer }> {
   const zipBuf = await loadImportUpload(fileKey);
   const zip = await JSZip.loadAsync(zipBuf);
   const shpEntry = Object.values(zip.files).find((f) => f.name.toLowerCase().endsWith(".shp"));
@@ -42,6 +43,10 @@ export async function runShapefileImportJob(jobId: number): Promise<void> {
   if (!job) {
     console.warn(`[import/run-shapefile] job ${jobId} introuvable`);
     return;
+  }
+
+  if (job.kind === "bascule-nicad") {
+    return runBasculeNicadJob(jobId);
   }
 
   let opId: number | null = null;
