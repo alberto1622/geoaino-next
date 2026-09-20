@@ -14,13 +14,13 @@
 import * as shapefile from "shapefile";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { identifierBasculementNicad } from "@/lib/cadastre/basculement";
+import { identifierBasculementNicad, type IdentificationResult } from "@/lib/cadastre/basculement";
 import { validateNicadFormat } from "@/lib/cadastre/nicad-logic";
 import type { FieldMapping } from "./field-mapping";
 import { loadShapefilePair } from "./run-shapefile-job";
 import { getImportJob, setJobPhase, assertNotCancelled, markJobFailed, JobCancelledError } from "./jobs";
 
-interface BasculeNicadItem {
+export interface BasculeNicadItem {
   nicadAncien: string;
   dejaAJour: boolean;
   clean: boolean;
@@ -28,6 +28,18 @@ interface BasculeNicadItem {
   proposition: { syscolNouveau: string; sectionNouvelle?: string } | null;
   commune2013?: string;
   commune2026?: string;
+  // Confirmation explicite (issue de `identifierBasculementNicad`) que la
+  // section cible existe bien en 2026 — `null`/`false` signifie qu'un
+  // basculement "simple" (sans `proposition.sectionNouvelle`) ne peut PAS
+  // être garanti sûr : `basculerNicadCore` ne vérifie l'existence de la
+  // section QUE dans son branchement "complexe" (cf. finding 1 revue finale).
+  sectionExisteEn2026: boolean | null;
+}
+
+export interface BasculeNicadReport {
+  kind: "bascule-nicad";
+  items: BasculeNicadItem[];
+  stats: { total: number; invalides: number; dejaAJour: number; clean: number; avecDrapeaux: number };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -88,9 +100,42 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
     let nbClean = 0;
     let nbAvecDrapeaux = 0;
 
+    // Mémoïsation par (syscol+section) — les 11 premiers chiffres du NICAD
+    // (positions 1–8 Syscol, 9–11 Section ; cf. nicad-logic.ts) déterminent
+    // À EUX SEULS tout ce qu'`identifierBasculementNicad` interroge en base
+    // (commune 2013/2026, correspondance, recouvrement spatial de section) —
+    // le numéro de parcelle (5 derniers chiffres) n'entre dans AUCUNE requête.
+    // Un shapefile réel porte typiquement une seule commune (souvent une
+    // poignée de sections) sur des dizaines de milliers de parcelles : sans
+    // ce cache, `identifierBasculementNicad` recalcule les mêmes requêtes
+    // spatiales/DB pour chaque parcelle (finding 5 revue finale). On ne
+    // met en cache QUE le résultat sans le champ `nicad` (spécifique à
+    // chaque parcelle), reconstruit ci-dessous à partir du NICAD courant.
+    const identificationCache = new Map<string, Omit<IdentificationResult, "nicad">>();
+
     for (let i = 0; i < nicadsValides.length; i++) {
       const nicadAncien = nicadsValides[i];
-      const res = await identifierBasculementNicad(nicadAncien);
+      const cacheKey = nicadAncien.slice(0, 11);
+      const cached = identificationCache.get(cacheKey);
+      let res: IdentificationResult;
+      if (cached) {
+        res = cached.success
+          ? {
+              ...cached,
+              nicad: {
+                syscol: nicadAncien.slice(0, 8),
+                section: nicadAncien.slice(8, 11),
+                numParcelle: nicadAncien.slice(11, 16),
+                full: nicadAncien,
+              },
+            }
+          : { ...cached };
+      } else {
+        res = await identifierBasculementNicad(nicadAncien);
+        const { nicad, ...rest } = res;
+        void nicad; // exclu volontairement du cache (spécifique à chaque parcelle)
+        identificationCache.set(cacheKey, rest);
+      }
 
       if (!res.success) {
         items.push({
@@ -99,6 +144,7 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
           clean: false,
           flags: [res.error ?? "Identification échouée."],
           proposition: null,
+          sectionExisteEn2026: null,
         });
         nbAvecDrapeaux++;
       } else if (res.dejaAJour) {
@@ -109,6 +155,7 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
           flags: res.flags,
           proposition: null,
           commune2026: res.commune2026?.nomCommune,
+          sectionExisteEn2026: null,
         });
         nbDejaAJour++;
       } else {
@@ -121,6 +168,7 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
           proposition: res.proposition ?? null,
           commune2013: res.commune2013?.nomCommune ?? undefined,
           commune2026: res.commune2026?.nomCommune ?? undefined,
+          sectionExisteEn2026: res.sectionExisteEn2026 ?? null,
         });
         if (clean) nbClean++;
         else nbAvecDrapeaux++;

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import FieldMappingModal from "@/components/FieldMappingModal";
 import { JobProgressSteps, type JobProgressStep } from "@/components/import/JobProgressSteps";
 import { previewToutes, executerCommune, executerToutes, executerBasculementListe } from "../_actions/migration";
+import type { BasculeNicadItem, BasculeNicadReport } from "@/lib/import/run-bascule-job";
 
 type Preview = {
   syscol2013: string;
@@ -19,20 +20,26 @@ type Preview = {
   statut: string;
 };
 
-type BasculeItem = {
-  nicadAncien: string;
-  dejaAJour: boolean;
-  clean: boolean;
-  flags: string[];
-  proposition: { syscolNouveau: string; sectionNouvelle?: string } | null;
-  commune2013?: string;
-  commune2026?: string;
-};
-type BasculeReport = {
-  kind: "bascule-nicad";
-  items: BasculeItem[];
-  stats: { total: number; invalides: number; dejaAJour: number; clean: number; avecDrapeaux: number };
-};
+// Alias locaux — types réels définis (et exportés) dans run-bascule-job.ts,
+// seule source de vérité pour la forme du rapport `job.report`. `import type`
+// est entièrement effacé à la compilation : sûr à référencer depuis ce
+// composant client bien que le module source soit server-only (finding 4
+// revue finale — évite la redéclaration manuelle qui pouvait diverger).
+type BasculeItem = BasculeNicadItem;
+type BasculeReport = BasculeNicadReport;
+
+// Résultat d'exécution par ligne, fusionné après `executerBasculementListe`
+// (finding 3 revue finale) — permet d'afficher quelles lignes ont réellement
+// basculé sans faire disparaître tout le rapport de prévisualisation.
+type ResultatLigne = { success: boolean; nicadNouveau?: string; error?: string };
+
+// Taille de lot pour l'exécution (finding 2 revue finale) : reste sous la
+// limite serveur de `executerBasculementListe` (.max(1000)) avec marge, et
+// les lots s'exécutent STRICTEMENT en séquence (jamais en parallèle) — le
+// chemin complexe de `basculerNicadCore` fait un lire-puis-écrire de
+// `getLastNumParcelleGlobal`/`insertParcelle` par élément qui doit rester
+// ordonné pour éviter des doublons de numéro de parcelle.
+const TAILLE_LOT_BASCULEMENT = 500;
 
 const BASCULE_JOB_STEPS: JobProgressStep[] = [
   { key: "read", label: "Lecture du fichier" },
@@ -61,6 +68,8 @@ export default function MigrationPage() {
   const [basculeReport, setBasculeReport] = useState<BasculeReport | null>(null);
   const [selectedForBascule, setSelectedForBascule] = useState<Set<string>>(new Set());
   const [executingBascule, setExecutingBascule] = useState(false);
+  const [executionProgress, setExecutionProgress] = useState<{ chunk: number; total: number } | null>(null);
+  const [resultatsExecution, setResultatsExecution] = useState<Map<string, ResultatLigne>>(new Map());
 
   function reload() {
     startTransition(async () => {
@@ -119,6 +128,8 @@ export default function MigrationPage() {
     }
     setBasculeReport(null);
     setBasculeJob(null);
+    setResultatsExecution(new Map());
+    setSelectedForBascule(new Set());
     const fd = new FormData();
     fd.append("target", "bascule-nicad");
     for (const f of Array.from(files)) fd.append("files", f);
@@ -167,6 +178,7 @@ export default function MigrationPage() {
         setBasculeJob({ id: j.id, status: j.status, phase: j.phase, progress: j.progress, error: j.error });
         if (j.status === "completed") {
           setBasculeReport(j.report as BasculeReport);
+          setResultatsExecution(new Map());
         } else if (j.status === "failed") {
           toast.error(j.error || "Échec de l'identification.");
         }
@@ -176,6 +188,23 @@ export default function MigrationPage() {
     }, 1500);
     return () => clearInterval(timer);
   }, [basculeJob]);
+
+  // Finding 1 revue finale : une ligne n'est sélectionnable que si son
+  // basculement peut être garanti sûr. `basculerNicadCore` ne vérifie
+  // l'existence de la section cible QUE dans son branchement "complexe"
+  // (quand `sectionNouvelle` est fourni) — le branchement "simple" ne
+  // vérifie rien. Une ligne non "clean", sans `sectionNouvelle` proposée
+  // (donc destinée au branchement simple) ET dont `sectionExisteEn2026`
+  // n'est pas confirmé `true` ne doit donc JAMAIS être sélectionnable :
+  // c'est exactement le cas "Aucune section 2026 ne recouvre significativement
+  // la section 2013 … — nouvelle section à choisir (cas complexe)" où
+  // `identifierBasculementNicad` laisse `proposition.sectionNouvelle`
+  // volontairement `undefined` faute de pouvoir la déterminer.
+  function peutSelectionnerLigne(item: BasculeItem): boolean {
+    if (item.dejaAJour || !item.proposition) return false;
+    if (!item.clean && !item.proposition.sectionNouvelle && item.sectionExisteEn2026 !== true) return false;
+    return true;
+  }
 
   function toggleSelected(nicad: string) {
     setSelectedForBascule((prev) => {
@@ -200,18 +229,49 @@ export default function MigrationPage() {
         syscolNouveau: i.proposition!.syscolNouveau,
         sectionNouvelle: i.proposition!.sectionNouvelle,
       }));
+
+    // Découpage en lots ≤ TAILLE_LOT_BASCULEMENT, exécutés STRICTEMENT en
+    // séquence (jamais Promise.all) — cf. commentaire sur la constante :
+    // l'ordre inter-lots doit rester le même que l'ordre intra-lot pour la
+    // numérotation séquentielle des parcelles côté cas complexe.
+    const chunks: (typeof items)[] = [];
+    for (let i = 0; i < items.length; i += TAILLE_LOT_BASCULEMENT) {
+      chunks.push(items.slice(i, i + TAILLE_LOT_BASCULEMENT));
+    }
+
     setExecutingBascule(true);
+    setExecutionProgress(chunks.length > 1 ? { chunk: 0, total: chunks.length } : null);
     startTransition(async () => {
+      let nbMigres = 0;
+      let nbEchecs = 0;
+      const resultatsParNicad = new Map<string, ResultatLigne>();
       try {
-        const res = await executerBasculementListe({ items });
-        toast.success(`${res.nbMigres} basculé(s), ${res.nbEchecs} échec(s).`);
+        for (let c = 0; c < chunks.length; c++) {
+          setExecutionProgress(chunks.length > 1 ? { chunk: c + 1, total: chunks.length } : null);
+          const res = await executerBasculementListe({ items: chunks[c] });
+          nbMigres += res.nbMigres;
+          nbEchecs += res.nbEchecs;
+          for (const r of res.resultats) {
+            resultatsParNicad.set(r.nicadAncien, {
+              success: r.success,
+              nicadNouveau: r.nicadNouveau,
+              error: r.error,
+            });
+          }
+        }
+        toast.success(`${nbMigres} basculé(s), ${nbEchecs} échec(s).`);
+        setResultatsExecution(resultatsParNicad);
         setSelectedForBascule(new Set());
-        setBasculeReport(null);
-        setBasculeJob(null);
       } catch (err) {
+        // Un lot a levé avant de renvoyer sa réponse (ex. erreur réseau/
+        // serveur) — on garde quand même les résultats des lots précédents
+        // déjà agrégés, pour ne pas perdre la visibilité sur ce qui a
+        // effectivement basculé avant l'échec.
+        setResultatsExecution(resultatsParNicad);
         toast.error(String(err));
       } finally {
         setExecutingBascule(false);
+        setExecutionProgress(null);
       }
     });
   }
@@ -359,7 +419,11 @@ export default function MigrationPage() {
                   className="gap-2"
                 >
                   <Play className="h-4 w-4" />
-                  {executingBascule ? "Basculement…" : `Basculer la sélection (${selectedForBascule.size})`}
+                  {executingBascule
+                    ? executionProgress
+                      ? `Basculement… (lot ${executionProgress.chunk}/${executionProgress.total})`
+                      : "Basculement…"
+                    : `Basculer la sélection (${selectedForBascule.size})`}
                 </Button>
               </div>
               <div className="overflow-x-auto">
@@ -371,37 +435,70 @@ export default function MigrationPage() {
                       <th className="py-2 pr-3">→ Cible 2026</th>
                       <th className="py-2 pr-3">Statut</th>
                       <th className="py-2 pr-3">Drapeaux</th>
+                      {resultatsExecution.size > 0 && <th className="py-2 pr-3">Résultat</th>}
                     </tr>
                   </thead>
                   <tbody>
-                    {basculeReport.items.map((item) => (
-                      <tr
-                        key={item.nicadAncien}
-                        className={`border-b border-border/30 ${item.dejaAJour ? "opacity-50" : ""}`}
-                      >
-                        <td className="py-2 pr-3">
-                          {!item.dejaAJour && item.proposition && (
-                            <input
-                              type="checkbox"
-                              checked={selectedForBascule.has(item.nicadAncien)}
-                              onChange={() => toggleSelected(item.nicadAncien)}
-                            />
+                    {basculeReport.items.map((item) => {
+                      const selectionnable = peutSelectionnerLigne(item);
+                      const resultat = resultatsExecution.get(item.nicadAncien);
+                      return (
+                        <tr
+                          key={item.nicadAncien}
+                          className={`border-b border-border/30 ${item.dejaAJour ? "opacity-50" : ""}`}
+                        >
+                          <td className="py-2 pr-3">
+                            {selectionnable ? (
+                              <input
+                                type="checkbox"
+                                checked={selectedForBascule.has(item.nicadAncien)}
+                                onChange={() => toggleSelected(item.nicadAncien)}
+                              />
+                            ) : !item.dejaAJour && item.proposition ? (
+                              <span
+                                className="text-xs text-muted-foreground"
+                                title="Section 2026 non confirmée par recouvrement spatial — à vérifier manuellement avant basculement (page Basculement)."
+                              >
+                                —
+                              </span>
+                            ) : null}
+                          </td>
+                          <td className="py-2 pr-3 font-mono text-xs">{item.nicadAncien}</td>
+                          <td className="py-2 pr-3 font-mono text-xs">
+                            {item.proposition
+                              ? `${item.proposition.syscolNouveau}${item.proposition.sectionNouvelle ? " / section " + item.proposition.sectionNouvelle : ""}`
+                              : "—"}
+                          </td>
+                          <td className="py-2 pr-3 text-xs text-muted-foreground">
+                            {item.dejaAJour
+                              ? "Déjà 2026"
+                              : item.clean
+                                ? "Sans drapeau"
+                                : !selectionnable
+                                  ? "Section à vérifier manuellement"
+                                  : "Avec drapeau"}
+                          </td>
+                          <td className="py-2 pr-3 text-xs text-muted-foreground">
+                            {item.flags.length > 0 ? item.flags.join(" · ") : "—"}
+                          </td>
+                          {resultatsExecution.size > 0 && (
+                            <td className="py-2 pr-3 text-xs">
+                              {resultat ? (
+                                resultat.success ? (
+                                  <span className="text-emerald-600">
+                                    ✓ basculé{resultat.nicadNouveau ? ` → ${resultat.nicadNouveau}` : ""}
+                                  </span>
+                                ) : (
+                                  <span className="text-destructive">✗ {resultat.error ?? "échec"}</span>
+                                )
+                              ) : (
+                                "—"
+                              )}
+                            </td>
                           )}
-                        </td>
-                        <td className="py-2 pr-3 font-mono text-xs">{item.nicadAncien}</td>
-                        <td className="py-2 pr-3 font-mono text-xs">
-                          {item.proposition
-                            ? `${item.proposition.syscolNouveau}${item.proposition.sectionNouvelle ? " / section " + item.proposition.sectionNouvelle : ""}`
-                            : "—"}
-                        </td>
-                        <td className="py-2 pr-3 text-xs text-muted-foreground">
-                          {item.dejaAJour ? "Déjà 2026" : item.clean ? "Sans drapeau" : "Avec drapeau"}
-                        </td>
-                        <td className="py-2 pr-3 text-xs text-muted-foreground">
-                          {item.flags.length > 0 ? item.flags.join(" · ") : "—"}
-                        </td>
-                      </tr>
-                    ))}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
