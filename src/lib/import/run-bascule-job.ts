@@ -20,14 +20,21 @@ import type { FieldMapping } from "./field-mapping";
 import { loadShapefilePair } from "./run-shapefile-job";
 import { getImportJob, setJobPhase, assertNotCancelled, markJobFailed, JobCancelledError } from "./jobs";
 
+/** Commune (2013 ou 2026) avec sa région/département — cf. `IdentificationResult`. */
+export interface BasculeNicadCommune {
+  nom: string;
+  region: string | null;
+  departement: string | null;
+}
+
 export interface BasculeNicadItem {
   nicadAncien: string;
   dejaAJour: boolean;
   clean: boolean;
   flags: string[];
   proposition: { syscolNouveau: string; sectionNouvelle?: string } | null;
-  commune2013?: string;
-  commune2026?: string;
+  commune2013?: BasculeNicadCommune;
+  commune2026?: BasculeNicadCommune;
   // Confirmation explicite (issue de `identifierBasculementNicad`) que la
   // section cible existe bien en 2026 — `null`/`false` signifie qu'un
   // basculement "simple" (sans `proposition.sectionNouvelle`) ne peut PAS
@@ -47,6 +54,14 @@ export interface BasculeNicadReport {
   items: BasculeNicadItem[];
   invalides: BasculeNicadInvalide[];
   stats: { total: number; invalides: number; dejaAJour: number; clean: number; avecDrapeaux: number };
+}
+
+/** Projette une commune (2013/2026) de `IdentificationResult` vers `BasculeNicadCommune`. */
+function toCommuneRef(
+  c: { nomCommune: string; region: string | null; departement: string | null } | null | undefined,
+): BasculeNicadCommune | undefined {
+  if (!c) return undefined;
+  return { nom: c.nomCommune, region: c.region, departement: c.departement };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -167,7 +182,7 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
           clean: false,
           flags: res.flags,
           proposition: null,
-          commune2026: res.commune2026?.nomCommune,
+          commune2026: toCommuneRef(res.commune2026),
           sectionExisteEn2026: null,
         });
         nbDejaAJour++;
@@ -179,8 +194,8 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
           clean,
           flags: res.flags,
           proposition: res.proposition ?? null,
-          commune2013: res.commune2013?.nomCommune ?? undefined,
-          commune2026: res.commune2026?.nomCommune ?? undefined,
+          commune2013: toCommuneRef(res.commune2013),
+          commune2026: toCommuneRef(res.commune2026),
           sectionExisteEn2026: res.sectionExisteEn2026 ?? null,
         });
         if (clean) nbClean++;

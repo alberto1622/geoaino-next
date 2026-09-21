@@ -533,6 +533,7 @@ export default function MigrationPage() {
                       <th className="py-2 pr-3" />
                       <th className="py-2 pr-3">NICAD ancien</th>
                       <th className="py-2 pr-3">→ Cible 2026</th>
+                      <th className="py-2 pr-3">Commune · Région/Département</th>
                       <th className="py-2 pr-3">Statut</th>
                       <th className="py-2 pr-3">Drapeaux</th>
                       {resultatsExecution.size > 0 && <th className="py-2 pr-3">Résultat</th>}
@@ -568,6 +569,14 @@ export default function MigrationPage() {
                             {item.proposition
                               ? `${item.proposition.syscolNouveau}${item.proposition.sectionNouvelle ? " / section " + item.proposition.sectionNouvelle : ""}`
                               : "—"}
+                          </td>
+                          <td className="py-2 pr-3 text-xs text-muted-foreground">
+                            {item.commune2013 &&
+                              `${item.commune2013.nom} (${item.commune2013.region ?? "—"} · ${item.commune2013.departement ?? "—"})`}
+                            {item.commune2013 && item.commune2026 && " → "}
+                            {item.commune2026 &&
+                              `${item.commune2026.nom} (${item.commune2026.region ?? "—"} · ${item.commune2026.departement ?? "—"})`}
+                            {!item.commune2013 && !item.commune2026 && "—"}
                           </td>
                           <td className="py-2 pr-3 text-xs text-muted-foreground">
                             {item.dejaAJour

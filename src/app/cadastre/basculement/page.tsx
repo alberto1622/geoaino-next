@@ -158,6 +158,11 @@ export default function BasculementPage() {
                 <Info className="h-4 w-4 shrink-0 text-blue-500" />
                 {identification.commune2026?.nomCommune ?? "Commune 2026"}
               </div>
+              {identification.commune2026 && (
+                <p className="text-xs text-muted-foreground">
+                  {identification.commune2026.region ?? "—"} · {identification.commune2026.departement ?? "—"}
+                </p>
+              )}
               <p className="text-xs text-muted-foreground">
                 Ce Syscol correspond déjà à une commune 2026 — ce NICAD est
                 à jour, aucun basculement n&apos;est nécessaire.
@@ -193,6 +198,15 @@ export default function BasculementPage() {
                   </>
                 )}
               </div>
+              {(identification.commune2013 || identification.commune2026) && (
+                <p className="text-xs text-muted-foreground">
+                  {identification.commune2013 &&
+                    `2013 : ${identification.commune2013.region ?? "—"} · ${identification.commune2013.departement ?? "—"}`}
+                  {identification.commune2013 && identification.commune2026 && " → "}
+                  {identification.commune2026 &&
+                    `2026 : ${identification.commune2026.region ?? "—"} · ${identification.commune2026.departement ?? "—"}`}
+                </p>
+              )}
               {identification.clean ? (
                 <p className="text-xs text-muted-foreground">
                   Correspondance confirmée, commune inchangée, section retrouvée à
