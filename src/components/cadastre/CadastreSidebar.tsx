@@ -73,8 +73,8 @@ export const CADASTRE_NAV = [
     href: "/cadastre/correspondances",
     icon: GitMerge,
   },
-  { label: "Import", href: "/cadastre/import", icon: Upload },
-  { label: "Export", href: "/cadastre/export", icon: Download },
+  // { label: "Import", href: "/cadastre/import", icon: Upload },
+  // { label: "Export", href: "/cadastre/export", icon: Download },
   { label: "Historique", href: "/cadastre/historique", icon: History },
 ] as const;
 

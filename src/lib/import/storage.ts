@@ -8,9 +8,10 @@
  */
 import { promises as fs } from "fs";
 import path from "path";
+import { getUserUploadDir } from "../paths";
 
 function getUploadDir(): string {
-  return process.env.IMPORT_UPLOADS_DIR ?? path.join(process.cwd(), "uploads", "imports");
+  return process.env.IMPORT_UPLOADS_DIR ?? path.join(getUserUploadDir(), "imports");
 }
 const UPLOAD_DIR = getUploadDir();
 

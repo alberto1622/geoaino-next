@@ -1,9 +1,10 @@
 import { promises as fs } from "fs";
 import path from "path";
+import { getUserUploadDir } from "./paths";
 
 function getLocalGeoJsonDir(): string {
   return process.env.LOCAL_GEOJSON_DIR ??
-    path.join(process.cwd(), "uploads", "geojson");
+    path.join(getUserUploadDir(), "geojson");
 }
 const LOCAL_GEOJSON_DIR = getLocalGeoJsonDir();
 
