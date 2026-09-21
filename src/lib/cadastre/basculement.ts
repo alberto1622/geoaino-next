@@ -17,6 +17,7 @@ import {
   getCommune2026BySyscol,
   getCorrespondanceBySyscol2013,
   findSectionSpatialMatches,
+  getParcellePointByNicad2013,
   getSectionByKey,
   getLastNumParcelleGlobal,
   getNicadByCode,
@@ -26,6 +27,7 @@ import {
   insertNicadHistorique,
   insertOperation,
 } from "@/lib/cadastre/data";
+import { getSectionsForPoints } from "@/lib/cadastre/sections-data";
 
 // Recouvrement mini (part de la section 2013) pour considérer une section
 // 2026 comme correspondance fiable — même seuil que `SEUIL_SECTION_PROVISOIRE`
@@ -196,17 +198,50 @@ export async function identifierBasculementNicad(nicadAncien: string): Promise<I
     // redécoupage, et une zone inchangée peut avoir été renumérotée.
     const spatial = await findSectionSpatialMatches(syscol2013, section, syscol2026);
     if (!spatial.source2013GeomFound) {
-      flags.push(
-        `Géométrie de la section 2013 ${section} introuvable — vérification spatiale impossible, ` +
-          "contrôle limité au numéro de section.",
-      );
-      const sectionCible = await getSectionByKey(syscol2026, section, "2026");
-      sectionExisteEn2026 = !!sectionCible;
-      if (!sectionCible) {
+      // Repli « Gestion des sections » : `cad_sections` (référentiel
+      // statique national) n'a pas de géométrie pour cette section 2013 —
+      // fréquent car ce référentiel reste à alimenter séparément. Si ce
+      // NICAD correspond à une parcelle déjà connue de ce système AVEC
+      // géométrie (`cad_parcelles`), on peut retrouver sa VRAIE section 2026
+      // par jointure spatiale point-dans-polygone sur `limite_section`
+      // (alimentée par les imports DXF/shapefile réels, via « Gestion des
+      // sections ») — même mécanisme que `getSectionsForPoints`, déjà
+      // utilisé par le pipeline d'import pour construire le NICAD initial.
+      // Ne fonctionne que pour un NICAD déjà importé ici : un NICAD
+      // totalement externe n'a pas de géométrie connue, donc pas de point
+      // à projeter — la jointure spatiale reste alors impossible par
+      // construction, quel que soit le référentiel interrogé.
+      const point = await getParcellePointByNicad2013(nicadAncien);
+      const viaLimiteSection = point ? (await getSectionsForPoints([point]))[0] : null;
+
+      if (viaLimiteSection?.syscolCommune === syscol2026 && viaLimiteSection.numSection) {
+        sectionExisteEn2026 = true;
+        if (viaLimiteSection.numSection !== section) {
+          sectionNouvelleProposee = viaLimiteSection.numSection;
+        }
         flags.push(
-          `Aucune section ${section} trouvée dans la commune 2026 identifiée (${commune2026?.nomCommune ?? syscol2026}) ` +
-            "— un nouveau numéro de section devra être choisi (cas complexe).",
+          `Géométrie de la section 2013 ${section} introuvable dans le référentiel statique — section 2026 ` +
+            "retrouvée par jointure spatiale sur la parcelle connue (Gestion des sections)" +
+            (viaLimiteSection.approx ? ", par proximité (≤ 50 m)" : "") +
+            (viaLimiteSection.numSection !== section
+              ? ` : section n° ${viaLimiteSection.numSection}` +
+                (viaLimiteSection.commune ? ` (${viaLimiteSection.commune})` : "") +
+                " — basculement complexe requis."
+              : "."),
         );
+      } else {
+        flags.push(
+          `Géométrie de la section 2013 ${section} introuvable — vérification spatiale impossible, ` +
+            "contrôle limité au numéro de section.",
+        );
+        const sectionCible = await getSectionByKey(syscol2026, section, "2026");
+        sectionExisteEn2026 = !!sectionCible;
+        if (!sectionCible) {
+          flags.push(
+            `Aucune section ${section} trouvée dans la commune 2026 identifiée (${commune2026?.nomCommune ?? syscol2026}) ` +
+              "— un nouveau numéro de section devra être choisi (cas complexe).",
+          );
+        }
       }
     } else {
       const best = spatial.matches[0] ?? null;

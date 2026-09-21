@@ -502,6 +502,35 @@ export async function findSectionSpatialMatches(
   };
 }
 
+/**
+ * Point représentatif (WGS84) d'une parcelle 2013 déjà connue de ce système,
+ * identifiée par son NICAD — utilisé en repli quand `cad_sections`
+ * (référentiel statique national) n'a pas de géométrie pour la section
+ * d'origine, rendant `findSectionSpatialMatches` (section-à-section)
+ * impossible. `longitude`/`latitude` déjà stockées sont préférées ; sinon
+ * dérivé de `geom` via `ST_PointOnSurface` (robuste aux géométries non
+ * convexes, contrairement au centroïde qui peut tomber hors polygone).
+ * Ne trouve rien pour un NICAD totalement externe/inconnu de ce système —
+ * la jointure spatiale de repli qui en découle (`getSectionsForPoints`,
+ * `sections-data.ts`) ne s'applique donc qu'aux NICAD déjà importés ici.
+ */
+export async function getParcellePointByNicad2013(
+  nicad: string,
+): Promise<{ lng: number; lat: number } | null> {
+  const rows = await prisma.$queryRaw<Array<{ lng: number | null; lat: number | null }>>`
+    SELECT
+      COALESCE(longitude::float8, ST_X(ST_PointOnSurface(geom))) AS lng,
+      COALESCE(latitude::float8, ST_Y(ST_PointOnSurface(geom))) AS lat
+    FROM "cad_parcelles"
+    WHERE nicad = ${nicad} AND version = '2013'
+      AND (geom IS NOT NULL OR (longitude IS NOT NULL AND latitude IS NOT NULL))
+    LIMIT 1
+  `;
+  const row = rows[0];
+  if (!row || row.lng == null || row.lat == null) return null;
+  return { lng: row.lng, lat: row.lat };
+}
+
 // ─── Parcelles cadastrales ────────────────────────────────────────────────────
 export async function insertParcelle(data: Prisma.CadParcelleCreateInput) {
   return prisma.cadParcelle.create({ data });
