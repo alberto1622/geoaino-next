@@ -174,7 +174,7 @@ Donner des propositions pour le traitement de ce genre de fichier
 - ✅Ajouter l'action de fusion des parcelles comme la fusion de section implémenter
 
 email=admin@geoaino.local
-password=Ql1k3YMRlX3V
+password=GDULNm7CBK0y
 password=
 
 CBK4-3D2S-E8TX-FJ1Q-9R0Y-N0KA-TM
@@ -222,3 +222,19 @@ Note : ce chantier référentiels n'a pas encore été fusionné dans v9.0.0 (re
 BAMBA-MACHINE-1: Y3V4-AHC3-03Q3-1PPH-GWV2-T9G1-6G
 
 BAMBA-MACHINE-DGID:F2CF-HYGZ-HH91-6PKC-SYFS-J29H-KW
+
+C:\Program Files\GeoAino\resources\app
+
+## Contexte de Basculement 2013 → 2026
+
+Il y a des changement administratives qui se sont effectuésen 2013 et les mises à jours sont dans le syscol de 2026.
+
+## Objectif
+
+L'objectif est de vérifier à partir d'un nicad de vérifier si le syscol et la section correspondent à celui de 2013 ou 2026.
+Si le syscol ne corresponds pas à celui de 2013, donner la correspondance de 2026 puis vérifier les sections.
+Si la section ne corresponds pas à celui de 2026 alors effectuer une jointure spatiale pour tourner la correspondance
+
+afficher la region et le département correspondant
+
+01430115
