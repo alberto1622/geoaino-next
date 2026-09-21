@@ -36,9 +36,16 @@ export interface BasculeNicadItem {
   sectionExisteEn2026: boolean | null;
 }
 
+/** Ligne de shapefile écartée avant identification (valeur NICAD absente ou mal formée). */
+export interface BasculeNicadInvalide {
+  raw: string;
+  motif: string;
+}
+
 export interface BasculeNicadReport {
   kind: "bascule-nicad";
   items: BasculeNicadItem[];
+  invalides: BasculeNicadInvalide[];
   stats: { total: number; invalides: number; dejaAJour: number; clean: number; avecDrapeaux: number };
 }
 
@@ -72,19 +79,25 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
     // ou mal formées (saisie manuelle en amont).
     const seen = new Set<string>();
     const nicadsValides: string[] = [];
-    let nbInvalides = 0;
+    const invalides: BasculeNicadInvalide[] = [];
     for (const f of features) {
       const props = f.properties ?? {};
       const raw = fieldMapping?.nicad
         ? pick(props, fieldMapping.nicad)
         : pick(props, "nicad", "nic", "num_nicad", "code_nicad", "codif");
       if (!raw) {
-        nbInvalides++;
+        invalides.push({ raw: "", motif: "Valeur NICAD absente" });
         continue;
       }
       const digits = raw.replace(/\D/g, "");
       if (digits.length !== 16 || !validateNicadFormat(digits).valid) {
-        nbInvalides++;
+        invalides.push({
+          raw,
+          motif:
+            digits.length !== 16
+              ? `Longueur invalide (${digits.length} chiffre(s) au lieu de 16)`
+              : "Format NICAD invalide (Syscol/section/parcelle incohérents)",
+        });
         continue;
       }
       if (seen.has(digits)) continue;
@@ -196,9 +209,10 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
         report: {
           kind: "bascule-nicad",
           items,
+          invalides,
           stats: {
             total: features.length,
-            invalides: nbInvalides,
+            invalides: invalides.length,
             dejaAJour: nbDejaAJour,
             clean: nbClean,
             avecDrapeaux: nbAvecDrapeaux,

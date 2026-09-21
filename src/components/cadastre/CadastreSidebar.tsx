@@ -99,7 +99,11 @@ export function CadastreSidebar() {
   return (
     <aside
       className={cn(
-        "hidden lg:flex shrink-0 flex-col border-r border-border/50 bg-card/30 p-3 transition-[width] duration-200",
+        // `sticky top-16` : reste collé juste sous la NavBar (elle-même
+        // `sticky top-0 h-16`, NavBar.tsx) pendant que le contenu principal
+        // défile normalement — sans ça, le sidebar est un simple enfant flex
+        // qui défile avec le reste de la page sur les pages cadastre longues.
+        "hidden lg:flex shrink-0 flex-col self-start sticky top-16 h-[calc(100vh-4rem)] overflow-y-auto border-r border-border/50 bg-card/30 p-3 transition-[width] duration-200",
         collapsed ? "w-14" : "w-64",
       )}
     >

@@ -3,7 +3,7 @@ import { PageTitle } from "@/components/PageTitle";
 
 import { useEffect, useRef, useState, useTransition, type ChangeEvent } from "react";
 import { toast } from "sonner";
-import { Layers, Play, Upload } from "lucide-react";
+import { Layers, Loader2, Play, Upload } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import FieldMappingModal from "@/components/FieldMappingModal";
@@ -46,6 +46,43 @@ const BASCULE_JOB_STEPS: JobProgressStep[] = [
   { key: "identify", label: "Identification des cibles 2026" },
 ];
 
+// Filtre du tableau de prévisualisation. "invalides" bascule sur une source
+// de données différente (`basculeReport.invalides`, pas `.items`) — ces
+// lignes n'ont jamais été identifiées (NICAD absent/mal formé en amont),
+// donc pas de cible/statut/drapeaux à afficher pour elles.
+type FiltreStatut = "toutes" | "clean" | "drapeau" | "sansCorrespondance" | "dejaAJour" | "invalides";
+
+const FILTRE_OPTIONS: { value: FiltreStatut; label: string }[] = [
+  { value: "toutes", label: "Toutes les lignes" },
+  { value: "clean", label: "Sans drapeau" },
+  { value: "drapeau", label: "Avec drapeau" },
+  { value: "sansCorrespondance", label: "Sans correspondance 2026" },
+  { value: "dejaAJour", label: "Déjà à jour" },
+  { value: "invalides", label: "Invalides" },
+];
+
+// Catégories mutuellement exclusives, dérivées des mêmes champs que les
+// stats déjà affichées (aucun changement de leur calcul) — "avec drapeau"
+// et "sans correspondance" étaient jusqu'ici fondues dans la même
+// statistique `avecDrapeaux` ; le filtre les distingue sans rien changer
+// au comptage agrégé du bandeau au-dessus du tableau.
+function itemMatchesFiltre(item: BasculeItem, filtre: FiltreStatut): boolean {
+  switch (filtre) {
+    case "toutes":
+      return true;
+    case "dejaAJour":
+      return item.dejaAJour;
+    case "clean":
+      return item.clean;
+    case "sansCorrespondance":
+      return !item.dejaAJour && !item.proposition;
+    case "drapeau":
+      return !item.dejaAJour && !item.clean && !!item.proposition;
+    case "invalides":
+      return false; // rendu séparément, cf. `basculeReport.invalides`
+  }
+}
+
 export default function MigrationPage() {
   const [previews, setPreviews] = useState<Preview[]>([]);
   const [pending, startTransition] = useTransition();
@@ -68,6 +105,14 @@ export default function MigrationPage() {
   const [basculeReport, setBasculeReport] = useState<BasculeReport | null>(null);
   const [selectedForBascule, setSelectedForBascule] = useState<Set<string>>(new Set());
   const [executingBascule, setExecutingBascule] = useState(false);
+  const [filtreStatut, setFiltreStatut] = useState<FiltreStatut>("toutes");
+  const [chargementInventaire, setChargementInventaire] = useState(false);
+  // Distinct de `pending` (partagé avec les actions de migration par commune,
+  // qui rechargent aussi via `reload()`) : ne sert qu'à afficher un état de
+  // chargement au tout premier rendu, avant que `previews` n'ait jamais été
+  // rempli — sans lui, le tableau affichait à tort "Aucune commune éligible"
+  // pendant l'appel initial à `previewToutes()`.
+  const [chargementInitial, setChargementInitial] = useState(true);
   const [executionProgress, setExecutionProgress] = useState<{ chunk: number; total: number } | null>(null);
   const [resultatsExecution, setResultatsExecution] = useState<Map<string, ResultatLigne>>(new Map());
 
@@ -77,6 +122,8 @@ export default function MigrationPage() {
         setPreviews((await previewToutes()) as Preview[]);
       } catch {
         toast.error("Action non autorisée ou erreur de prévisualisation.");
+      } finally {
+        setChargementInitial(false);
       }
     });
   }
@@ -133,6 +180,7 @@ export default function MigrationPage() {
     const fd = new FormData();
     fd.append("target", "bascule-nicad");
     for (const f of Array.from(files)) fd.append("files", f);
+    setChargementInventaire(true);
     try {
       const res = await fetch("/api/cadastre/import/inventory", { method: "POST", body: fd });
       const inv = await res.json();
@@ -141,6 +189,7 @@ export default function MigrationPage() {
     } catch (err) {
       toast.error(String(err));
     } finally {
+      setChargementInventaire(false);
       e.target.value = "";
     }
   }
@@ -316,7 +365,11 @@ export default function MigrationPage() {
           <CardTitle className="text-base">Prévisualisation</CardTitle>
         </CardHeader>
         <CardContent>
-          {previews.length === 0 ? (
+          {chargementInitial ? (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Chargement des communes éligibles…
+            </p>
+          ) : previews.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               Aucune commune éligible. Confirmez des correspondances 2013→2026 au préalable.
             </p>
@@ -380,10 +433,18 @@ export default function MigrationPage() {
           <Button
             variant="outline"
             onClick={() => fileInputRef.current?.click()}
-            disabled={!!basculeJob && basculeJob.status !== "completed" && basculeJob.status !== "failed"}
+            disabled={
+              chargementInventaire ||
+              (!!basculeJob && basculeJob.status !== "completed" && basculeJob.status !== "failed")
+            }
             className="gap-2"
           >
-            <Upload className="h-4 w-4" /> Choisir un shapefile
+            {chargementInventaire ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Upload className="h-4 w-4" />
+            )}
+            {chargementInventaire ? "Lecture du fichier…" : "Choisir un shapefile"}
           </Button>
 
           {basculeJob && (basculeJob.status === "pending" || basculeJob.status === "running") && (
@@ -408,7 +469,7 @@ export default function MigrationPage() {
                 <span>·</span>
                 <span>{basculeReport.stats.invalides} invalide(s)</span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button variant="outline" size="sm" onClick={selectAllClean}>
                   Sélectionner les lignes sans drapeau
                 </Button>
@@ -425,7 +486,46 @@ export default function MigrationPage() {
                       : "Basculement…"
                     : `Basculer la sélection (${selectedForBascule.size})`}
                 </Button>
+                <select
+                  className="ml-auto h-8 rounded-lg border border-border bg-transparent px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  value={filtreStatut}
+                  onChange={(e) => setFiltreStatut(e.target.value as FiltreStatut)}
+                >
+                  {FILTRE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
               </div>
+              {filtreStatut === "invalides" ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="text-left text-xs uppercase text-muted-foreground">
+                      <tr className="border-b border-border/50">
+                        <th className="py-2 pr-3">Valeur brute</th>
+                        <th className="py-2 pr-3">Motif</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {basculeReport.invalides.length === 0 ? (
+                        <tr>
+                          <td colSpan={2} className="py-3 text-xs text-muted-foreground">
+                            Aucune ligne invalide.
+                          </td>
+                        </tr>
+                      ) : (
+                        basculeReport.invalides.map((inv, i) => (
+                          <tr key={i} className="border-b border-border/30">
+                            <td className="py-2 pr-3 font-mono text-xs">{inv.raw || "—"}</td>
+                            <td className="py-2 pr-3 text-xs text-muted-foreground">{inv.motif}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="text-left text-xs uppercase text-muted-foreground">
@@ -439,7 +539,7 @@ export default function MigrationPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {basculeReport.items.map((item) => {
+                    {basculeReport.items.filter((item) => itemMatchesFiltre(item, filtreStatut)).map((item) => {
                       const selectionnable = peutSelectionnerLigne(item);
                       const resultat = resultatsExecution.get(item.nicadAncien);
                       return (
@@ -502,6 +602,7 @@ export default function MigrationPage() {
                   </tbody>
                 </table>
               </div>
+              )}
             </div>
           )}
         </CardContent>
