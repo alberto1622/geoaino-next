@@ -5547,5 +5547,69 @@ ce retour de progression régulier.
 
 ---
 
+## 60. Repli spatial « Gestion des sections » pour le basculement NICAD, et le piège de mémoïsation qu'il a révélé
+
+**Problème métier** : `identifierBasculementNicad` (§59) confirme la
+section 2026 par recouvrement géométrique via `findSectionSpatialMatches`,
+qui interroge le référentiel statique national `cad_sections` (géométries
+2013/2026 pré-chargées). Ce référentiel reste à alimenter séparément et
+peut être vide (c'est le cas en développement : 0 ligne, toute version
+confondue) — sans géométrie source, aucune vérification spatiale n'est
+possible et la section cible ne peut être ni confirmée ni corrigée en cas
+de redécoupage.
+
+**Cause technique / solution** : quand `findSectionSpatialMatches` signale
+l'absence de géométrie 2013 (`!spatial.source2013GeomFound`),
+`identifierBasculementNicad` (`lib/cadastre/basculement.ts`) retrouve une
+position connue pour CE NICAD précis via `getParcellePointByNicad2013`
+(`lib/cadastre/data.ts` — cherche le point dans `cad_parcelles`, version
+2013, par NICAD complet) puis la projette dans `limite_section` (les
+géométries de sections réellement importées via « Gestion des sections »)
+avec `getSectionsForPoints` — la même fonction déjà utilisée par le
+pipeline d'import DXF/shapefile pour construire le NICAD initial. Ce repli
+ne fonctionne que pour un NICAD déjà connu de ce système (une parcelle
+totalement externe n'a pas de géométrie à projeter) mais couvre le cas
+réel le plus fréquent : redébasculer des NICAD précédemment importés.
+
+**Le piège** : `run-bascule-job.ts` mémoïse le résultat d'identification
+par les 11 premiers chiffres du NICAD (Syscol + section), sur la
+justification — vraie jusqu'à ce repli — que le numéro de parcelle
+n'entre dans AUCUNE requête. Le nouveau repli casse cette invariante : il
+interroge `cad_parcelles` avec le NICAD COMPLET, donc son résultat dépend
+de LA PARCELLE, pas seulement de la section. Conséquence si on met quand
+même ce résultat en cache par préfixe : seule la première parcelle
+traitée d'une section déclenche réellement la jointure spatiale ; toutes
+les suivantes héritent à tort de SON résultat (bonne ou mauvaise section,
+proposition de renumérotation ou non), indépendamment de leur propre
+géométrie — le correctif semble alors « ne rien faire » ou agir de façon
+arbitraire sur un shapefile de masse, alors qu'il fonctionne bien pour un
+NICAD isolé (page « Basculement », non mémoïsée).
+
+**Correctif** (`lib/cadastre/basculement.ts` · `identifierBasculementNicad`,
+`lib/import/run-bascule-job.ts`) : un nouveau champ
+`resolutionParcelleSpecifique` sur `IdentificationResult`, positionné à
+`true` uniquement quand le repli `limite_section` a effectivement résolu
+la section. `run-bascule-job.ts` ne met JAMAIS en cache un résultat
+portant ce marqueur — chaque parcelle refait alors sa propre
+identification — tout en conservant la mémoïsation (et son gain de
+performance sur un shapefile de dizaines de milliers de lignes, cf. §59)
+pour les cas réellement section-only (géométrie `cad_sections` présente,
+ou section confirmée absente indépendamment de toute parcelle précise).
+
+**Pourquoi (pièges inclus)** : une optimisation de performance validée à
+un instant T (ici, l'invariante « seuls les 11 premiers chiffres comptent »)
+peut être silencieusement invalidée par un ajout ultérieur qui touche la
+même fonction sans que rien dans sa signature ne le signale —
+`identifierBasculementNicad` garde le même type de retour, aucune erreur
+de compilation ne détecte la rupture d'invariante. Tant que `cad_sections`
+reste vide en développement, ce repli se déclenche pour CHAQUE parcelle :
+le bénéfice de la mémoïsation section-level disparaît de fait dans cet
+environnement (chaque parcelle refait l'identification complète) — c'est
+le compromis correct (exactitude avant performance) en attendant que
+`cad_sections` soit alimenté, ce qui réactivera naturellement le cache
+pour ces lignes.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

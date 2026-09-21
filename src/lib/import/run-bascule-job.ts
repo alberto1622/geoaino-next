@@ -132,7 +132,13 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
     // (positions 1–8 Syscol, 9–11 Section ; cf. nicad-logic.ts) déterminent
     // À EUX SEULS tout ce qu'`identifierBasculementNicad` interroge en base
     // (commune 2013/2026, correspondance, recouvrement spatial de section) —
-    // le numéro de parcelle (5 derniers chiffres) n'entre dans AUCUNE requête.
+    // le numéro de parcelle (5 derniers chiffres) n'entre dans AUCUNE requête
+    // ... SAUF le repli spatial « Gestion des sections » (recherche de la
+    // parcelle par son NICAD complet dans `cad_parcelles`, cf.
+    // `resolutionParcelleSpecifique` sur `IdentificationResult`), qui DÉPEND
+    // du NICAD complet et peut donc varier d'une parcelle à l'autre pour un
+    // même Syscol+section. Un résultat portant ce marqueur n'est JAMAIS mis
+    // en cache : chaque parcelle refait alors sa propre identification.
     // Un shapefile réel porte typiquement une seule commune (souvent une
     // poignée de sections) sur des dizaines de milliers de parcelles : sans
     // ce cache, `identifierBasculementNicad` recalcule les mêmes requêtes
@@ -160,9 +166,11 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
           : { ...cached };
       } else {
         res = await identifierBasculementNicad(nicadAncien);
-        const { nicad, ...rest } = res;
-        void nicad; // exclu volontairement du cache (spécifique à chaque parcelle)
-        identificationCache.set(cacheKey, rest);
+        if (!res.resolutionParcelleSpecifique) {
+          const { nicad, ...rest } = res;
+          void nicad; // exclu volontairement du cache (spécifique à chaque parcelle)
+          identificationCache.set(cacheKey, rest);
+        }
       }
 
       if (!res.success) {

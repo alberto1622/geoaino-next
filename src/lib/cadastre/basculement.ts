@@ -66,6 +66,16 @@ export interface IdentificationResult {
     departement2026: string | null;
   } | null;
   sectionExisteEn2026?: boolean | null;
+  // true UNIQUEMENT quand `sectionExisteEn2026`/`proposition` proviennent du
+  // repli par jointure spatiale sur la parcelle CONNUE (`getParcellePointByNicad2013`
+  // + `getSectionsForPoints`, cf. plus bas) — un résultat qui dépend du NICAD
+  // complet (parcelle précise), PAS seulement du couple Syscol+section. Un
+  // appelant qui mémoïse par Syscol+section (ex. `run-bascule-job.ts`, pour
+  // éviter de refaire les mêmes requêtes section-only pour chaque parcelle
+  // d'un même shapefile) NE DOIT PAS réutiliser un résultat portant ce
+  // marqueur pour un NICAD différent : chaque parcelle a sa propre géométrie
+  // et peut donc obtenir une réponse différente de ce repli.
+  resolutionParcelleSpecifique?: boolean;
   flags: string[];
   clean?: boolean;
   proposition?: { syscolNouveau: string; sectionNouvelle?: string } | null;
@@ -170,6 +180,8 @@ export async function identifierBasculementNicad(nicadAncien: string): Promise<I
   // diffère du numéro 2013 (section renumérotée) — proposé pour un
   // basculement complexe, jamais deviné sans vérification spatiale.
   let sectionNouvelleProposee: string | null = null;
+  // cf. commentaire du champ `resolutionParcelleSpecifique` sur `IdentificationResult`.
+  let resolutionParcelleSpecifique = false;
 
   if (!correspondance || !syscol2026) {
     flags.push(
@@ -216,6 +228,7 @@ export async function identifierBasculementNicad(nicadAncien: string): Promise<I
 
       if (viaLimiteSection?.syscolCommune === syscol2026 && viaLimiteSection.numSection) {
         sectionExisteEn2026 = true;
+        resolutionParcelleSpecifique = true;
         if (viaLimiteSection.numSection !== section) {
           sectionNouvelleProposee = viaLimiteSection.numSection;
         }
@@ -303,6 +316,7 @@ export async function identifierBasculementNicad(nicadAncien: string): Promise<I
         }
       : null,
     sectionExisteEn2026,
+    resolutionParcelleSpecifique,
     flags,
     clean,
     // Pré-remplissage proposé du formulaire : syscol cible identifié, et

@@ -72,3 +72,5 @@ desktop/dist/
 
 cle-privee-vendeur.pem
 .key
+licence*
+*.geoaino
