@@ -18,7 +18,6 @@ import {
   getCorrespondanceBySyscol2013,
   findSectionSpatialMatches,
   getParcellePointByNicad2013,
-  getSectionByKey,
   getLastNumParcelleGlobal,
   getNicadByCode,
   insertNicad,
@@ -27,7 +26,7 @@ import {
   insertNicadHistorique,
   insertOperation,
 } from "@/lib/cadastre/data";
-import { getSectionsForPoints } from "@/lib/cadastre/sections-data";
+import { getSectionsForPoints, sectionExisteDansLimiteSection } from "@/lib/cadastre/sections-data";
 
 // Recouvrement mini (part de la section 2013) pour considérer une section
 // 2026 comme correspondance fiable — même seuil que `SEUIL_SECTION_PROVISOIRE`
@@ -247,9 +246,9 @@ export async function identifierBasculementNicad(nicadAncien: string): Promise<I
           `Géométrie de la section 2013 ${section} introuvable — vérification spatiale impossible, ` +
             "contrôle limité au numéro de section.",
         );
-        const sectionCible = await getSectionByKey(syscol2026, section, "2026");
-        sectionExisteEn2026 = !!sectionCible;
-        if (!sectionCible) {
+        const sectionExiste = await sectionExisteDansLimiteSection(syscol2026, section);
+        sectionExisteEn2026 = sectionExiste;
+        if (!sectionExiste) {
           flags.push(
             `Aucune section ${section} trouvée dans la commune 2026 identifiée (${commune2026?.nomCommune ?? syscol2026}) ` +
               "— un nouveau numéro de section devra être choisi (cas complexe).",
@@ -352,8 +351,8 @@ export async function basculerNicadCore(input: BasculementInput): Promise<Bascul
     cas = "simple";
   } else {
     const sectionNouvellePadded = input.sectionNouvelle.padStart(3, "0");
-    const sectionCible = await getSectionByKey(syscolNouveauPadded, sectionNouvellePadded, "2026");
-    if (!sectionCible) {
+    const sectionExiste = await sectionExisteDansLimiteSection(syscolNouveauPadded, sectionNouvellePadded);
+    if (!sectionExiste) {
       return {
         success: false,
         error: `Section ${sectionNouvellePadded} introuvable dans la commune 2026 ${syscolNouveauPadded}. Créez d'abord la section.`,

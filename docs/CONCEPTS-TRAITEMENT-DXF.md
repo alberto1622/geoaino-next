@@ -5611,5 +5611,50 @@ pour ces lignes.
 
 ---
 
+## 61. Vérification d'existence d'une section 2026 : `cad_sections` (vide) remplacée par `limite_section` (« Gestion des sections »)
+
+**Problème métier** : validé sur un vrai shapefile (Guédiawaye, 33 474
+parcelles, 5 communes réelles avec correspondance 2013→2026 confirmée) —
+`identifierBasculementNicad` (§60) et `basculerNicadCore` signalaient
+« Aucune section trouvée » / refusaient tout basculement complexe pour
+**100 % des lignes**, y compris des sections dont l'existence en 2026 est
+pourtant bien connue de l'application.
+
+**Cause technique** : la vérification finale d'existence d'une section
+2026 (`sectionExisteEn2026` côté identification, et le garde-fou avant
+écriture côté `basculerNicadCore`) interrogeait `getSectionByKey`
+(`lib/cadastre/data.ts`), qui lit `cad_sections` — le référentiel
+statique NATIONAL, resté totalement vide dans cet environnement (cf.
+§59/§60) — plutôt que `limite_section` (« Gestion des sections »), le
+référentiel réellement alimenté par les imports DXF/shapefile (4501
+sections avec géométrie).
+
+**Solution** (`fichier · fonction`) : nouvelle fonction
+`sectionExisteDansLimiteSection(syscolCommune, numSection)`
+(`lib/cadastre/sections-data.ts`) — existence pure par
+`(syscolCommune, numSection)` sur `limite_section` (index déjà présent),
+sans vérification géométrique. Remplace `getSectionByKey(..., "2026")`
+aux deux points d'usage de `basculement.ts` : le repli d'identification
+sans parcelle connue (§60, ligne ~250) et la validation avant écriture
+d'un basculement complexe dans `basculerNicadCore` (ligne ~355). La
+vérification géométrique 2013↔2026 (`findSectionSpatialMatches`, sur
+`cad_sections` des deux côtés) reste inchangée — `limite_section` n'a pas
+de géométrie 2013, ne peut pas s'y substituer.
+
+**Pourquoi (pièges inclus)** : deux référentiels de sections coexistent
+dans ce projet avec des rôles différents — `cad_sections` (national,
+statique, alimenté séparément, actuellement vide) vs `limite_section`
+(réel, issu des imports de ce système, activement alimenté). Un code
+écrit en supposant l'un alors que l'autre est la source de vérité
+opérationnelle produit un échec silencieux et systématique (jamais
+d'erreur, juste un flag « introuvable » sur chaque ligne) — piège
+difficile à repérer sans confronter le code à de VRAIES données
+(cf. le test §60 : 0 clean puis 27 841/30 818 `sectionExisteEn2026: true`
+après ce correctif, sur le même fichier, mêmes NICAD). Ne demande jamais
+« la table est-elle vide en théorie ? » mais « laquelle des deux tables
+CE code interroge-t-il, et laquelle contient réellement la donnée ? ».
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

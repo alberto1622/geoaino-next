@@ -667,6 +667,27 @@ const SECTION_RESOLVE_CHUNK = Number(process.env.SECTION_RESOLVE_CHUNK || 20000)
  * jointure commune, `limite_section` porte les deux). Au-delà de la
  * tolérance, aucune section n'est attribuée (tous les champs `null`).
  */
+/**
+ * Existence d'une section (par Syscol commune + numéro) dans `limite_section`
+ * (« Gestion des sections » — le référentiel réellement alimenté par les
+ * imports DXF/shapefile), à la différence de `getSectionByKey`
+ * (`lib/cadastre/data.ts`) qui interroge `cad_sections`, le référentiel
+ * statique national resté vide dans cet environnement. Pure existence par
+ * numéro déclaré — aucune vérification géométrique.
+ */
+export async function sectionExisteDansLimiteSection(
+  syscolCommune: string,
+  numSection: string,
+  db: Db = prisma,
+): Promise<boolean> {
+  const padded = syscolCommune.padStart(8, "0");
+  const sectionPadded = numSection.padStart(3, "0");
+  const count = await db.limiteSection.count({
+    where: { syscolCommune: padded, numSection: sectionPadded },
+  });
+  return count > 0;
+}
+
 export async function getSectionsForPoints(
   points: Array<{ lng: number; lat: number }>,
   db: Db = prisma,
