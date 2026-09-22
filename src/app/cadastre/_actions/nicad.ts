@@ -259,15 +259,13 @@ export async function genererNicad(input: z.infer<typeof genererSchema>) {
 //  - Sinon, trouvé dans `cad_communes_2013` → c'est un NICAD 2013 : on
 //    retrouve sa correspondance 2026 (table `cad_correspondance_2013_2026`,
 //    calculée par recouvrement spatial — cf. `recalculerCorrespondancesSpatiales`),
-//    puis la section 2026 correspondante par JOINTURE SPATIALE
-//    (`findSectionSpatialMatches` — recouvrement géométrique section 2013 ↔
-//    sections 2026, PAS une simple égalité de numéro : un même numéro peut ne
-//    plus recouvrir la même zone après redécoupage, une zone inchangée peut
-//    avoir été renumérotée). Toute différence (correspondance provisoire/
-//    absente, découpage/fusion/renommage de commune, section renumérotée/
-//    découpée/introuvable) est remontée dans `flags` plutôt que masquée ; le
-//    basculement n'est PROPOSÉ proprement (`clean`) que si tout correspond
-//    sans aucun flag.
+//    puis la section 2026 correspondante en interrogeant EXCLUSIVEMENT
+//    `limite_section` (« Gestion des sections », réellement alimentée) —
+//    cf. `identifierBasculementNicad` (basculement.ts) pour le détail.
+//    Toute différence (correspondance provisoire/absente, découpage/fusion/
+//    renommage de commune, section renumérotée/introuvable) est remontée
+//    dans `flags` plutôt que masquée ; le basculement n'est PROPOSÉ
+//    proprement (`clean`) que si tout correspond sans aucun flag.
 //  - Trouvé dans AUCUN des deux référentiels → NICAD invalide/saisie erronée.
 const identifierSchema = z.object({ nicadAncien: z.string().length(16) });
 

@@ -5656,5 +5656,54 @@ CE code interroge-t-il, et laquelle contient réellement la donnée ? ».
 
 ---
 
+## 62. Abandon complet de `cad_sections`/2013 pour le basculement NICAD : jointure exclusivement sur `limite_section`
+
+**Problème métier** : même après §61, chaque ligne « sans parcelle connue »
+(le cas dominant sur un shapefile externe réel — cf. test Guédiawaye)
+portait encore un flag parlant d'une « géométrie de la section 2013
+introuvable — vérification spatiale impossible » — message issu d'une
+tentative de comparaison géométrique 2013↔2026 (`findSectionSpatialMatches`
+sur `cad_sections`) qui, `cad_sections` étant vide, échouait
+SYSTÉMATIQUEMENT et sans exception dans cet environnement. Demande
+explicite de l'utilisateur : « ignorer les sections de 2013 et faites les
+jointures sur les sections actuelles de la table `limite_section` ».
+
+**Cause technique** : `identifierBasculementNicad` tentait D'ABORD
+`findSectionSpatialMatches` (recouvrement géométrique section 2013 ↔ 2026,
+entièrement sur `cad_sections`) avant de retomber sur le repli
+`limite_section` (§60/§61) — un appel structurellement voué à l'échec tant
+que `cad_sections` reste vide, coûtant une requête DB par NICAD pour rien
+et produisant un message trompeur (« introuvable » alors qu'on ne l'a
+jamais réellement cherché avec succès dans cet environnement).
+
+**Solution** (`fichier · fonction`) : suppression complète de
+`findSectionSpatialMatches` (et de `SEUIL_SECTION_PROVISOIRE`,
+`SectionSpatialMatch`) de `lib/cadastre/data.ts` — plus aucun appel à
+`cad_sections` dans le parcours de basculement. `identifierBasculementNicad`
+(`lib/cadastre/basculement.ts`) va désormais DIRECTEMENT à la logique
+`limite_section` (§60) :
+- parcelle connue (`cad_parcelles`) + jointure spatiale réussie sur
+  `limite_section` + numéro identique + pas approximatif → **aucun flag**,
+  éligible « clean » (c'est désormais la meilleure confirmation possible) ;
+- même jointure mais approximative (≤ 50 m) → flag de relecture ;
+- même jointure mais numéro différent → renumérotation, cas complexe ;
+- pas de parcelle connue (NICAD externe) → simple existence par numéro
+  déclaré (`sectionExisteDansLimiteSection`, §61) — reste TOUJOURS flaguée
+  (signal faible, jamais « clean »), que la section existe ou non.
+
+**Pourquoi (pièges inclus)** : revalidé sur le même shapefile réel
+(Guédiawaye, 33 474 parcelles) — `sectionExisteEn2026` reste à
+27 841/30 818 (identique à §61, la donnée résolue n'a pas changé), mais
+sans plus jamais tenter `cad_sections` : une requête DB en moins par
+NICAD, et des messages qui décrivent ce qui a été VÉRIFIÉ plutôt que ce
+qui a ÉCHOUÉ. Piège pour la suite : si `cad_sections` (référentiel
+national 2013) est un jour réellement alimenté, la comparaison
+géométrique stricte 2013↔2026 qu'il permettait n'est plus disponible du
+tout dans ce parcours — un abandon assumé, pas un oubli ; la réintroduire
+demanderait un nouveau choix explicite, pas une simple réutilisation de
+code supprimé.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

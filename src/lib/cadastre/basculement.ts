@@ -16,7 +16,6 @@ import {
   getCommune2013BySyscol,
   getCommune2026BySyscol,
   getCorrespondanceBySyscol2013,
-  findSectionSpatialMatches,
   getParcellePointByNicad2013,
   getLastNumParcelleGlobal,
   getNicadByCode,
@@ -27,16 +26,6 @@ import {
   insertOperation,
 } from "@/lib/cadastre/data";
 import { getSectionsForPoints, sectionExisteDansLimiteSection } from "@/lib/cadastre/sections-data";
-
-// Recouvrement mini (part de la section 2013) pour considérer une section
-// 2026 comme correspondance fiable — même seuil que `SEUIL_SECTION_PROVISOIRE`
-// (data.ts) : un candidat déjà filtré à ce seuil peut donc être "confirmé" ou
-// "provisoire" selon qu'il dépasse ou non ce second palier, sur le même
-// principe que `recalculerCorrespondancesSpatiales` au niveau commune.
-const SEUIL_SECTION_CONFIRME = 0.5;
-// Un deuxième candidat au-delà de ce seuil signale un découpage de la section
-// 2013 entre plusieurs sections 2026 (pas juste du bruit de bord).
-const SEUIL_SECTION_DECOUPE = 0.15;
 
 // Libellé lisible du type de changement de correspondance (cf.
 // `recalculerCorrespondancesSpatiales` — data.ts) pour affichage utilisateur.
@@ -111,15 +100,18 @@ export interface BasculementResult {
 //  - Sinon, trouvé dans `cad_communes_2013` → c'est un NICAD 2013 : on
 //    retrouve sa correspondance 2026 (table `cad_correspondance_2013_2026`,
 //    calculée par recouvrement spatial — cf. `recalculerCorrespondancesSpatiales`),
-//    puis la section 2026 correspondante par JOINTURE SPATIALE
-//    (`findSectionSpatialMatches` — recouvrement géométrique section 2013 ↔
-//    sections 2026, PAS une simple égalité de numéro : un même numéro peut ne
-//    plus recouvrir la même zone après redécoupage, une zone inchangée peut
-//    avoir été renumérotée). Toute différence (correspondance provisoire/
-//    absente, découpage/fusion/renommage de commune, section renumérotée/
-//    découpée/introuvable) est remontée dans `flags` plutôt que masquée ; le
-//    basculement n'est PROPOSÉ proprement (`clean`) que si tout correspond
-//    sans aucun flag.
+//    puis la section 2026 correspondante en interrogeant EXCLUSIVEMENT
+//    `limite_section` (« Gestion des sections », réellement alimentée) —
+//    `cad_sections` (référentiel statique national 2013/2026, jamais
+//    peuplé dans cet environnement) n'est PLUS consulté du tout pour cette
+//    étape (cf. § 62 CONCEPTS-TRAITEMENT-DXF.md) : soit la parcelle est déjà
+//    connue de ce système et sa position réelle retrouve la vraie section
+//    2026 par jointure spatiale point-dans-polygone, soit on se limite à
+//    vérifier qu'une section du même numéro existe dans la commune 2026.
+//    Toute différence (correspondance provisoire/absente, découpage/fusion/
+//    renommage de commune, section renumérotée/introuvable) est remontée
+//    dans `flags` plutôt que masquée ; le basculement n'est PROPOSÉ
+//    proprement (`clean`) que si tout correspond sans aucun flag.
 //  - Trouvé dans AUCUN des deux référentiels → NICAD invalide/saisie erronée.
 export async function identifierBasculementNicad(nicadAncien: string): Promise<IdentificationResult> {
   const formatResult = validateNicadFormat(nicadAncien);
@@ -204,89 +196,59 @@ export async function identifierBasculementNicad(nicadAncien: string): Promise<I
       );
     }
 
-    // Correspondance de section par jointure SPATIALE (pas par égalité de
-    // numéro) : un même numéro peut ne plus recouvrir la même zone après
-    // redécoupage, et une zone inchangée peut avoir été renumérotée.
-    const spatial = await findSectionSpatialMatches(syscol2013, section, syscol2026);
-    if (!spatial.source2013GeomFound) {
-      // Repli « Gestion des sections » : `cad_sections` (référentiel
-      // statique national) n'a pas de géométrie pour cette section 2013 —
-      // fréquent car ce référentiel reste à alimenter séparément. Si ce
-      // NICAD correspond à une parcelle déjà connue de ce système AVEC
-      // géométrie (`cad_parcelles`), on peut retrouver sa VRAIE section 2026
-      // par jointure spatiale point-dans-polygone sur `limite_section`
-      // (alimentée par les imports DXF/shapefile réels, via « Gestion des
-      // sections ») — même mécanisme que `getSectionsForPoints`, déjà
-      // utilisé par le pipeline d'import pour construire le NICAD initial.
-      // Ne fonctionne que pour un NICAD déjà importé ici : un NICAD
-      // totalement externe n'a pas de géométrie connue, donc pas de point
-      // à projeter — la jointure spatiale reste alors impossible par
-      // construction, quel que soit le référentiel interrogé.
-      const point = await getParcellePointByNicad2013(nicadAncien);
-      const viaLimiteSection = point ? (await getSectionsForPoints([point]))[0] : null;
+    // Section 2026 correspondante — sur directive explicite, `cad_sections`
+    // (référentiel statique national 2013/2026, jamais alimenté dans cet
+    // environnement) n'est plus consulté du tout pour cette étape. Seule
+    // `limite_section` (« Gestion des sections », réellement peuplée par les
+    // imports DXF/shapefile) fait foi pour la section 2026 :
+    //  - si ce NICAD correspond à une parcelle déjà connue de ce système AVEC
+    //    géométrie (`cad_parcelles`), sa position réelle retrouve la VRAIE
+    //    section 2026 par jointure spatiale point-dans-polygone sur
+    //    `limite_section` — même mécanisme que `getSectionsForPoints`, déjà
+    //    utilisé par le pipeline d'import pour construire le NICAD initial ;
+    //  - sinon (NICAD externe, jamais importé — pas de géométrie connue à
+    //    projeter), on se limite à vérifier qu'une section du même numéro
+    //    existe dans la commune 2026 identifiée (contrôle par numéro déclaré,
+    //    pas par géométrie — reste flagué, jamais "clean").
+    const point = await getParcellePointByNicad2013(nicadAncien);
+    const viaLimiteSection = point ? (await getSectionsForPoints([point]))[0] : null;
 
-      if (viaLimiteSection?.syscolCommune === syscol2026 && viaLimiteSection.numSection) {
-        sectionExisteEn2026 = true;
-        resolutionParcelleSpecifique = true;
-        if (viaLimiteSection.numSection !== section) {
-          sectionNouvelleProposee = viaLimiteSection.numSection;
-        }
-        flags.push(
-          `Géométrie de la section 2013 ${section} introuvable dans le référentiel statique — section 2026 ` +
-            "retrouvée par jointure spatiale sur la parcelle connue (Gestion des sections)" +
-            (viaLimiteSection.approx ? ", par proximité (≤ 50 m)" : "") +
-            (viaLimiteSection.numSection !== section
-              ? ` : section n° ${viaLimiteSection.numSection}` +
-                (viaLimiteSection.commune ? ` (${viaLimiteSection.commune})` : "") +
-                " — basculement complexe requis."
-              : "."),
-        );
-      } else {
-        flags.push(
-          `Géométrie de la section 2013 ${section} introuvable — vérification spatiale impossible, ` +
-            "contrôle limité au numéro de section.",
-        );
-        const sectionExiste = await sectionExisteDansLimiteSection(syscol2026, section);
-        sectionExisteEn2026 = sectionExiste;
-        if (!sectionExiste) {
+    if (viaLimiteSection?.syscolCommune === syscol2026 && viaLimiteSection.numSection) {
+      sectionExisteEn2026 = true;
+      resolutionParcelleSpecifique = true;
+      if (viaLimiteSection.numSection === section) {
+        // Résolution la plus fiable disponible (parcelle réelle projetée
+        // dans « Gestion des sections », numéro identique) : approximative
+        // (≤ 50 m) mérite quand même une relecture, exacte n'a rien à signaler.
+        if (viaLimiteSection.approx) {
           flags.push(
-            `Aucune section ${section} trouvée dans la commune 2026 identifiée (${commune2026?.nomCommune ?? syscol2026}) ` +
-              "— un nouveau numéro de section devra être choisi (cas complexe).",
+            "Section 2026 confirmée par jointure spatiale sur la parcelle connue (Gestion des sections), " +
+              "par proximité (≤ 50 m) — à vérifier avant basculement.",
           );
         }
+      } else {
+        // Zone réelle de la parcelle, mais RENUMÉROTÉE en 2026.
+        sectionNouvelleProposee = viaLimiteSection.numSection;
+        flags.push(
+          "Section 2026 retrouvée par jointure spatiale sur la parcelle connue (Gestion des sections) : " +
+            `section n° ${viaLimiteSection.numSection}` +
+            (viaLimiteSection.commune ? ` (${viaLimiteSection.commune})` : "") +
+            (viaLimiteSection.approx ? ", par proximité (≤ 50 m)" : "") +
+            ` — PAS au numéro ${section} — basculement complexe requis.`,
+        );
       }
     } else {
-      const best = spatial.matches[0] ?? null;
-      if (!best) {
-        sectionExisteEn2026 = false;
+      const sectionExiste = await sectionExisteDansLimiteSection(syscol2026, section);
+      sectionExisteEn2026 = sectionExiste;
+      if (sectionExiste) {
         flags.push(
-          `Aucune section 2026 ne recouvre significativement la section 2013 ${section} ` +
-            `dans la commune identifiée (${commune2026?.nomCommune ?? syscol2026}) — nouvelle section à choisir (cas complexe).`,
+          `Section ${section} confirmée par numéro déclaré dans « Gestion des sections » — aucune parcelle ` +
+            "connue de ce système pour une vérification spatiale (NICAD externe) — à confirmer avant basculement.",
         );
-      } else if (best.numSection === section) {
-        sectionExisteEn2026 = true;
-        if (best.recouvr < SEUIL_SECTION_CONFIRME) {
-          flags.push(
-            `Recouvrement partiel (${Math.round(best.recouvr * 100)}%) entre la section 2013 ${section} et la ` +
-              "section 2026 de même numéro — à vérifier avant basculement.",
-          );
-        }
       } else {
-        // Zone géométriquement la même section, mais RENUMÉROTÉE en 2026.
-        sectionExisteEn2026 = true;
-        sectionNouvelleProposee = best.numSection;
         flags.push(
-          `La section 2013 ${section} correspond spatialement à la section 2026 n° ${best.numSection}` +
-            (best.nomSection ? ` (${best.nomSection})` : "") +
-            ` (recouvrement ${Math.round(best.recouvr * 100)}%), PAS au numéro ${section} — ` +
-            `basculement complexe requis avec ce nouveau numéro de section.`,
-        );
-      }
-      if (spatial.matches.length > 1 && spatial.matches[1].recouvr >= SEUIL_SECTION_DECOUPE) {
-        flags.push(
-          `La section 2013 ${section} semble découpée entre plusieurs sections 2026 (` +
-            spatial.matches.map((m) => `${m.numSection} : ${Math.round(m.recouvr * 100)}%`).join(", ") +
-            ").",
+          `Aucune section ${section} trouvée dans la commune 2026 identifiée (${commune2026?.nomCommune ?? syscol2026}) ` +
+            "— un nouveau numéro de section devra être choisi (cas complexe).",
         );
       }
     }
