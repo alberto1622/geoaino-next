@@ -269,6 +269,11 @@ export default function MigrationPage() {
     setSelectedForBascule(new Set(basculeReport.items.filter((i) => i.clean).map((i) => i.nicadAncien)));
   }
 
+  function selectAll() {
+    if (!basculeReport) return;
+    setSelectedForBascule(new Set(basculeReport.items.filter(peutSelectionnerLigne).map((i) => i.nicadAncien)));
+  }
+
   function executerSelection() {
     if (!basculeReport || selectedForBascule.size === 0) return;
     const items = basculeReport.items
@@ -472,6 +477,9 @@ export default function MigrationPage() {
               <div className="flex flex-wrap items-center gap-2">
                 <Button variant="outline" size="sm" onClick={selectAllClean}>
                   Sélectionner les lignes sans drapeau
+                </Button>
+                <Button variant="outline" size="sm" onClick={selectAll}>
+                  Tout sélectionner
                 </Button>
                 <Button
                   size="sm"
