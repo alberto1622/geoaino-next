@@ -100,8 +100,6 @@ export function OnboardingTour({ role, run, setRun }: OnboardingTourProps) {
         closeButtonAction: "skip",
         blockTargetInteraction: true,
         overlayClickAction: false,
-        // @ts-expect-error dismissKeyAction accepts 'skip' in react-joyride@3.2.0 runtime
-        dismissKeyAction: "skip",
       }}
       locale={{
         back: "Précédent",
