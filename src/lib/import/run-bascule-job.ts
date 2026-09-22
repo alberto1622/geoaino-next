@@ -79,7 +79,7 @@ export interface BasculeNicadReport {
   kind: "bascule-nicad";
   items: BasculeNicadItem[];
   invalides: BasculeNicadInvalide[];
-  stats: { total: number; invalides: number; dejaAJour: number; clean: number; avecDrapeaux: number };
+  stats: { total: number; invalides: number; dejaAJour: number; clean: number; avecReserve: number };
 }
 
 /** Projette une commune (2013/2026) de `IdentificationResult` vers `BasculeNicadCommune`. */
@@ -172,7 +172,7 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
     const items: BasculeNicadItem[] = [];
     let nbDejaAJour = 0;
     let nbClean = 0;
-    let nbAvecDrapeaux = 0;
+    let nbAvecReserve = 0;
 
     // Mémoïsation par (syscol+section) — les 11 premiers chiffres du NICAD
     // (positions 1–8 Syscol, 9–11 Section ; cf. nicad-logic.ts) déterminent
@@ -228,7 +228,7 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
           proposition: null,
           sectionExisteEn2026: null,
         });
-        nbAvecDrapeaux++;
+        nbAvecReserve++;
       } else if (res.dejaAJour) {
         items.push({
           nicadAncien,
@@ -253,7 +253,7 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
           sectionExisteEn2026: res.sectionExisteEn2026 ?? null,
         });
         if (clean) nbClean++;
-        else nbAvecDrapeaux++;
+        else nbAvecReserve++;
       }
 
       // Points de contrôle toutes les 20 identifications : suffisamment
@@ -284,7 +284,7 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
             invalides: invalides.length,
             dejaAJour: nbDejaAJour,
             clean: nbClean,
-            avecDrapeaux: nbAvecDrapeaux,
+            avecReserve: nbAvecReserve,
           },
         } as unknown as Prisma.InputJsonValue,
       },

@@ -49,22 +49,22 @@ const BASCULE_JOB_STEPS: JobProgressStep[] = [
 // Filtre du tableau de prévisualisation. "invalides" bascule sur une source
 // de données différente (`basculeReport.invalides`, pas `.items`) — ces
 // lignes n'ont jamais été identifiées (NICAD absent/mal formé en amont),
-// donc pas de cible/statut/drapeaux à afficher pour elles.
-type FiltreStatut = "toutes" | "clean" | "drapeau" | "sansCorrespondance" | "dejaAJour" | "invalides";
+// donc pas de cible/statut/réserves à afficher pour elles.
+type FiltreStatut = "toutes" | "clean" | "reserve" | "sansCorrespondance" | "dejaAJour" | "invalides";
 
 const FILTRE_OPTIONS: { value: FiltreStatut; label: string }[] = [
   { value: "toutes", label: "Toutes les lignes" },
-  { value: "clean", label: "Sans drapeau" },
-  { value: "drapeau", label: "Avec drapeau" },
+  { value: "clean", label: "Sans réserve" },
+  { value: "reserve", label: "Avec réserve" },
   { value: "sansCorrespondance", label: "Sans correspondance 2026" },
   { value: "dejaAJour", label: "Déjà à jour" },
   { value: "invalides", label: "Invalides" },
 ];
 
 // Catégories mutuellement exclusives, dérivées des mêmes champs que les
-// stats déjà affichées (aucun changement de leur calcul) — "avec drapeau"
+// stats déjà affichées (aucun changement de leur calcul) — "avec réserve"
 // et "sans correspondance" étaient jusqu'ici fondues dans la même
-// statistique `avecDrapeaux` ; le filtre les distingue sans rien changer
+// statistique `avecReserve` ; le filtre les distingue sans rien changer
 // au comptage agrégé du bandeau au-dessus du tableau.
 function itemMatchesFiltre(item: BasculeItem, filtre: FiltreStatut): boolean {
   switch (filtre) {
@@ -76,7 +76,7 @@ function itemMatchesFiltre(item: BasculeItem, filtre: FiltreStatut): boolean {
       return item.clean;
     case "sansCorrespondance":
       return !item.dejaAJour && !item.proposition;
-    case "drapeau":
+    case "reserve":
       return !item.dejaAJour && !item.clean && !!item.proposition;
     case "invalides":
       return false; // rendu séparément, cf. `basculeReport.invalides`
@@ -466,9 +466,9 @@ export default function MigrationPage() {
               <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                 <span>{basculeReport.stats.total} ligne(s) lue(s)</span>
                 <span>·</span>
-                <span>{basculeReport.stats.clean} sans drapeau</span>
+                <span>{basculeReport.stats.clean} sans réserve</span>
                 <span>·</span>
-                <span>{basculeReport.stats.avecDrapeaux} avec drapeau</span>
+                <span>{basculeReport.stats.avecReserve} avec réserve</span>
                 <span>·</span>
                 <span>{basculeReport.stats.dejaAJour} déjà à jour</span>
                 <span>·</span>
@@ -476,7 +476,7 @@ export default function MigrationPage() {
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <Button variant="outline" size="sm" onClick={selectAllClean}>
-                  Sélectionner les lignes sans drapeau
+                  Sélectionner les lignes sans réserve
                 </Button>
                 <Button variant="outline" size="sm" onClick={selectAll}>
                   Tout sélectionner
@@ -543,7 +543,7 @@ export default function MigrationPage() {
                       <th className="py-2 pr-3">→ Cible 2026</th>
                       <th className="py-2 pr-3">Commune · Région/Département</th>
                       <th className="py-2 pr-3">Statut</th>
-                      <th className="py-2 pr-3">Drapeaux</th>
+                      <th className="py-2 pr-3">Réserves</th>
                       {resultatsExecution.size > 0 && <th className="py-2 pr-3">Résultat</th>}
                     </tr>
                   </thead>
@@ -590,10 +590,10 @@ export default function MigrationPage() {
                             {item.dejaAJour
                               ? "Déjà 2026"
                               : item.clean
-                                ? "Sans drapeau"
+                                ? "Sans réserve"
                                 : !selectionnable
                                   ? "Section à vérifier manuellement"
-                                  : "Avec drapeau"}
+                                  : "Avec réserve"}
                           </td>
                           <td className="py-2 pr-3 text-xs text-muted-foreground">
                             {item.flags.length > 0 ? item.flags.join(" · ") : "—"}
