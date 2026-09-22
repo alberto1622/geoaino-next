@@ -5743,5 +5743,55 @@ l'absence de valeur dans ce champ.
 
 ---
 
+## 64. « Migration en masse » : jointure sur la géométrie PROPRE du shapefile, pas seulement `cad_parcelles`
+
+**Problème métier** : même après §60-§62, la jointure spatiale de repli
+de `identifierBasculementNicad` (`getParcellePointByNicad2013` +
+`getSectionsForPoints`) ne trouvait un point que pour un NICAD **déjà
+importé auparavant** dans `cad_parcelles` — le cas RARE. Sur un shapefile
+réel de « Migration en masse » (Guédiawaye, 33 474 parcelles), 100 % des
+NICAD sont externes (jamais importés) alors que le shapefile transporte
+lui-même une géométrie par parcelle, totalement ignorée jusqu'ici : le
+correctif §62 confirmait l'existence d'une section par numéro seul, mais
+ne pouvait jamais vérifier — ni corriger — une renumérotation réelle.
+
+**Cause technique** : `run-bascule-job.ts` ne lisait que les propriétés
+attributaires (`f.properties`) de chaque feature pour en extraire le
+NICAD — sa géométrie (`f.geometry`), pourtant présente dans le .shp,
+n'était jamais transmise à `identifierBasculementNicad`.
+
+**Solution** (`fichier · fonction`) :
+- `identifierBasculementNicad` (`lib/cadastre/basculement.ts`) gagne un
+  paramètre optionnel `pointConnu?: {lng, lat}` : fourni, il remplace
+  directement la recherche en base (`getParcellePointByNicad2013`) pour
+  la jointure sur `limite_section` ; omis (page « Basculement »
+  interactive, pas de géométrie pour une simple saisie de NICAD),
+  comportement inchangé.
+- `run-bascule-job.ts` : reprojette les features en WGS84 (même détection
+  `.prj` UTM28N / repli par magnitude que le job « parcelles »,
+  `run-shapefile-job.ts`), calcule un point représentatif par parcelle
+  (`turf.pointOnFeature`, repli `turf.centroid` — même pattern que
+  `sections-from-shapefile.ts`/`parcelle-ingestion.ts`), et le passe à
+  `identifierBasculementNicad` pour CHAQUE NICAD — plus besoin d'un
+  import préalable.
+
+**Pourquoi (pièges inclus)** : revalidé sur le même shapefile réel — le
+taux de lignes « clean » (sans aucun drapeau, basculement simple sûr)
+passe de **0 à 27 146/33 474 (≈88 %)**, et le correctif détecte
+désormais de VRAIES incohérences invisibles avant (ex. NICAD
+`0143011103000082` déclare la section 030, sa géométrie réelle tombe
+dans la section 025 — bascule complexe correctement exigée). Le
+garde-fou anti-mémoïsation (`resolutionParcelleSpecifique`, §60)
+protège déjà ce nouveau cas sans modification : chaque parcelle du
+shapefile a sa PROPRE géométrie, donc son résultat n'est jamais mis en
+cache à tort, exactement la même invariante que pour `cad_parcelles`.
+Coût mesuré : 140 s pour 33 474 parcelles (une requête spatiale par
+parcelle désormais, contre une simple vérification d'existence avant) —
+acceptable pour un job d'arrière-plan avec barre de progression. 594
+lignes (≈1,9 %) sans géométrie Polygon/MultiPolygon exploitable
+retombent sur le repli par numéro seul (§62), comportement attendu.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

@@ -12,13 +12,39 @@
  * (`_actions/migration.ts`).
  */
 import * as shapefile from "shapefile";
+import * as turf from "@turf/turf";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { identifierBasculementNicad, type IdentificationResult } from "@/lib/cadastre/basculement";
 import { validateNicadFormat } from "@/lib/cadastre/nicad-logic";
+import { convertGeometryToWgs84 } from "@/lib/cadastre/import-data";
 import type { FieldMapping } from "./field-mapping";
 import { loadShapefilePair } from "./run-shapefile-job";
+import { reprojectFeaturesToWgs84 } from "./geo-parse";
 import { getImportJob, setJobPhase, assertNotCancelled, markJobFailed, JobCancelledError } from "./jobs";
+
+/**
+ * Point représentatif (WGS84) de la géométrie PROPRE d'une feature du
+ * shapefile importé — même pattern que `sections-from-shapefile.ts`/
+ * `parcelle-ingestion.ts` (`turf.pointOnFeature`, repli `turf.centroid` sur
+ * échec, ex. anneau dégénéré). `null` si la feature n'a pas de géométrie
+ * Polygon/MultiPolygon exploitable (repli sur `cad_parcelles` côté
+ * `identifierBasculementNicad`, cf. § 64 CONCEPTS-TRAITEMENT-DXF.md).
+ */
+function representativePoint(geometry: GeoJSON.Geometry | null | undefined): { lng: number; lat: number } | null {
+  if (!geometry || (geometry.type !== "Polygon" && geometry.type !== "MultiPolygon")) return null;
+  try {
+    const [lng, lat] = turf.pointOnFeature(turf.feature(geometry)).geometry.coordinates as [number, number];
+    return { lng, lat };
+  } catch {
+    try {
+      const [lng, lat] = turf.centroid(turf.feature(geometry)).geometry.coordinates as [number, number];
+      return { lng, lat };
+    } catch {
+      return null;
+    }
+  }
+}
 
 /** Commune (2013 ou 2026) avec sa région/département — cf. `IdentificationResult`. */
 export interface BasculeNicadCommune {
@@ -82,18 +108,36 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
 
   try {
     await setJobPhase(jobId, "read", 5, "running");
-    const { shpBuf, dbfBuf } = await loadShapefilePair(job.fileKey);
+    const { shpBuf, dbfBuf, prjBuf } = await loadShapefilePair(job.fileKey);
     const fieldMapping = (job.layerMapping as FieldMapping | null) ?? undefined;
 
     const source = await shapefile.read(shpBuf, dbfBuf);
-    const features = (source.features ?? []) as GeoJSON.Feature[];
+    let features = (source.features ?? []) as GeoJSON.Feature[];
+
+    // Reprojection WGS84 — même logique que le job "parcelles"
+    // (`run-shapefile-job.ts`) : `.prj` reconnu comme UTM28N → reprojection
+    // complète, sinon repli par magnitude de coordonnées
+    // (`convertGeometryToWgs84`, sans effet sur des coordonnées déjà
+    // valides). Nécessaire pour que le point représentatif de chaque
+    // parcelle (ci-dessous) soit exploitable par `getSectionsForPoints`
+    // (attend du WGS84, comme `limite_section.geom`).
+    const prjText = prjBuf?.toString("utf8");
+    if (prjText && prjText.includes("UTM") && prjText.includes("28")) {
+      features = reprojectFeaturesToWgs84(features) as GeoJSON.Feature[];
+    } else {
+      features = features.map((f) => ({ ...f, geometry: convertGeometryToWgs84(f.geometry) as typeof f.geometry }));
+    }
 
     // Extraction + dédoublonnage + validation de format AVANT toute
     // identification — un shapefile réel peut répéter le même NICAD sur
     // plusieurs features (multi-parties), et contenir des colonnes vides
-    // ou mal formées (saisie manuelle en amont).
+    // ou mal formées (saisie manuelle en amont). Capture aussi le point
+    // représentatif de CHAQUE parcelle (§64) — sa propre géométrie, pas une
+    // recherche en base — pour la jointure spatiale sur `limite_section`
+    // même si ce NICAD n'a jamais été importé auparavant.
     const seen = new Set<string>();
     const nicadsValides: string[] = [];
+    const pointsParNicad = new Map<string, { lng: number; lat: number }>();
     const invalides: BasculeNicadInvalide[] = [];
     for (const f of features) {
       const props = f.properties ?? {};
@@ -118,6 +162,8 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
       if (seen.has(digits)) continue;
       seen.add(digits);
       nicadsValides.push(digits);
+      const point = representativePoint(f.geometry);
+      if (point) pointsParNicad.set(digits, point);
     }
 
     await assertNotCancelled(jobId);
@@ -165,7 +211,7 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
             }
           : { ...cached };
       } else {
-        res = await identifierBasculementNicad(nicadAncien);
+        res = await identifierBasculementNicad(nicadAncien, pointsParNicad.get(nicadAncien));
         if (!res.resolutionParcelleSpecifique) {
           const { nicad, ...rest } = res;
           void nicad; // exclu volontairement du cache (spécifique à chaque parcelle)

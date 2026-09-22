@@ -124,7 +124,19 @@ export interface BasculementResult {
 //    dans `flags` plutôt que masquée ; le basculement n'est PROPOSÉ
 //    proprement (`clean`) que si tout correspond sans aucun flag.
 //  - Trouvé dans AUCUN des deux référentiels → NICAD invalide/saisie erronée.
-export async function identifierBasculementNicad(nicadAncien: string): Promise<IdentificationResult> {
+//
+// `pointConnu` (optionnel) : point représentatif DÉJÀ connu de l'appelant
+// pour ce NICAD (ex. géométrie propre d'une parcelle dans un shapefile de
+// « Migration en masse », cf. § 64 CONCEPTS-TRAITEMENT-DXF.md) — sert
+// directement à la jointure spatiale sur `limite_section`, SANS chercher en
+// base via `getParcellePointByNicad2013` (qui ne trouve rien pour un NICAD
+// jamais importé auparavant). Omis (page « Basculement » interactive, pas
+// de géométrie disponible pour une simple saisie de NICAD) → comportement
+// inchangé, repli sur `cad_parcelles`.
+export async function identifierBasculementNicad(
+  nicadAncien: string,
+  pointConnu?: { lng: number; lat: number },
+): Promise<IdentificationResult> {
   const formatResult = validateNicadFormat(nicadAncien);
   if (!formatResult.valid || !formatResult.parts) {
     return { success: false as const, error: `NICAD invalide : ${formatResult.errors.join(", ")}`, flags: [] };
@@ -223,7 +235,7 @@ export async function identifierBasculementNicad(nicadAncien: string): Promise<I
     //    projeter), on se limite à vérifier qu'une section du même numéro
     //    existe dans la commune 2026 identifiée (contrôle par numéro déclaré,
     //    pas par géométrie — reste flagué, jamais "clean").
-    const point = await getParcellePointByNicad2013(nicadAncien);
+    const point = pointConnu ?? (await getParcellePointByNicad2013(nicadAncien));
     const viaLimiteSection = point ? (await getSectionsForPoints([point]))[0] : null;
 
     if (viaLimiteSection?.syscolCommune === syscol2026 && viaLimiteSection.numSection) {
