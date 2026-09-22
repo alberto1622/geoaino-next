@@ -101,7 +101,7 @@ export function OnboardingTour({ role, run, setRun }: OnboardingTourProps) {
         close: "Fermer",
         last: "Terminer",
         next: "Suivant",
-        nextWithProgress: "Suivant (étape {step} sur {steps})",
+        nextWithProgress: "Suivant (étape {current} sur {total})",
         open: "Ouvrir le guide",
         skip: "Passer",
       }}
