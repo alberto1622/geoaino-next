@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { Joyride, STATUS, type EventData, type Step } from "react-joyride";
+import { Joyride, STATUS, EVENTS, type EventData, type Step } from "react-joyride";
 import { getOnboardingStatus, marquerOnboardingVu } from "@/app/_actions/onboarding";
 
 interface OnboardingTourProps {
@@ -70,6 +70,7 @@ export function OnboardingTour({ role, run, setRun }: OnboardingTourProps) {
   }, [role]);
 
   function handleCallback(data: EventData) {
+    if (data.type !== EVENTS.TOUR_END) return;
     const { status } = data;
     if (status === STATUS.FINISHED || status === STATUS.SKIPPED) {
       setRun(false);
@@ -95,6 +96,10 @@ export function OnboardingTour({ role, run, setRun }: OnboardingTourProps) {
         zIndex: 10000,
         showProgress: true,
         buttons: ["back", "close", "primary", "skip"],
+        skipBeacon: true,
+        closeButtonAction: "skip",
+        blockTargetInteraction: true,
+        overlayClickAction: false,
       }}
       locale={{
         back: "Précédent",
