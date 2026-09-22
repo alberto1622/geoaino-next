@@ -236,5 +236,3 @@ Si le syscol ne corresponds pas à celui de 2013, donner la correspondance de 20
 Si la section ne corresponds pas à celui de 2026 alors effectuer une jointure spatiale pour tourner la correspondance
 
 afficher la region et le département correspondant
-
-01430115
