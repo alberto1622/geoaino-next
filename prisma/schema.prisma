@@ -51,23 +51,24 @@ model VerificationToken {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  name          String?
-  email         String?   @unique
-  emailVerified DateTime?
-  image         String?
-  password      String?
-  role          Role      @default(USER)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  lastSignedIn  DateTime  @default(now())
+  id             String    @id @default(cuid())
+  name           String?
+  email          String?   @unique
+  emailVerified  DateTime?
+  image          String?
+  password       String?
+  role           Role      @default(USER)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  lastSignedIn   DateTime  @default(now())
+  onboardingVuLe DateTime?
 
-  accounts         Account[]
-  sessions         Session[]
-  analyses         Analysis[]
-  reports          Report[]
-  adminLayers      AdminLayer[]
-  aiConversations  AiConversation[]
+  accounts        Account[]
+  sessions        Session[]
+  analyses        Analysis[]
+  reports         Report[]
+  adminLayers     AdminLayer[]
+  aiConversations AiConversation[]
 }
 
 enum Role {
@@ -76,32 +77,32 @@ enum Role {
 }
 
 model Analysis {
-  id              Int       @id @default(autoincrement())
-  userId          String?
-  fileName        String
-  fileFormat      String
-  fileSize        BigInt?
-  status          Status    @default(PENDING)
-  totalFeatures   Int       @default(0)
-  errorCount      Int       @default(0)
-  conformityScore Decimal   @default(0) @db.Decimal(5, 2)
-  totalSurface    Decimal   @default(0) @db.Decimal(20, 4)
-  crs             String?
-  commune         String?
-  region          String?
-  geojsonKey      String?
-  geojsonUrl      String?
-  summaryStats    Json?
-  geoJsonData     String?   @db.Text
-  adminBoundaryData String? @db.Text
-  errorsData      String?   @db.Text
-  correctedData   String?   @db.Text
-  aiReport        String?   @db.Text
-  processingTime  Int       @default(0)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                Int      @id @default(autoincrement())
+  userId            String?
+  fileName          String
+  fileFormat        String
+  fileSize          BigInt?
+  status            Status   @default(PENDING)
+  totalFeatures     Int      @default(0)
+  errorCount        Int      @default(0)
+  conformityScore   Decimal  @default(0) @db.Decimal(5, 2)
+  totalSurface      Decimal  @default(0) @db.Decimal(20, 4)
+  crs               String?
+  commune           String?
+  region            String?
+  geojsonKey        String?
+  geojsonUrl        String?
+  summaryStats      Json?
+  geoJsonData       String?  @db.Text
+  adminBoundaryData String?  @db.Text
+  errorsData        String?  @db.Text
+  correctedData     String?  @db.Text
+  aiReport          String?  @db.Text
+  processingTime    Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  user              User?             @relation(fields: [userId], references: [id])
+  user              User?              @relation(fields: [userId], references: [id])
   topologicalErrors TopologicalError[]
   reports           Report[]
   overlapGeometries OverlapGeometry[]
@@ -118,19 +119,19 @@ enum Status {
 }
 
 model TopologicalError {
-  id                 Int        @id @default(autoincrement())
+  id                 Int       @id @default(autoincrement())
   analysisId         Int
   errorType          ErrorType
   severity           Severity
   nicad1             String?
   nicad2             String?
-  description        String?    @db.Text
+  description        String?   @db.Text
   geometry           Json?
-  area               Decimal?   @db.Decimal(20, 4)
-  confidence         Decimal    @default(1.0000) @db.Decimal(5, 4)
-  corrected          Boolean    @default(false)
+  area               Decimal?  @db.Decimal(20, 4)
+  confidence         Decimal   @default(1.0000) @db.Decimal(5, 4)
+  corrected          Boolean   @default(false)
   correctionGeometry Json?
-  createdAt          DateTime   @default(now())
+  createdAt          DateTime  @default(now())
 
   analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
 }
@@ -157,15 +158,15 @@ enum Severity {
 }
 
 model Report {
-  id          Int        @id @default(autoincrement())
-  analysisId  Int
-  userId      String?
-  reportType  ReportType @default(SUMMARY)
-  title       String?
-  content     String?    @db.Text
-  pdfKey      String?
-  pdfUrl      String?
-  createdAt   DateTime   @default(now())
+  id         Int        @id @default(autoincrement())
+  analysisId Int
+  userId     String?
+  reportType ReportType @default(SUMMARY)
+  title      String?
+  content    String?    @db.Text
+  pdfKey     String?
+  pdfUrl     String?
+  createdAt  DateTime   @default(now())
 
   analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
   user     User?    @relation(fields: [userId], references: [id])
@@ -179,15 +180,15 @@ enum ReportType {
 }
 
 model AdminLayer {
-  id          Int           @id @default(autoincrement())
+  id          Int            @id @default(autoincrement())
   name        String
   layerType   AdminLayerType
   source      String?
-  geojsonData String?       @db.Text
+  geojsonData String?        @db.Text
   geojsonKey  String?
   geojsonUrl  String?
   uploadedBy  String?
-  createdAt   DateTime      @default(now())
+  createdAt   DateTime       @default(now())
 
   user User? @relation(fields: [uploadedBy], references: [id])
 }
@@ -201,19 +202,19 @@ enum AdminLayerType {
 }
 
 model OverlapGeometry {
-  id                    Int      @id @default(autoincrement())
-  analysisId            Int
-  nicad1                String?
-  nicad2                String?
-  intersectionGeometry  Json
-  overlapAreaM2         Decimal? @db.Decimal(20, 4)
-  overlapPercent        Decimal? @db.Decimal(8, 4)
-  area1M2               Decimal? @db.Decimal(20, 4)
-  area2M2               Decimal? @db.Decimal(20, 4)
-  severity              Decimal? @db.Decimal(5, 4)
-  featureIndex1         Int?
-  featureIndex2         Int?
-  createdAt             DateTime @default(now())
+  id                   Int      @id @default(autoincrement())
+  analysisId           Int
+  nicad1               String?
+  nicad2               String?
+  intersectionGeometry Json
+  overlapAreaM2        Decimal? @db.Decimal(20, 4)
+  overlapPercent       Decimal? @db.Decimal(8, 4)
+  area1M2              Decimal? @db.Decimal(20, 4)
+  area2M2              Decimal? @db.Decimal(20, 4)
+  severity             Decimal? @db.Decimal(5, 4)
+  featureIndex1        Int?
+  featureIndex2        Int?
+  createdAt            DateTime @default(now())
 
   analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
 }
@@ -233,15 +234,15 @@ model GeoEngineResult {
 }
 
 model GeoprocessingOp {
-  id           Int         @id @default(autoincrement())
+  id           Int      @id @default(autoincrement())
   analysisId   Int
   opType       OpType
   params       Json?
   result       Json?
-  status       OpStatus    @default(SUCCESS)
-  errorMessage String?     @db.Text
-  durationMs   Int         @default(0)
-  createdAt    DateTime    @default(now())
+  status       OpStatus @default(SUCCESS)
+  errorMessage String?  @db.Text
+  durationMs   Int      @default(0)
+  createdAt    DateTime @default(now())
 
   analysis Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
 }
@@ -285,19 +286,19 @@ enum ChatRole {
 // (Unsupported) : lecture/écriture via SQL brut, cf. parcelle-repository.ts
 // et la migration add_parcelles.
 model Parcelle {
-  id               Int      @id @default(autoincrement())
-  numero           String?
-  denomination     String?
-  autresTextes     Json?
-  surfaceM2        Decimal  @db.Decimal(20, 4)
-  geomGeoJson4326  Json
-  geomHash         String
-  sourceFichier    String
-  epsg             String   @default("32628")
-  dateImport       DateTime @default(now())
-  geom             Unsupported("geometry(MultiPolygon, 32628)")
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id              Int                                          @id @default(autoincrement())
+  numero          String?
+  denomination    String?
+  autresTextes    Json?
+  surfaceM2       Decimal                                      @db.Decimal(20, 4)
+  geomGeoJson4326 Json
+  geomHash        String
+  sourceFichier   String
+  epsg            String                                       @default("32628")
+  dateImport      DateTime                                     @default(now())
+  geom            Unsupported("geometry(MultiPolygon, 32628)")
+  createdAt       DateTime                                     @default(now())
+  updatedAt       DateTime                                     @updatedAt
 
   @@unique([numero, sourceFichier], name: "parcelle_numero_source_unique")
   @@unique([geomHash, sourceFichier], name: "parcelle_geomhash_source_unique")
@@ -318,17 +319,17 @@ model Parcelle {
 
 // Communes — ancien système Syscol 2013
 model CadCommune2013 {
-  id           Int      @id @default(autoincrement())
+  id           Int                                          @id @default(autoincrement())
   nomCommune   String
   syscol       String
   syscolPadded String // 8 chiffres avec zéros devant
   region       String?
   departement  String?
   cav          String?
-  superficie   Decimal? @db.Decimal(15, 6)
-  geojson      String?  @db.Text
+  superficie   Decimal?                                     @db.Decimal(15, 6)
+  geojson      String?                                      @db.Text
   geom         Unsupported("geometry(MultiPolygon, 4326)")?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime                                     @default(now())
 
   @@index([syscolPadded])
   @@map("cad_communes_2013")
@@ -336,17 +337,17 @@ model CadCommune2013 {
 
 // Communes — nouveau système Syscol 2026
 model CadCommune2026 {
-  id            Int      @id @default(autoincrement())
-  nomCommune    String
-  region        String?
-  departement   String?
-  cav           String?
+  id             Int                                          @id @default(autoincrement())
+  nomCommune     String
+  region         String?
+  departement    String?
+  cav            String?
   arrondissement String?
-  codSyscol     String
-  syscolPadded  String // 8 chiffres avec zéros devant
-  geojson       String?  @db.Text
-  geom          Unsupported("geometry(MultiPolygon, 4326)")?
-  createdAt     DateTime @default(now())
+  codSyscol      String
+  syscolPadded   String // 8 chiffres avec zéros devant
+  geojson        String?                                      @db.Text
+  geom           Unsupported("geometry(MultiPolygon, 4326)")?
+  createdAt      DateTime                                     @default(now())
 
   @@index([syscolPadded])
   @@map("cad_communes_2026")
@@ -357,7 +358,7 @@ model CadCommune2026 {
 // qui restent dissoutes à la volée — cf. admin-boundaries.ts). Chargé depuis
 // un shapefile dédié (Arrondissements.shp), pas dérivé de `cad_communes_2026`.
 model CadArrondissement {
-  id                Int      @id @default(autoincrement())
+  id                Int                                          @id @default(autoincrement())
   nomArrondissement String
   region            String?
   codeRegion        String?
@@ -365,9 +366,9 @@ model CadArrondissement {
   codeDepartement   String?
   cav               String?
   codeCav           String?
-  geojson           String?  @db.Text
+  geojson           String?                                      @db.Text
   geom              Unsupported("geometry(MultiPolygon, 4326)")?
-  createdAt         DateTime @default(now())
+  createdAt         DateTime                                     @default(now())
 
   @@index([departement])
   @@map("cad_arrondissements")
@@ -377,12 +378,12 @@ model CadArrondissement {
 // 2023 (DGID), géométrie propre. Chargé depuis un shapefile dédié
 // (Limites_CSF_2023.shp, 26 features), pas dérivé des autres référentiels.
 model CadCentreServiceFiscal {
-  id        Int      @id @default(autoincrement())
+  id        Int                                          @id @default(autoincrement())
   nomCsf    String
   region    String?
-  geojson   String?  @db.Text
+  geojson   String?                                      @db.Text
   geom      Unsupported("geometry(MultiPolygon, 4326)")?
-  createdAt DateTime @default(now())
+  createdAt DateTime                                     @default(now())
 
   @@index([region])
   @@map("cad_centres_services_fiscaux")
@@ -390,7 +391,7 @@ model CadCentreServiceFiscal {
 
 // Sections cadastrales (une section ∈ une commune)
 model CadSection {
-  id            Int      @id @default(autoincrement())
+  id            Int                                          @id @default(autoincrement())
   syscolCommune String // syscolPadded de la commune
   version       String // "2013" | "2026"
   numSection    String // 3 chiffres padded
@@ -398,9 +399,9 @@ model CadSection {
   nomCommune    String?
   region        String?
   departement   String?
-  geojson       String?  @db.Text
+  geojson       String?                                      @db.Text
   geom          Unsupported("geometry(MultiPolygon, 4326)")?
-  createdAt     DateTime @default(now())
+  createdAt     DateTime                                     @default(now())
   createdBy     String?
 
   @@index([syscolCommune, numSection, version])
@@ -409,32 +410,32 @@ model CadSection {
 
 // Parcelles cadastrales (une parcelle ∈ une section ∈ une commune)
 model CadParcelle {
-  id            Int      @id @default(autoincrement())
-  syscolCommune String // syscolPadded
-  numSection    String // 3 chiffres padded
-  numParcelle   String // 5 chiffres padded
-  version       String // "2013" | "2026"
-  nicad         String? // 16 caractères (null si pas encore généré)
-  statut        String   @default("sans_nicad") // sans_nicad | actif | bascule | invalide
+  id              Int                                          @id @default(autoincrement())
+  syscolCommune   String // syscolPadded
+  numSection      String // 3 chiffres padded
+  numParcelle     String // 5 chiffres padded
+  version         String // "2013" | "2026"
+  nicad           String? // 16 caractères (null si pas encore généré)
+  statut          String                                       @default("sans_nicad") // sans_nicad | actif | bascule | invalide
   nomProprietaire String?
-  superficie    Decimal? @db.Decimal(12, 4)
-  longitude     Decimal? @db.Decimal(15, 8)
-  latitude      Decimal? @db.Decimal(15, 8)
-  geojson       String?  @db.Text
-  geom          Unsupported("geometry(MultiPolygon, 4326)")?
-  nomCommune    String?
-  region        String?
-  departement   String?
-  numLot        String?
-  titreParce    String?
-  typeDocFon    String?
-  natJuri       String?
-  typeDestin    String?
-  catOcup       String?
-  quartier      String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  createdBy     String?
+  superficie      Decimal?                                     @db.Decimal(12, 4)
+  longitude       Decimal?                                     @db.Decimal(15, 8)
+  latitude        Decimal?                                     @db.Decimal(15, 8)
+  geojson         String?                                      @db.Text
+  geom            Unsupported("geometry(MultiPolygon, 4326)")?
+  nomCommune      String?
+  region          String?
+  departement     String?
+  numLot          String?
+  titreParce      String?
+  typeDocFon      String?
+  natJuri         String?
+  typeDestin      String?
+  catOcup         String?
+  quartier        String?
+  createdAt       DateTime                                     @default(now())
+  updatedAt       DateTime                                     @updatedAt
+  createdBy       String?
 
   @@index([syscolCommune, numSection, version])
   @@index([nicad])
@@ -448,24 +449,24 @@ model CadParcelle {
 // réponse HTTP — la requête d'upload retourne immédiatement un `id` et
 // l'interface sonde l'avancement. cf. src/lib/import/run-job.ts.
 model ImportJob {
-  id         Int      @id @default(autoincrement())
-  fileName   String
-  fileKey    String // chemin du fichier source persisté (préfixe local:)
-  sourceType String // DXF | DGN
-  status     String   @default("pending") // pending | running | completed | failed
-  phase      String? // read | build | nicad | analyze | done
-  progress   Int      @default(0) // 0..100
-  totalBuilt Int      @default(0) // parcelles construites par l'ingestion
-  analysisId Int? // Analysis produite (navigation /map/[analysisId])
-  report     Json? // rapport d'ingestion + stats d'analyse (errorCount, score…)
+  id           Int      @id @default(autoincrement())
+  fileName     String
+  fileKey      String // chemin du fichier source persisté (préfixe local:)
+  sourceType   String // DXF | DGN
+  status       String   @default("pending") // pending | running | completed | failed
+  phase        String? // read | build | nicad | analyze | done
+  progress     Int      @default(0) // 0..100
+  totalBuilt   Int      @default(0) // parcelles construites par l'ingestion
+  analysisId   Int? // Analysis produite (navigation /map/[analysisId])
+  report       Json? // rapport d'ingestion + stats d'analyse (errorCount, score…)
   layerMapping Json? // mappage calque → classe DGID validé par l'utilisateur (variante « simple »)
   // Cible du job : "parcelles" (défaut, produit une Analysis) ou "sections"
   // (produit les lignes limite_section + contrôle des chevauchements).
-  kind       String   @default("parcelles")
-  error      String?  @db.Text
-  userId     String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  kind         String   @default("parcelles")
+  error        String?  @db.Text
+  userId       String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@index([status])
   @@map("import_jobs")
@@ -481,18 +482,18 @@ model ImportJob {
 // SQL brut, comme `Parcelle`/`Cad*`).
 // ───────────────────────────────────────────────────────────────────────────
 model LimiteSection {
-  id            Int      @id @default(autoincrement())
+  id            Int                                          @id @default(autoincrement())
   region        String?
   departement   String?
   commune       String?
   syscolCommune String? // syscolPadded 2026 de la commune contenante (jointure spatiale)
   numSection    String?
-  surfaceM2     Decimal? @db.Decimal(20, 4)
+  surfaceM2     Decimal?                                     @db.Decimal(20, 4)
   geomGeoJson   Json // géométrie 4326 (rendu client sans PostGIS)
   geom          Unsupported("geometry(MultiPolygon, 4326)")?
   sourceFichier String // regroupe un lot d'import
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime                                     @default(now())
+  updatedAt     DateTime                                     @updatedAt
 
   @@index([sourceFichier])
   @@index([syscolCommune, numSection])
@@ -504,15 +505,15 @@ model LimiteSection {
 // chargé à tous les lots déjà stockés, pas seulement à lui-même).
 // Calqué sur OverlapGeometry ; `status` suit la résolution par l'utilisateur.
 model LimiteSectionOverlap {
-  id                Int      @id @default(autoincrement())
-  sourceFichier     String // lot de sectionAId
-  sourceFichierB    String // lot de sectionBId (= sourceFichier si même lot)
-  sectionAId        Int
-  sectionBId        Int
+  id                  Int      @id @default(autoincrement())
+  sourceFichier       String // lot de sectionAId
+  sourceFichierB      String // lot de sectionBId (= sourceFichier si même lot)
+  sectionAId          Int
+  sectionBId          Int
   intersectionGeoJson Json
-  overlapAreaM2     Decimal? @db.Decimal(20, 4)
-  status            String   @default("PENDING") // PENDING | RESOLVED | IGNORED
-  createdAt         DateTime @default(now())
+  overlapAreaM2       Decimal? @db.Decimal(20, 4)
+  status              String   @default("PENDING") // PENDING | RESOLVED | IGNORED
+  createdAt           DateTime @default(now())
 
   @@index([sourceFichier, status])
   @@index([sourceFichierB])
@@ -530,15 +531,15 @@ model LimiteSectionOverlap {
 // en département/région si l'unité voisine appartient à un autre département/
 // région). Calqué sur `LimiteSectionOverlap`.
 model LimiteSectionAdminMismatch {
-  id                Int      @id @default(autoincrement())
-  sourceFichier     String // lot de sectionId
-  sectionId         Int
-  adminLevel        String // "commune" | "departement" | "region"
-  adminNom          String // nom de l'unité administrative empiétée (≠ celle déclarée sur la section)
+  id                  Int      @id @default(autoincrement())
+  sourceFichier       String // lot de sectionId
+  sectionId           Int
+  adminLevel          String // "commune" | "departement" | "region"
+  adminNom            String // nom de l'unité administrative empiétée (≠ celle déclarée sur la section)
   intersectionGeoJson Json // partie de la section hors de sa propre unité déclarée
-  overlapAreaM2     Decimal? @db.Decimal(20, 4)
-  status            String   @default("PENDING") // PENDING | RESOLVED | IGNORED
-  createdAt         DateTime @default(now())
+  overlapAreaM2       Decimal? @db.Decimal(20, 4)
+  status              String   @default("PENDING") // PENDING | RESOLVED | IGNORED
+  createdAt           DateTime @default(now())
 
   @@index([sourceFichier, status])
   @@index([sectionId])
@@ -570,22 +571,22 @@ model CadHistoryEntry {
 
 // Registre principal des NICAD
 model CadNicad {
-  id          Int      @id @default(autoincrement())
-  nicad       String   @unique
-  syscol      String
-  section     String   @default("001")
-  numParcelle String
-  version     String // "2013" | "2026"
-  statut      String   @default("actif") // actif | bascule | invalide
-  nomCommune  String?
-  region      String?
-  departement String?
-  longitude   Decimal? @db.Decimal(15, 8)
-  latitude    Decimal? @db.Decimal(15, 8)
+  id           Int      @id @default(autoincrement())
+  nicad        String   @unique
+  syscol       String
+  section      String   @default("001")
+  numParcelle  String
+  version      String // "2013" | "2026"
+  statut       String   @default("actif") // actif | bascule | invalide
+  nomCommune   String?
+  region       String?
+  departement  String?
+  longitude    Decimal? @db.Decimal(15, 8)
+  latitude     Decimal? @db.Decimal(15, 8)
   nicadNouveau String? // NICAD 2026 si basculé
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  createdBy   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  createdBy    String?
 
   @@index([version])
   @@index([statut])
@@ -613,19 +614,19 @@ model CadNicadHistorique {
 
 // Journal des opérations
 model CadOperationLog {
-  id            Int      @id @default(autoincrement())
-  typeOperation String // verification | generation | basculement | import | export
-  statut        String   @default("en_cours") // succes | echec | en_cours
-  description   String?  @db.Text
-  nbTraites     Int      @default(0)
-  nbSucces      Int      @default(0)
-  nbEchecs      Int      @default(0)
-  details       Json?
-  fichierSource String?
+  id              Int      @id @default(autoincrement())
+  typeOperation   String // verification | generation | basculement | import | export
+  statut          String   @default("en_cours") // succes | echec | en_cours
+  description     String?  @db.Text
+  nbTraites       Int      @default(0)
+  nbSucces        Int      @default(0)
+  nbEchecs        Int      @default(0)
+  details         Json?
+  fichierSource   String?
   fichierResultat String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  createdBy     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  createdBy       String?
 
   @@index([typeOperation])
   @@map("cad_operations_log")
@@ -633,24 +634,24 @@ model CadOperationLog {
 
 // Correspondance Syscol 2013 → 2026
 model CadCorrespondance {
-  id             Int      @id @default(autoincrement())
-  syscol2013     String // 8 chiffres
-  nomCommune2013 String
-  syscol2026     String?
-  nomCommune2026 String?
-  region         String?
-  departement    String?
+  id              Int      @id @default(autoincrement())
+  syscol2013      String // 8 chiffres
+  nomCommune2013  String
+  syscol2026      String?
+  nomCommune2026  String?
+  region          String?
+  departement     String?
   departement2026 String? // département dans le référentiel 2026 (détection rattachement)
-  statut         String   @default("provisoire") // confirme | provisoire | sans_correspondance
+  statut          String   @default("provisoire") // confirme | provisoire | sans_correspondance
   // inchange | renomme | rattachement_departement | decoupe | fusion | disparue
-  typeChangement String?
-  nbCibles2026   Int      @default(0) // nb de communes 2026 issues (≥ seuil) → découpage si ≥ 2
-  nbSources2013  Int      @default(0) // nb de communes 2013 visant la même 2026 → fusion si ≥ 2
-  cibles2026     String?  @db.Text // liste "syscol:nom (recouvr%)" des communes 2026 liées
-  notes          String?  @db.Text
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  createdBy      String?
+  typeChangement  String?
+  nbCibles2026    Int      @default(0) // nb de communes 2026 issues (≥ seuil) → découpage si ≥ 2
+  nbSources2013   Int      @default(0) // nb de communes 2013 visant la même 2026 → fusion si ≥ 2
+  cibles2026      String?  @db.Text // liste "syscol:nom (recouvr%)" des communes 2026 liées
+  notes           String?  @db.Text
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  createdBy       String?
 
   @@index([syscol2013])
   @@map("cad_correspondance_2013_2026")

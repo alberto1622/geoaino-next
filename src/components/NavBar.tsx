@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { useState } from "react";
 import { usePathname } from "next/navigation";
 import {
   BarChart2,
@@ -11,6 +12,7 @@ import {
   Landmark,
   Users,
   Menu,
+  HelpCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,6 +25,7 @@ import {
 import { signOutAction } from "@/app/_actions/auth";
 import { cn } from "@/lib/utils";
 import { Logo } from "@/components/Logo";
+import { OnboardingTour } from "@/components/OnboardingTour";
 
 interface NavBarProps {
   user?: {
@@ -33,19 +36,20 @@ interface NavBarProps {
 }
 
 const NAV_LINKS = [
-  { label: "Tableau de bord", href: "/dashboard", icon: BarChart2 },
-  { label: "Cadastre", href: "/cadastre/dashboard", icon: Landmark },
-  { label: "Historique", href: "/history", icon: History },
-  { label: "Rapports", href: "/reports", icon: FileText },
+  { label: "Tableau de bord", href: "/dashboard", icon: BarChart2, tourId: "nav-dashboard" },
+  { label: "Cadastre", href: "/cadastre/dashboard", icon: Landmark, tourId: "nav-cadastre" },
+  { label: "Historique", href: "/history", icon: History, tourId: "nav-history" },
+  { label: "Rapports", href: "/reports", icon: FileText, tourId: "nav-reports" },
 ];
 
 export function NavBar({ user }: NavBarProps) {
   const pathname = usePathname();
+  const [tourRun, setTourRun] = useState(false);
   const links =
     user?.role === "ADMIN"
       ? [
           ...NAV_LINKS,
-          { label: "Utilisateurs", href: "/admin/utilisateurs", icon: Users },
+          { label: "Utilisateurs", href: "/admin/utilisateurs", icon: Users, tourId: "nav-admin-users" },
         ]
       : NAV_LINKS;
 
@@ -98,10 +102,11 @@ export function NavBar({ user }: NavBarProps) {
         </div>
 
         <nav className="hidden md:flex items-center gap-1">
-          {links.map(({ label, href, icon: Icon }) => (
+          {links.map(({ label, href, icon: Icon, tourId }) => (
             <Link
               key={href}
               href={href}
+              data-tour={tourId}
               aria-current={pathname === href ? "page" : undefined}
               className={cn(
                 "flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm transition-all",
@@ -124,6 +129,18 @@ export function NavBar({ user }: NavBarProps) {
               Carte
             </Button>
           </Link> */}
+          {user && (
+            <Button
+              variant="ghost"
+              size="icon"
+              data-tour="nav-aide"
+              title="Aide"
+              aria-label="Revoir le guide d'accueil"
+              onClick={() => setTourRun(true)}
+            >
+              <HelpCircle className="w-4 h-4" />
+            </Button>
+          )}
           {user ? (
             <form action={signOutAction}>
               <Button
@@ -146,6 +163,9 @@ export function NavBar({ user }: NavBarProps) {
           )}
         </div>
       </div>
+      {user && (
+        <OnboardingTour role={user.role} run={tourRun} setRun={setTourRun} />
+      )}
     </header>
   );
 }
