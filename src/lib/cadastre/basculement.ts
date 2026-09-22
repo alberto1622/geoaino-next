@@ -64,6 +64,17 @@ export interface IdentificationResult {
   // marqueur pour un NICAD différent : chaque parcelle a sa propre géométrie
   // et peut donc obtenir une réponse différente de ce repli.
   resolutionParcelleSpecifique?: boolean;
+  // Numéro de section 2026 confirmé par jointure spatiale sur la parcelle
+  // connue, TOUJOURS rempli dès que cette jointure aboutit — que le numéro
+  // soit identique à l'ancien ou renuméroté. Distinct de
+  // `proposition.sectionNouvelle`, qui ne reste posé QUE si le numéro
+  // diffère réellement (c'est ce champ-là, pas celui-ci, qui doit décider
+  // du cas simple/complexe — un appelant ne doit jamais envoyer
+  // `sectionConfirmee` telle quelle comme `sectionNouvelle` d'un
+  // basculement sans vérifier qu'elle diffère du numéro d'origine, sous
+  // peine de forcer à tort le cas complexe — donc une renumérotation de
+  // parcelle — alors que rien n'a changé).
+  sectionConfirmee?: string;
   flags: string[];
   clean?: boolean;
   proposition?: { syscolNouveau: string; sectionNouvelle?: string } | null;
@@ -173,6 +184,8 @@ export async function identifierBasculementNicad(nicadAncien: string): Promise<I
   let sectionNouvelleProposee: string | null = null;
   // cf. commentaire du champ `resolutionParcelleSpecifique` sur `IdentificationResult`.
   let resolutionParcelleSpecifique = false;
+  // cf. commentaire du champ `sectionConfirmee` sur `IdentificationResult`.
+  let sectionConfirmee: string | null = null;
 
   if (!correspondance || !syscol2026) {
     flags.push(
@@ -216,6 +229,7 @@ export async function identifierBasculementNicad(nicadAncien: string): Promise<I
     if (viaLimiteSection?.syscolCommune === syscol2026 && viaLimiteSection.numSection) {
       sectionExisteEn2026 = true;
       resolutionParcelleSpecifique = true;
+      sectionConfirmee = viaLimiteSection.numSection;
       if (viaLimiteSection.numSection === section) {
         // Résolution la plus fiable disponible (parcelle réelle projetée
         // dans « Gestion des sections », numéro identique) : approximative
@@ -278,6 +292,7 @@ export async function identifierBasculementNicad(nicadAncien: string): Promise<I
       : null,
     sectionExisteEn2026,
     resolutionParcelleSpecifique,
+    sectionConfirmee: sectionConfirmee ?? undefined,
     flags,
     clean,
     // Pré-remplissage proposé du formulaire : syscol cible identifié, et

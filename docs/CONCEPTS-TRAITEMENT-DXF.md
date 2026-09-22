@@ -5705,5 +5705,43 @@ code supprimé.
 
 ---
 
+## 63. Pré-remplissage du numéro de section confirmé (page « Basculement ») : ne jamais forcer le cas complexe sur une confirmation
+
+**Problème métier** : sur la page interactive « Basculement 2013 → 2026 »,
+le champ « Nouvelle section » n'était pré-rempli que lorsque la jointure
+spatiale (§60/§62) détectait une RENUMÉROTATION (`proposition.sectionNouvelle`)
+— quand elle confirmait au contraire que le numéro n'avait pas changé, le
+champ restait vide, sans refléter cette confirmation pourtant obtenue.
+
+**Cause technique** : `identifierBasculementNicad` ne renseignait
+`sectionNouvelleProposee` QUE si `viaLimiteSection.numSection !== section`
+— un choix délibéré (§60), car ce champ pilote directement le routage
+simple/complexe de `basculerNicadCore`. Le cas « confirmé identique »
+n'avait donc aucune sortie exploitable par l'UI.
+
+**Solution** (`fichier · fonction`) : nouveau champ `sectionConfirmee`
+sur `IdentificationResult` (`lib/cadastre/basculement.ts`) — TOUJOURS
+rempli dès que la jointure spatiale aboutit, identique ou renuméroté,
+strictement séparé de `proposition.sectionNouvelle`. Côté UI
+(`basculement/page.tsx`), `handleIdentifier` pré-remplit le champ avec
+`proposition.sectionNouvelle ?? sectionConfirmee`, mais `handleBascule`
+compare la valeur du champ au numéro d'origine (`identification.nicad.section`)
+avant envoi : identique → `sectionNouvelle: undefined` (cas simple,
+numéro de parcelle préservé) ; différent → envoyé tel quel (cas complexe).
+
+**Pourquoi (pièges inclus)** : `basculerNicadComplexe` (`nicad-logic.ts`)
+attribue TOUJOURS un nouveau numéro de parcelle
+(`getLastNumParcelleGlobal` + 1), en écrasant l'ancien — à la différence
+de `basculerNicadSimple` qui le préserve tel quel. Pré-remplir le champ
+avec un numéro simplement CONFIRMÉ, puis l'envoyer sans vérification,
+aurait fait router silencieusement vers `basculerNicadComplexe` même
+quand rien n'a changé — un basculement « propre » aurait alors réattribué
+un numéro de parcelle inutilement, perdant la correspondance avec le
+numéro d'origine. Une confirmation ne doit jamais, par elle-même,
+déclencher un chemin d'écriture différent de celui qu'aurait pris
+l'absence de valeur dans ce champ.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

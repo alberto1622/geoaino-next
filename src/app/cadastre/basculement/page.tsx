@@ -59,7 +59,13 @@ export default function BasculementPage() {
         }
         if (res.proposition) {
           setSyscolNouveau(res.proposition.syscolNouveau);
-          setSectionNouvelle(res.proposition.sectionNouvelle ?? "");
+          // Pré-remplit avec le numéro confirmé par jointure spatiale, qu'il
+          // diffère de l'ancien (renumérotation, `proposition.sectionNouvelle`)
+          // ou non (`sectionConfirmee` seul) — dans les deux cas c'est le
+          // numéro que la jointure a réellement retrouvé pour cette parcelle.
+          // `handleBascule` neutralise l'envoi quand il est resté identique à
+          // l'ancien, pour ne jamais forcer à tort le cas complexe.
+          setSectionNouvelle(res.proposition.sectionNouvelle ?? res.sectionConfirmee ?? "");
         }
         if (res.clean) toast.success("Correspondance 2026 identifiée sans différence.");
         else if (res.flags.length > 0) toast.warning(`${res.flags.length} différence(s) à vérifier.`);
@@ -80,10 +86,20 @@ export default function BasculementPage() {
     }
     startTransition(async () => {
       try {
+        // Le champ peut être pré-rempli avec un numéro simplement CONFIRMÉ
+        // (identique à l'ancien, cf. `handleIdentifier`) plutôt que proposé
+        // pour une renumérotation — ne l'envoyer que s'il diffère réellement
+        // de l'ancien numéro de section, sinon `basculerNicadCore` route à
+        // tort vers le cas complexe et réattribue un nouveau numéro de
+        // parcelle alors que rien n'a changé.
+        const sectionOrigine =
+          identification?.success && !identification.dejaAJour ? identification.nicad?.section : undefined;
+        const sectionAEnvoyer =
+          sectionNouvelle && sectionNouvelle !== sectionOrigine ? sectionNouvelle : undefined;
         const res = await basculerNicadAction({
           nicadAncien: nicadAncien.replace(/\D/g, ""),
           syscolNouveau,
-          sectionNouvelle: sectionNouvelle || undefined,
+          sectionNouvelle: sectionAEnvoyer,
         });
         setResult(res);
         if (res.success) toast.success(`Basculement ${res.cas} effectué.`);
@@ -256,6 +272,13 @@ export default function BasculementPage() {
                         (identifiée par recouvrement spatial)
                       </span>
                     )}
+                    {identification?.success &&
+                      !identification.proposition?.sectionNouvelle &&
+                      identification.sectionConfirmee && (
+                        <span className="ml-1 font-normal text-emerald-600">
+                          (confirmée par recouvrement spatial, inchangée)
+                        </span>
+                      )}
                   </label>
                   <Input
                     value={sectionNouvelle}
