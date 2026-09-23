@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
-import { usePathname } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   BarChart2,
   History,
@@ -33,6 +33,29 @@ interface NavBarProps {
     email?: string | null;
     role?: string | null;
   } | null;
+}
+
+// Détecte `?tour=1` (posé par le bouton "Revoir le tour guidé" de la page
+// /aide, seul moyen pour une AUTRE page de déclencher l'état `tourRun` qui
+// vit dans NavBar) et nettoie l'URL ensuite pour ne pas relancer le tour à
+// chaque rechargement. `useSearchParams` fait sortir son appelant du rendu
+// statique sauf s'il est isolé dans son propre <Suspense> — isolé ici dans
+// un composant dédié pour ne jamais exiger que les ~10 sites d'appel de
+// <NavBar> ajoutent eux-mêmes une limite Suspense.
+function TourQueryParamHandler({ setRun }: { setRun: (run: boolean) => void }) {
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (searchParams.get("tour") === "1") {
+      setRun(true);
+      router.replace(pathname, { scroll: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  return null;
 }
 
 const NAV_LINKS = [
@@ -130,16 +153,17 @@ export function NavBar({ user }: NavBarProps) {
             </Button>
           </Link> */}
           {user && (
-            <Button
-              variant="ghost"
-              size="icon"
-              data-tour="nav-aide"
-              title="Aide"
-              aria-label="Revoir le guide d'accueil"
-              onClick={() => setTourRun(true)}
-            >
-              <HelpCircle className="w-4 h-4" />
-            </Button>
+            <Link href="/aide">
+              <Button
+                variant="ghost"
+                size="icon"
+                data-tour="nav-aide"
+                title="Aide"
+                aria-label="Page d'aide"
+              >
+                <HelpCircle className="w-4 h-4" />
+              </Button>
+            </Link>
           )}
           {user ? (
             <form action={signOutAction}>
@@ -164,7 +188,12 @@ export function NavBar({ user }: NavBarProps) {
         </div>
       </div>
       {user && (
-        <OnboardingTour role={user.role} run={tourRun} setRun={setTourRun} />
+        <>
+          <Suspense fallback={null}>
+            <TourQueryParamHandler setRun={setTourRun} />
+          </Suspense>
+          <OnboardingTour role={user.role} run={tourRun} setRun={setTourRun} />
+        </>
       )}
     </header>
   );

@@ -64,7 +64,8 @@ export function OnboardingTour({ role, run, setRun }: OnboardingTourProps) {
     }
     base.push({
       target: '[data-tour="nav-aide"]',
-      content: "Vous pouvez revoir ce guide à tout moment ici.",
+      content:
+        "Retrouvez ici, à tout moment, la page d'aide qui décrit chaque section de l'application — et d'où vous pouvez aussi revoir ce tour.",
     });
     return base;
   }, [role]);
