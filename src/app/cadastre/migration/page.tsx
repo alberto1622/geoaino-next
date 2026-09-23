@@ -827,7 +827,11 @@ export default function MigrationPage() {
                               </td>
                               <td className="py-2 pr-3 font-mono text-xs">
                                 {item.proposition
-                                  ? `${item.proposition.syscolNouveau}${item.proposition.sectionNouvelle ? " / section " + item.proposition.sectionNouvelle : ""}`
+                                  ? `${item.proposition.syscolNouveau}${
+                                      item.proposition.sectionNouvelle
+                                        ? ` / section ${item.nicadAncien.slice(8, 11)} → ${item.proposition.sectionNouvelle}`
+                                        : ""
+                                    }`
                                   : "—"}
                               </td>
                               <td className="py-2 pr-3 text-xs text-muted-foreground">

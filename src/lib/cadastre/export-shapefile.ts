@@ -481,6 +481,7 @@ const MIGRATION_FIELDS: DbfField[] = [
   { name: "NICAD_ANC", type: "C", length: 16 },
   { name: "NICAD_NEW", type: "C", length: 16 },
   { name: "SYSCOL_NEW", type: "C", length: 8 },
+  { name: "SECT_ANC", type: "C", length: 3 },
   { name: "SECT_NEW", type: "C", length: 3 },
   { name: "COMMUNE", type: "C", length: 50 },
   { name: "STATUT", type: "C", length: 10 },
@@ -547,6 +548,11 @@ export async function buildMigrationExportShapefileZip(jobId: number): Promise<Z
       // jamais recalculé ici, pour rester la seule source de vérité.
       NICAD_NEW: typeof f.properties?.nicad_a_jour === "string" ? f.properties.nicad_a_jour : "",
       SYSCOL_NEW: item.proposition?.syscolNouveau ?? "",
+      // Numéro de section ANCIEN, seulement quand la section a réellement
+      // changé (`sectionNouvelle` posé) — même logique que le tableau de
+      // prévisualisation : voir le changement ancien → nouveau, pas
+      // simplement le nouveau numéro isolé de son contexte.
+      SECT_ANC: item.proposition?.sectionNouvelle ? nicad.slice(8, 11) : "",
       SECT_NEW: item.proposition?.sectionNouvelle ?? "",
       COMMUNE: item.commune2026?.nom ?? item.commune2013?.nom ?? "",
       STATUT: statut,

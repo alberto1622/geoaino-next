@@ -5922,5 +5922,30 @@ n'existent plus après l'appel).
 
 ---
 
+## 68. Afficher explicitement ancien → nouveau numéro de section (pas juste le nouveau, hors contexte)
+
+**Problème métier** : sur un cas de changement de section (renumérotation
+détectée, `proposition.sectionNouvelle` posé), le tableau de
+prévisualisation et l'export shapefile (§66) n'affichaient QUE le
+nouveau numéro — l'ancien restait implicite (à extraire soi-même des
+positions 9-11 du NICAD ancien).
+
+**Solution** (`fichier · fonction`) : `migration/page.tsx` affiche
+désormais `section {ancien} → {nouveau}` (au lieu de `section {nouveau}`
+seul) dans la colonne « Cible 2026 », en dérivant l'ancien directement de
+`item.nicadAncien.slice(8, 11)` — aucune nouvelle donnée, juste un
+format plus explicite. `buildMigrationExportShapefileZip`
+(`export-shapefile.ts`) gagne la colonne DBF `SECT_ANC`, remplie
+UNIQUEMENT quand `SECT_NEW` l'est aussi (même condition que le tableau —
+`(null)` pour une ligne sans changement de section, jamais l'ancien
+numéro seul sans le nouveau à côté).
+
+**Pourquoi** : validé par un job factice ciblé (deux lignes, une
+"clean" et une avec le vrai cas de changement rencontré sur Guédiawaye
+cette session, section 030 → 025) — `ogrinfo` confirme `SECT_ANC`/`SECT_NEW`
+vides pour la ligne sans changement, et `030`/`025` pour l'autre.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*
