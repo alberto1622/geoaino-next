@@ -5947,5 +5947,40 @@ vides pour la ligne sans changement, et `030`/`025` pour l'autre.
 
 ---
 
+## 69. Carte `/map` : ne plus colorer « sans section » (orange) une parcelle dont le NICAD est déjà fiable
+
+**Problème métier** : sur un import shapefile de parcelles, une parcelle
+avec un NICAD parfaitement valide (déjà présent dans le fichier source,
+ou construit) s'affichait quand même orange (« sans section ») dès que
+`numero_section` n'était pas renseigné sur la feature — cas fréquent
+quand la jointure spatiale de confirmation sur `limite_section` échoue
+(parcelle hors emprise du référentiel), sans rapport avec la fiabilité
+du NICAD lui-même.
+
+**Cause technique** : `tile-index.ts` classait `_ssec = 1` (coloration
+orange, `MapLibreMap.tsx`) sur le seul critère `numero_section` absent
+ou « 000 », sans jamais regarder `_nstat` (statut NICAD, calculé juste
+avant dans la même boucle) — un NICAD valide porte pourtant déjà sa
+section dans ses propres chiffres (positions 9-11), rendant `limite_section`
+non nécessaire pour EN CONNAÎTRE la section, seulement pour la confirmer
+spatialement.
+
+**Solution** (`fichier · fonction`) : `buildEntry`
+(`lib/analyses/tile-index.ts`) ne pose plus `_ssec` que si
+`_nstat !== "ok"` en plus de l'absence de section — un NICAD déjà fiable
+n'est plus jamais signalé comme « sans section », qu'il ait pu être
+confirmé par `limite_section` ou non. `sansSectionCount` (KPI affiché
+sur `/map`, `MapAnalysisClient.tsx`) suit automatiquement, dérivé de la
+même condition dans la même boucle.
+
+**Pourquoi (pièges inclus)** : validé par un test direct sur une vraie
+`Analysis` (`getTileEntry`) avec trois features : NICAD valide sans
+section (doit passer vert), aucun NICAD ni section (doit rester
+orange), NICAD + section valides (nominal) — `sansSectionCount` passe de
+2 (avant) à 1 (après), confirmant que seule la vraie incertitude reste
+signalée.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

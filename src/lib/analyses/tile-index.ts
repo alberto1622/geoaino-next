@@ -144,8 +144,15 @@ async function buildEntry(analysisId: number, stamp: number): Promise<CacheEntry
     }
     // Parcelle sans section (numero_section absent ou « 000 ») : la composante
     // section du NICAD est indéterminée → signalée sur la carte (`_ssec`).
+    // SAUF si le NICAD est déjà valide (`_nstat === "ok"`) : un NICAD correct
+    // porte déjà sa section dans ses propres chiffres (positions 9-11) —
+    // l'absence de `numero_section` ne reflète alors qu'un échec de la
+    // jointure spatiale de confirmation sur `limite_section` (parcelle hors
+    // emprise du référentiel, cf. `assign-section-nicad.ts`), pas une vraie
+    // incertitude sur la section. Signaler « sans section » (orange) dans ce
+    // cas serait un faux positif : le NICAD est fiable, rien à corriger.
     const sec = String(p.numero_section ?? p.num_section ?? "").trim();
-    if (!sec || sec === "000") {
+    if ((!sec || sec === "000") && props._nstat !== "ok") {
       props._ssec = 1;
       sansSectionCount++;
     }
