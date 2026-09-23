@@ -5893,5 +5893,34 @@ uploadé à chaque export.
 
 ---
 
+## 67. Consulter/supprimer une migration depuis l'historique : deux clés de fichiers à nettoyer, pas une
+
+**Problème métier** : l'historique (§66) affichait les lots passés sans
+action possible — ni pour revoir un rapport déjà calculé, ni pour
+libérer l'espace disque d'un lot obsolète.
+
+**Solution** (`fichier · fonction`) : `consulterMigrationJob`
+(`_actions/migration.ts`) recharge un job passé dans le MÊME état
+`basculeJob`/`basculeReport` que le suivi d'un job en cours — le tableau
+de prévisualisation, les filtres et le bouton d'export (§66) sont
+réutilisés tels quels, sans nouvelle UI. `supprimerMigrationJob`
+supprime le job **et** ses deux fichiers physiques distincts : le
+shapefile uploadé d'origine (`job.fileKey`, `deleteImportUpload`) ET le
+GeoJSON enrichi sauvegardé par le job (`report.geojsonKey`,
+`deleteGeoJsonByKey`, §66) — deux clés de stockage indépendantes,
+oublier l'une des deux laisse un fichier orphelin sur disque. Réservé
+aux administrateurs (`requireAdmin`, même garde que
+`executerBasculementListe`).
+
+**Pourquoi (pièges inclus)** : `deleteImportUpload` existait déjà dans
+ce dépôt (utilisée nulle part jusqu'ici, cf. §65) — piège inverse de
+d'habitude : la fonction de nettoyage était prête, seul l'appelant
+manquait. Validé par un test direct (job + vrais fichiers factices sur
+disque) : lecture du job correcte, puis suppression confirmée à la fois
+en base (`ImportJob` absent) et sur disque (les deux fichiers physiques
+n'existent plus après l'appel).
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

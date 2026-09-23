@@ -11,7 +11,10 @@ import {
   updateOperation,
 } from "@/lib/cadastre/data";
 import { basculerNicadCore } from "@/lib/cadastre/basculement";
-import { listBasculeNicadJobs } from "@/lib/import/jobs";
+import { listBasculeNicadJobs, getImportJob, deleteImportJob } from "@/lib/import/jobs";
+import { deleteImportUpload } from "@/lib/import/storage";
+import { deleteGeoJsonByKey } from "@/lib/geo-storage";
+import type { BasculeNicadReport } from "@/lib/import/run-bascule-job";
 
 export async function previewCommune(input: { syscol2013: string }) {
   await requireUserId();
@@ -32,6 +35,42 @@ export async function historiqueMigrations(input?: { limit?: number }) {
   await requireUserId();
   const limit = Math.min(Math.max(input?.limit ?? 20, 1), 100);
   return listBasculeNicadJobs(limit);
+}
+
+/** Recharge un job passé (`historique`) dans le tableau de prévisualisation
+ * — même forme que le suivi d'un job en cours, pour réutiliser tel quel le
+ * tableau/export déjà existants. Lecture seule, pas besoin d'ADMIN. */
+export async function consulterMigrationJob(input: { jobId: number }) {
+  await requireUserId();
+  const job = await getImportJob(input.jobId);
+  if (!job || job.kind !== "bascule-nicad") {
+    throw new Error("Migration introuvable.");
+  }
+  return {
+    id: job.id,
+    status: job.status,
+    phase: job.phase,
+    progress: job.progress,
+    error: job.error,
+    report: job.report as unknown as BasculeNicadReport | null,
+  };
+}
+
+/** Supprime définitivement une migration : le job ET les fichiers qu'il
+ * référence sur disque (fichier uploadé d'origine, GeoJSON sauvegardé) —
+ * pas seulement l'enregistrement en base. Irréversible, réservé aux
+ * administrateurs (même garde que `executerBasculementListe`). */
+export async function supprimerMigrationJob(input: { jobId: number }) {
+  await requireAdmin();
+  const job = await getImportJob(input.jobId);
+  if (!job || job.kind !== "bascule-nicad") {
+    throw new Error("Migration introuvable.");
+  }
+  const report = job.report as unknown as BasculeNicadReport | null;
+  await deleteImportUpload(job.fileKey);
+  await deleteGeoJsonByKey(report?.geojsonKey);
+  await deleteImportJob(job.id);
+  return { success: true as const };
 }
 
 const executerCommuneSchema = z.object({

@@ -54,6 +54,14 @@ export async function getImportJob(id: number) {
   return prisma.importJob.findUnique({ where: { id } });
 }
 
+/** Supprime l'enregistrement du job — les fichiers qu'il référence
+ * (`fileKey`, et pour "bascule-nicad" le GeoJSON sauvegardé,
+ * `report.geojsonKey`) sont supprimés SÉPARÉMENT par l'appelant, qui
+ * connaît le type de job et donc quelles clés lui sont propres. */
+export async function deleteImportJob(id: number): Promise<void> {
+  await prisma.importJob.delete({ where: { id } });
+}
+
 export async function listImportJobs(limit = 20) {
   return prisma.importJob.findMany({ orderBy: { createdAt: "desc" }, take: limit });
 }

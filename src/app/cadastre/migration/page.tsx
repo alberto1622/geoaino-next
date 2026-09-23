@@ -9,9 +9,10 @@ import {
   type ChangeEvent,
 } from "react";
 import { toast } from "sonner";
-import { Download, History, Layers, Loader2, Play, Upload } from "lucide-react";
+import { Download, Eye, History, Layers, Loader2, Play, Trash2, Upload } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import FieldMappingModal from "@/components/FieldMappingModal";
 import {
   JobProgressSteps,
@@ -23,6 +24,8 @@ import {
   executerToutes,
   executerBasculementListe,
   historiqueMigrations,
+  consulterMigrationJob,
+  supprimerMigrationJob,
 } from "../_actions/migration";
 import type {
   BasculeNicadItem,
@@ -162,6 +165,9 @@ export default function MigrationPage() {
   >([]);
   const [chargementHistorique, setChargementHistorique] = useState(true);
   const [exportEnCours, setExportEnCours] = useState(false);
+  const [consultationEnCours, setConsultationEnCours] = useState<number | null>(null);
+  const [jobASupprimer, setJobASupprimer] = useState<{ id: number; fileName: string } | null>(null);
+  const [suppressionEnCours, setSuppressionEnCours] = useState(false);
 
   function reload() {
     startTransition(async () => {
@@ -190,6 +196,53 @@ export default function MigrationPage() {
 
   useEffect(reload, []);
   useEffect(chargerHistorique, []);
+
+  // Recharge un lot passé dans le MÊME tableau de prévisualisation que pour
+  // un job en cours (état déjà "completed" → l'effet de suivi ci-dessous ne
+  // le repolle pas) — réutilise tel quel le tableau, les filtres et le
+  // bouton d'export existants.
+  async function consulterJob(jobId: number) {
+    setConsultationEnCours(jobId);
+    try {
+      const job = await consulterMigrationJob({ jobId });
+      setBasculeJob({
+        id: job.id,
+        status: job.status,
+        phase: job.phase,
+        progress: job.progress,
+        error: job.error,
+      });
+      setBasculeReport(job.report);
+      setResultatsExecution(new Map());
+      setSelectedForBascule(new Set());
+      document
+        .getElementById("previsualisation-migration")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setConsultationEnCours(null);
+    }
+  }
+
+  async function confirmerSuppression() {
+    if (!jobASupprimer) return;
+    setSuppressionEnCours(true);
+    try {
+      await supprimerMigrationJob({ jobId: jobASupprimer.id });
+      toast.success(`« ${jobASupprimer.fileName} » supprimé.`);
+      if (basculeJob?.id === jobASupprimer.id) {
+        setBasculeJob(null);
+        setBasculeReport(null);
+      }
+      chargerHistorique();
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setSuppressionEnCours(false);
+      setJobASupprimer(null);
+    }
+  }
 
   async function exporterShapefile() {
     if (!basculeJob) return;
@@ -558,7 +611,7 @@ export default function MigrationPage() {
         </CardContent>
       </Card> */}
 
-      <Card>
+      <Card id="previsualisation-migration">
         <CardHeader>
           <CardTitle className="text-base">
             Importer un shapefile (NICAD)
@@ -864,6 +917,30 @@ export default function MigrationPage() {
                     >
                       {job.status}
                     </span>
+                    {job.status === "completed" && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="Consulter"
+                        disabled={consultationEnCours === job.id}
+                        onClick={() => consulterJob(job.id)}
+                      >
+                        {consultationEnCours === job.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Eye className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="Supprimer"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => setJobASupprimer({ id: job.id, fileName: job.fileName })}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
                   </div>
                 </li>
               ))}
@@ -871,6 +948,21 @@ export default function MigrationPage() {
           )}
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={jobASupprimer !== null}
+        title="Supprimer cette migration ?"
+        description={
+          <>
+            « {jobASupprimer?.fileName} » sera supprimé définitivement, y
+            compris le fichier importé et le rapport associé sur le
+            serveur. Cette action est irréversible.
+          </>
+        }
+        confirmLabel={suppressionEnCours ? "Suppression…" : "Supprimer"}
+        onConfirm={confirmerSuppression}
+        onCancel={() => setJobASupprimer(null)}
+      />
 
       {pendingInventory && (
         <FieldMappingModal
