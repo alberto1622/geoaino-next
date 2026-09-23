@@ -8,11 +8,18 @@
 // `archiver("zip")` : on instancie la classe `ZipArchive` (rupture vs v7).
 // Types locaux : src/types/archiver.d.ts.
 import { type Archiver, ZipArchive } from "archiver";
+import * as shapefile from "shapefile";
 import { getParcellesForExport, getParcellesMultiSyscols } from "./data";
 import { listSections } from "./sections-data";
 import { prisma } from "@/lib/prisma";
 import { loadGeoJsonFromKey } from "@/lib/geo-storage";
 import { extractNicad } from "@/lib/geo-engine";
+import { getImportJob } from "@/lib/import/jobs";
+import { loadShapefilePair } from "@/lib/import/run-shapefile-job";
+import { reprojectFeaturesToWgs84 } from "@/lib/import/geo-parse";
+import { convertGeometryToWgs84 } from "./import-data";
+import { extractValidNicad, type BasculeNicadReport } from "@/lib/import/run-bascule-job";
+import type { FieldMapping } from "@/lib/import/field-mapping";
 
 const PRJ_WGS84 = `GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]`;
 
@@ -470,4 +477,114 @@ export async function buildSectionsShapefileZip(
   });
 
   return { filename: `${baseName}.zip`, buffer };
+}
+
+// ─── Migration en masse ────────────────────────────────────────────────────
+
+const MIGRATION_FIELDS: DbfField[] = [
+  { name: "NICAD_ANC", type: "C", length: 16 },
+  { name: "NICAD_NEW", type: "C", length: 16 },
+  { name: "SYSCOL_NEW", type: "C", length: 8 },
+  { name: "SECT_NEW", type: "C", length: 3 },
+  { name: "COMMUNE", type: "C", length: 50 },
+  { name: "STATUT", type: "C", length: 10 },
+  { name: "RESERVES", type: "C", length: 150 },
+];
+
+/**
+ * Construit le shapefile ZIP du rapport de prévisualisation "Migration en
+ * masse" (`job.report`, `BasculeNicadReport`), enrichi de la géométrie
+ * RÉELLE de chaque parcelle. Le job d'identification (`run-bascule-job.ts`)
+ * n'écrit jamais cette géométrie dans le rapport stocké (elle servait juste,
+ * temporairement, à la jointure spatiale § 64 CONCEPTS-TRAITEMENT-DXF.md) —
+ * on la retrouve donc en relisant le shapefile ORIGINAL via `job.fileKey`
+ * (jamais supprimé après le job, `deleteImportUpload` n'est appelée nulle
+ * part dans ce dépôt), puis en rejoignant chaque feature à sa ligne de
+ * rapport par NICAD ancien — via `extractValidNicad`, EXACTEMENT la même
+ * extraction que celle qui a construit `report.items[].nicadAncien`, pour
+ * ne jamais diverger. Retourne `null` si le job n'existe pas, n'est pas de
+ * type `bascule-nicad`, n'est pas terminé, ou si le rapport est vide.
+ */
+export async function buildMigrationExportShapefileZip(jobId: number): Promise<ZipResult | null> {
+  const job = await getImportJob(jobId);
+  if (!job || job.kind !== "bascule-nicad" || job.status !== "completed" || !job.report) return null;
+
+  const report = job.report as unknown as BasculeNicadReport;
+  if (!report.items?.length) return null;
+
+  const itemsByNicad = new Map(report.items.map((it) => [it.nicadAncien, it]));
+
+  const { shpBuf, dbfBuf, prjBuf } = await loadShapefilePair(job.fileKey);
+  const fieldMapping = (job.layerMapping as FieldMapping | null) ?? undefined;
+  const source = await shapefile.read(shpBuf, dbfBuf);
+  let features = (source.features ?? []) as GeoJSON.Feature[];
+
+  // Même reprojection WGS84 que le job d'identification — nécessaire pour
+  // que le shapefile exporté soit dans le même référentiel que le .prj émis
+  // ci-dessous (PRJ_WGS84), quelle que soit la projection du fichier source.
+  const prjText = prjBuf?.toString("utf8");
+  if (prjText && prjText.includes("UTM") && prjText.includes("28")) {
+    features = reprojectFeaturesToWgs84(features) as GeoJSON.Feature[];
+  } else {
+    features = features.map((f) => ({ ...f, geometry: convertGeometryToWgs84(f.geometry) as typeof f.geometry }));
+  }
+
+  // Une seule feature par NICAD (première occurrence) — même dédoublonnage
+  // que le job d'identification (`seen`/`pointsParNicad` dans run-bascule-job.ts).
+  const seen = new Set<string>();
+  const dbfRowsMigration: Record<string, string>[] = [];
+  const geometriesMigration: Ring[][] = [];
+  for (const f of features) {
+    const nicad = extractValidNicad(f.properties ?? {}, fieldMapping);
+    if (!nicad || seen.has(nicad)) continue;
+    const item = itemsByNicad.get(nicad);
+    if (!item) continue; // ligne invalide au moment du job (non présente dans report.items)
+    seen.add(nicad);
+
+    const statut = item.dejaAJour
+      ? "DEJA_2026"
+      : item.clean
+        ? "CLEAN"
+        : item.proposition
+          ? "RESERVE"
+          : "SANS_CORR";
+
+    // NICAD 2026 complet UNIQUEMENT déterministe côté "cas simple" (même
+    // section, même numéro de parcelle — basculerNicadSimple) : le numéro
+    // de parcelle d'un cas complexe (sectionNouvelle proposée) n'est assigné
+    // qu'au moment réel du basculement (numérotation séquentielle,
+    // getLastNumParcelleGlobal) — laissé vide plutôt que deviné.
+    const nicadNew =
+      item.proposition && !item.proposition.sectionNouvelle
+        ? `${item.proposition.syscolNouveau.padStart(8, "0")}${nicad.slice(8, 16)}`
+        : "";
+
+    dbfRowsMigration.push({
+      NICAD_ANC: nicad,
+      NICAD_NEW: nicadNew,
+      SYSCOL_NEW: item.proposition?.syscolNouveau ?? "",
+      SECT_NEW: item.proposition?.sectionNouvelle ?? "",
+      COMMUNE: item.commune2026?.nom ?? item.commune2013?.nom ?? "",
+      STATUT: statut,
+      RESERVES: item.flags.join(" · "),
+    });
+    geometriesMigration.push(parseGeojsonRings(f.geometry as object));
+  }
+  if (dbfRowsMigration.length === 0) return null;
+
+  const dbfBufMigration = buildDbf(MIGRATION_FIELDS, dbfRowsMigration);
+  const { shp: shpMigration, shx: shxMigration } = buildShpShx(geometriesMigration);
+  const prjBufMigration = Buffer.from(PRJ_WGS84, "ascii");
+
+  const dateStrMigration = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const baseNameMigration = `MIGRATION_${sanitizeName(job.fileName)}_${dateStrMigration}`;
+
+  const bufferMigration = await archiveToBuffer((archive) => {
+    archive.append(shpMigration, { name: `${baseNameMigration}.shp` });
+    archive.append(shxMigration, { name: `${baseNameMigration}.shx` });
+    archive.append(dbfBufMigration, { name: `${baseNameMigration}.dbf` });
+    archive.append(prjBufMigration, { name: `${baseNameMigration}.prj` });
+  });
+
+  return { filename: `${baseNameMigration}.zip`, buffer: bufferMigration };
 }

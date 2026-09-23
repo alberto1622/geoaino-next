@@ -5793,5 +5793,50 @@ retombent sur le repli par numéro seul (§62), comportement attendu.
 
 ---
 
+## 65. Export shapefile de « Migration en masse » : relire le fichier original plutôt que stocker la géométrie
+
+**Problème métier** : le rapport de prévisualisation de « Migration en
+masse » (NICAD ancien, cible 2026 proposée, réserves) est purement
+tabulaire — utile pour la relecture à l'écran, inexploitable dans un SIG
+(QGIS/ArcGIS) sans géométrie. Le job d'identification (§64) calcule bien
+un point représentatif par parcelle, mais uniquement pour la jointure
+spatiale sur `limite_section` — jamais persisté dans `job.report`.
+
+**Cause technique / solution** (`fichier · fonction`) : plutôt que
+d'alourdir `job.report` (`Json` en base) avec la géométrie complète de
+dizaines de milliers de polygones, `buildMigrationExportShapefileZip`
+(`lib/cadastre/export-shapefile.ts`) relit le shapefile **original**
+via `job.fileKey` — jamais supprimé après le job, `deleteImportUpload`
+(`lib/import/storage.ts`) n'étant appelée nulle part dans ce dépôt.
+Chaque feature relue est rejointe à sa ligne de `report.items[]` par
+NICAD ancien, extrait via `extractValidNicad` (`lib/import/run-bascule-job.ts`)
+— **factorisée** hors de la boucle du job pour être l'unique source de
+vérité de cette extraction, appelée par les deux (job ET export) :
+toute divergence entre les deux (alias de colonne, normalisation)
+casserait silencieusement la jointure pour certaines lignes sans jamais
+lever d'erreur (juste une ligne de rapport orpheline, sans géométrie).
+Le NICAD 2026 complet n'est calculé que pour les cas « simples » (numéro
+de parcelle connu d'avance, section inchangée) — pour un cas complexe, le
+futur numéro de parcelle dépend d'une numérotation séquentielle décidée
+au moment réel du basculement (`getLastNumParcelleGlobal`), donc laissé
+vide plutôt que deviné.
+
+**Historique associé** : `getRecentMigrationEnMasseOperations`
+(`lib/cadastre/data.ts`) filtre `cad_operations_log` par
+`description: {startsWith: "Migration en masse"}`, PAS seulement par
+`typeOperation: "basculement"` — piège découvert en testant sur de
+vraies données : `basculerNicadCore` (`lib/cadastre/basculement.ts`)
+journalise sa PROPRE ligne individuelle (« Basculement simple : NICAD →
+NICAD ») pour CHAQUE NICAD basculé, y compris ceux basculés en boucle
+par un lot de cette page — un filtre par type seul aurait noyé le
+résumé agrégé du lot (une ligne) sous des centaines de lignes
+individuelles du même lot. Validé sur données réelles : export shapefile
+de 30 818 parcelles (Guédiawaye, même fichier que §64) en 4,5 s,
+2,28 Mo, toutes les lignes du rapport correctement rejointes à leur
+géométrie ; requête d'historique testée sur de vrais lots déjà en base
+(500 NICAD par lot) — confirmé sans bruit des lignes individuelles.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

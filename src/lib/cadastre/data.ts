@@ -399,6 +399,26 @@ export async function getRecentOperations(limit = 20) {
   return plain(await prisma.cadOperationLog.findMany({ orderBy: { createdAt: "desc" }, take: limit }));
 }
 
+/**
+ * Historique de la page "Migration en masse" — UNIQUEMENT les opérations de
+ * LOT (`executerCommune`/`executerToutes`/`executerBasculementListe`,
+ * `_actions/migration.ts`, description préfixée "Migration en masse"), pas
+ * les entrées individuelles que `basculerNicadCore` (`lib/cadastre/basculement.ts`)
+ * journalise pour CHAQUE NICAD — y compris ceux basculés en boucle par un lot
+ * de cette page. Sans ce filtre par description (en plus du type), un seul
+ * lot de plusieurs centaines de NICAD noierait le résumé agrégé du lot sous
+ * ses propres lignes individuelles.
+ */
+export async function getRecentMigrationEnMasseOperations(limit = 20) {
+  return plain(
+    await prisma.cadOperationLog.findMany({
+      where: { typeOperation: "basculement", description: { startsWith: "Migration en masse" } },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    }),
+  );
+}
+
 export async function countOperations(type?: string) {
   return prisma.cadOperationLog.count({ where: type ? { typeOperation: type } : undefined });
 }

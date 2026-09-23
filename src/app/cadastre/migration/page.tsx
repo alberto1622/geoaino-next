@@ -9,7 +9,7 @@ import {
   type ChangeEvent,
 } from "react";
 import { toast } from "sonner";
-import { Layers, Loader2, Play, Upload } from "lucide-react";
+import { Download, History, Layers, Loader2, Play, Upload } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import FieldMappingModal from "@/components/FieldMappingModal";
@@ -22,6 +22,7 @@ import {
   executerCommune,
   executerToutes,
   executerBasculementListe,
+  historiqueMigrations,
 } from "../_actions/migration";
 import type {
   BasculeNicadItem,
@@ -156,6 +157,11 @@ export default function MigrationPage() {
   const [resultatsExecution, setResultatsExecution] = useState<
     Map<string, ResultatLigne>
   >(new Map());
+  const [historique, setHistorique] = useState<
+    Awaited<ReturnType<typeof historiqueMigrations>>
+  >([]);
+  const [chargementHistorique, setChargementHistorique] = useState(true);
+  const [exportEnCours, setExportEnCours] = useState(false);
 
   function reload() {
     startTransition(async () => {
@@ -169,7 +175,51 @@ export default function MigrationPage() {
     });
   }
 
+  function chargerHistorique() {
+    startTransition(async () => {
+      try {
+        setHistorique(await historiqueMigrations({ limit: 20 }));
+      } catch {
+        // Silencieux — l'historique est un complément d'information, jamais
+        // bloquant pour le flux principal de migration.
+      } finally {
+        setChargementHistorique(false);
+      }
+    });
+  }
+
   useEffect(reload, []);
+  useEffect(chargerHistorique, []);
+
+  async function exporterShapefile() {
+    if (!basculeJob) return;
+    setExportEnCours(true);
+    try {
+      const res = await fetch("/api/cadastre/export/shapefile/migration", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: basculeJob.id }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Échec de l'export.");
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const match = /filename="([^"]+)"/.exec(disposition);
+      const filename = match?.[1] ?? "migration.zip";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setExportEnCours(false);
+    }
+  }
 
   const totalParcelles = previews.reduce((s, p) => s + p.nbParcelles, 0);
 
@@ -405,6 +455,7 @@ export default function MigrationPage() {
         toast.success(`${nbMigres} basculé(s), ${nbEchecs} échec(s).`);
         setResultatsExecution(resultatsParNicad);
         setSelectedForBascule(new Set());
+        chargerHistorique();
       } catch (err) {
         // Un lot a levé avant de renvoyer sa réponse (ex. erreur réseau/
         // serveur) — on garde quand même les résultats des lots précédents
@@ -580,6 +631,20 @@ export default function MigrationPage() {
                   Tout sélectionner
                 </Button>
                 <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={exporterShapefile}
+                  disabled={!basculeJob || exportEnCours}
+                  className="gap-2"
+                >
+                  {exportEnCours ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  Exporter en shapefile
+                </Button>
+                <Button
                   size="sm"
                   onClick={executerSelection}
                   disabled={selectedForBascule.size === 0 || executingBascule}
@@ -749,6 +814,59 @@ export default function MigrationPage() {
                 </div>
               )}
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <History className="h-4 w-4" />
+            Historique des migrations
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {chargementHistorique ? (
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Chargement de
+              l&apos;historique…
+            </p>
+          ) : historique.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Aucune migration effectuée pour l&apos;instant.
+            </p>
+          ) : (
+            <ul className="divide-y divide-border/50">
+              {historique.map((op) => (
+                <li
+                  key={op.id}
+                  className="flex flex-wrap items-center justify-between gap-3 py-2 text-sm"
+                >
+                  <div className="min-w-0">
+                    <span>{op.description}</span>
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      {new Date(op.createdAt).toLocaleString("fr-FR")}
+                    </span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2 text-xs">
+                    <span className="text-muted-foreground">
+                      {op.nbSucces}✓ / {op.nbEchecs}✗
+                    </span>
+                    <span
+                      className={
+                        op.statut === "succes"
+                          ? "rounded bg-emerald-500/15 px-2 py-0.5 text-emerald-500"
+                          : op.statut === "echec"
+                            ? "rounded bg-rose-500/15 px-2 py-0.5 text-rose-500"
+                            : "rounded bg-amber-500/15 px-2 py-0.5 text-amber-500"
+                      }
+                    >
+                      {op.statut}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
           )}
         </CardContent>
       </Card>

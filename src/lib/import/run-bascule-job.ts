@@ -99,6 +99,30 @@ function pick(props: any, ...keys: string[]): string {
   return "";
 }
 
+/**
+ * Extrait un NICAD valide (16 chiffres) des propriétés d'une feature de
+ * shapefile "Migration en masse" — MÊME logique que la boucle d'extraction
+ * ci-dessous, factorisée pour être réutilisée par `buildMigrationExportShapefileZip`
+ * (`export-shapefile.ts`) : l'export doit rejoindre chaque feature du fichier
+ * ORIGINAL au rapport stocké (`BasculeNicadItem.nicadAncien`) par exactement
+ * la même clé que celle utilisée pour construire ce rapport — toute
+ * divergence (alias différent, normalisation différente) casserait
+ * silencieusement la jointure pour certaines lignes.
+ */
+export function extractValidNicad(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  props: any,
+  fieldMapping?: FieldMapping,
+): string | null {
+  const raw = fieldMapping?.nicad
+    ? pick(props, fieldMapping.nicad)
+    : pick(props, "nicad", "nic", "num_nicad", "code_nicad", "codif");
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length !== 16 || !validateNicadFormat(digits).valid) return null;
+  return digits;
+}
+
 export async function runBasculeNicadJob(jobId: number): Promise<void> {
   const job = await getImportJob(jobId);
   if (!job) {
@@ -148,13 +172,14 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
         invalides.push({ raw: "", motif: "Valeur NICAD absente" });
         continue;
       }
-      const digits = raw.replace(/\D/g, "");
-      if (digits.length !== 16 || !validateNicadFormat(digits).valid) {
+      const digits = extractValidNicad(props, fieldMapping);
+      if (!digits) {
+        const rawDigits = raw.replace(/\D/g, "");
         invalides.push({
           raw,
           motif:
-            digits.length !== 16
-              ? `Longueur invalide (${digits.length} chiffre(s) au lieu de 16)`
+            rawDigits.length !== 16
+              ? `Longueur invalide (${rawDigits.length} chiffre(s) au lieu de 16)`
               : "Format NICAD invalide (Syscol/section/parcelle incohérents)",
         });
         continue;

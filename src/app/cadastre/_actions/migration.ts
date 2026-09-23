@@ -9,6 +9,7 @@ import {
   executerMigrationToutes,
   insertOperation,
   updateOperation,
+  getRecentMigrationEnMasseOperations,
 } from "@/lib/cadastre/data";
 import { basculerNicadCore } from "@/lib/cadastre/basculement";
 
@@ -21,6 +22,15 @@ export async function previewCommune(input: { syscol2013: string }) {
 export async function previewToutes() {
   await requireUserId();
   return previewMigrationToutes();
+}
+
+/** Historique des opérations de migration ("Migration en masse") — par commune,
+ * globale, ou par shapefile : les trois passent par `insertOperation({typeOperation:
+ * "basculement"})` ci-dessous, donc un seul filtre couvre les trois. */
+export async function historiqueMigrations(input?: { limit?: number }) {
+  await requireUserId();
+  const limit = Math.min(Math.max(input?.limit ?? 20, 1), 100);
+  return getRecentMigrationEnMasseOperations(limit);
 }
 
 const executerCommuneSchema = z.object({
