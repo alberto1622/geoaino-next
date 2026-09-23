@@ -8,16 +8,12 @@
 // `archiver("zip")` : on instancie la classe `ZipArchive` (rupture vs v7).
 // Types locaux : src/types/archiver.d.ts.
 import { type Archiver, ZipArchive } from "archiver";
-import * as shapefile from "shapefile";
 import { getParcellesForExport, getParcellesMultiSyscols } from "./data";
 import { listSections } from "./sections-data";
 import { prisma } from "@/lib/prisma";
 import { loadGeoJsonFromKey } from "@/lib/geo-storage";
 import { extractNicad } from "@/lib/geo-engine";
 import { getImportJob } from "@/lib/import/jobs";
-import { loadShapefilePair } from "@/lib/import/run-shapefile-job";
-import { reprojectFeaturesToWgs84 } from "@/lib/import/geo-parse";
-import { convertGeometryToWgs84 } from "./import-data";
 import { extractValidNicad, type BasculeNicadReport } from "@/lib/import/run-bascule-job";
 import type { FieldMapping } from "@/lib/import/field-mapping";
 
@@ -493,41 +489,37 @@ const MIGRATION_FIELDS: DbfField[] = [
 
 /**
  * Construit le shapefile ZIP du rapport de prévisualisation "Migration en
- * masse" (`job.report`, `BasculeNicadReport`), enrichi de la géométrie
- * RÉELLE de chaque parcelle. Le job d'identification (`run-bascule-job.ts`)
- * n'écrit jamais cette géométrie dans le rapport stocké (elle servait juste,
- * temporairement, à la jointure spatiale § 64 CONCEPTS-TRAITEMENT-DXF.md) —
- * on la retrouve donc en relisant le shapefile ORIGINAL via `job.fileKey`
- * (jamais supprimé après le job, `deleteImportUpload` n'est appelée nulle
- * part dans ce dépôt), puis en rejoignant chaque feature à sa ligne de
- * rapport par NICAD ancien — via `extractValidNicad`, EXACTEMENT la même
- * extraction que celle qui a construit `report.items[].nicadAncien`, pour
- * ne jamais diverger. Retourne `null` si le job n'existe pas, n'est pas de
- * type `bascule-nicad`, n'est pas terminé, ou si le rapport est vide.
+ * masse" (`job.report`, `BasculeNicadReport`). La géométrie vient du GeoJSON
+ * déjà sauvegardé par le job (`report.geojsonKey`, `saveGeoJsonLocally` —
+ * même mécanisme que l'import "parcelles") : chaque feature y porte déjà ses
+ * propriétés d'origine PLUS `nicad_a_jour` (NICAD 2026, quand déterministe —
+ * § 65 CONCEPTS-TRAITEMENT-DXF.md). Ne rouvre plus le shapefile uploadé —
+ * seul `report.items` (statut/réserves/section cible) est encore rejoint par
+ * NICAD via `extractValidNicad`, pour les colonnes descriptives que le
+ * GeoJSON sauvegardé ne porte pas lui-même. Retourne `null` si le job
+ * n'existe pas, n'est pas de type `bascule-nicad`, n'est pas terminé, si le
+ * rapport est vide, ou si la sauvegarde GeoJSON a échoué au moment du job.
  */
 export async function buildMigrationExportShapefileZip(jobId: number): Promise<ZipResult | null> {
   const job = await getImportJob(jobId);
   if (!job || job.kind !== "bascule-nicad" || job.status !== "completed" || !job.report) return null;
 
   const report = job.report as unknown as BasculeNicadReport;
-  if (!report.items?.length) return null;
+  if (!report.items?.length || !report.geojsonKey) return null;
+
+  const raw = await loadGeoJsonFromKey(report.geojsonKey);
+  if (!raw) return null;
+  let fc: { features?: GeoJSON.Feature[] };
+  try {
+    fc = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const features = fc.features ?? [];
+  if (features.length === 0) return null;
 
   const itemsByNicad = new Map(report.items.map((it) => [it.nicadAncien, it]));
-
-  const { shpBuf, dbfBuf, prjBuf } = await loadShapefilePair(job.fileKey);
   const fieldMapping = (job.layerMapping as FieldMapping | null) ?? undefined;
-  const source = await shapefile.read(shpBuf, dbfBuf);
-  let features = (source.features ?? []) as GeoJSON.Feature[];
-
-  // Même reprojection WGS84 que le job d'identification — nécessaire pour
-  // que le shapefile exporté soit dans le même référentiel que le .prj émis
-  // ci-dessous (PRJ_WGS84), quelle que soit la projection du fichier source.
-  const prjText = prjBuf?.toString("utf8");
-  if (prjText && prjText.includes("UTM") && prjText.includes("28")) {
-    features = reprojectFeaturesToWgs84(features) as GeoJSON.Feature[];
-  } else {
-    features = features.map((f) => ({ ...f, geometry: convertGeometryToWgs84(f.geometry) as typeof f.geometry }));
-  }
 
   // Une seule feature par NICAD (première occurrence) — même dédoublonnage
   // que le job d'identification (`seen`/`pointsParNicad` dans run-bascule-job.ts).
@@ -549,19 +541,11 @@ export async function buildMigrationExportShapefileZip(jobId: number): Promise<Z
           ? "RESERVE"
           : "SANS_CORR";
 
-    // NICAD 2026 complet UNIQUEMENT déterministe côté "cas simple" (même
-    // section, même numéro de parcelle — basculerNicadSimple) : le numéro
-    // de parcelle d'un cas complexe (sectionNouvelle proposée) n'est assigné
-    // qu'au moment réel du basculement (numérotation séquentielle,
-    // getLastNumParcelleGlobal) — laissé vide plutôt que deviné.
-    const nicadNew =
-      item.proposition && !item.proposition.sectionNouvelle
-        ? `${item.proposition.syscolNouveau.padStart(8, "0")}${nicad.slice(8, 16)}`
-        : "";
-
     dbfRowsMigration.push({
       NICAD_ANC: nicad,
-      NICAD_NEW: nicadNew,
+      // Calculé une seule fois, au moment du job (`nicad_a_jour`, § 65) —
+      // jamais recalculé ici, pour rester la seule source de vérité.
+      NICAD_NEW: typeof f.properties?.nicad_a_jour === "string" ? f.properties.nicad_a_jour : "",
       SYSCOL_NEW: item.proposition?.syscolNouveau ?? "",
       SECT_NEW: item.proposition?.sectionNouvelle ?? "",
       COMMUNE: item.commune2026?.nom ?? item.commune2013?.nom ?? "",

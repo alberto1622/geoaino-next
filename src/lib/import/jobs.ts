@@ -59,6 +59,24 @@ export async function listImportJobs(limit = 20) {
 }
 
 /**
+ * Historique de "Migration en masse" — un lot = un FICHIER shapefile
+ * importé (`kind: "bascule-nicad"`), pas une ligne `cad_operations_log`
+ * (§65 CONCEPTS-TRAITEMENT-DXF.md). `select` explicite qui exclut `report`
+ * : ce champ JSON peut contenir des dizaines de milliers d'items pour un
+ * gros shapefile — le charger pour chaque ligne d'une simple liste
+ * gonflerait inutilement la requête. `totalBuilt` (posé par le job,
+ * `items.length`) suffit comme indicateur de volume pour cette vue.
+ */
+export async function listBasculeNicadJobs(limit = 20) {
+  return prisma.importJob.findMany({
+    where: { kind: "bascule-nicad" },
+    select: { id: true, fileName: true, status: true, totalBuilt: true, error: true, createdAt: true },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+  });
+}
+
+/**
  * Met à jour la phase + l'avancement (et éventuellement le statut). Écriture
  * conditionnelle (`updateMany` + garde `status !== "cancelled"`) : un job déjà
  * annulé entre-temps (ex. pendant que `status: "pending"` transitionne vers

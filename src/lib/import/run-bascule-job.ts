@@ -22,6 +22,7 @@ import type { FieldMapping } from "./field-mapping";
 import { loadShapefilePair } from "./run-shapefile-job";
 import { reprojectFeaturesToWgs84 } from "./geo-parse";
 import { getImportJob, setJobPhase, assertNotCancelled, markJobFailed, JobCancelledError } from "./jobs";
+import { saveGeoJsonLocally } from "@/lib/geo-storage";
 
 /**
  * Point représentatif (WGS84) de la géométrie PROPRE d'une feature du
@@ -80,6 +81,29 @@ export interface BasculeNicadReport {
   items: BasculeNicadItem[];
   invalides: BasculeNicadInvalide[];
   stats: { total: number; invalides: number; dejaAJour: number; clean: number; avecReserve: number };
+  // Clé du GeoJSON complet (géométrie + propriétés d'origine de CHAQUE
+  // feature du shapefile importé, y compris les lignes invalides/non
+  // résolues) sauvegardé sur disque via `saveGeoJsonLocally` — même
+  // mécanisme que l'import "parcelles" (`finishParcellesJob`). Chaque
+  // feature dont le NICAD 2026 a pu être déterminé gagne UN SEUL champ
+  // ajouté, `nicad_a_jour` — rien d'autre n'est modifié ni retiré.
+  // `null` si la sauvegarde a échoué (le rapport tabulaire reste
+  // exploitable indépendamment).
+  geojsonKey: string | null;
+}
+
+/**
+ * NICAD 2026 complet à inscrire dans `nicad_a_jour`, UNIQUEMENT déterministe
+ * côté "cas simple" (même section, même numéro de parcelle —
+ * `basculerNicadSimple`) : le numéro de parcelle d'un cas complexe
+ * (`sectionNouvelle` proposée) n'est assigné qu'au moment réel du
+ * basculement (numérotation séquentielle, `getLastNumParcelleGlobal`) —
+ * `null` plutôt que deviné. `null` aussi pour un NICAD déjà 2026 ou sans
+ * correspondance/proposition.
+ */
+function nicadAJourPour(item: BasculeNicadItem): string | null {
+  if (item.dejaAJour || !item.proposition || item.proposition.sectionNouvelle) return null;
+  return `${item.proposition.syscolNouveau.padStart(8, "0")}${item.nicadAncien.slice(8, 16)}`;
 }
 
 /** Projette une commune (2013/2026) de `IdentificationResult` vers `BasculeNicadCommune`. */
@@ -293,6 +317,39 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
       }
     }
 
+    // Sauvegarde du GeoJSON complet — TOUTES les features lues (y compris
+    // les lignes invalides, laissées telles quelles), chaque feature dont
+    // un NICAD 2026 déterministe a pu être calculé gagnant SEULEMENT
+    // `nicad_a_jour` en plus de ses propriétés d'origine. Même mécanisme
+    // que l'import "parcelles" (`finishParcellesJob` → `saveGeoJsonLocally`),
+    // pour que l'export shapefile (`buildMigrationExportShapefileZip`) n'ait
+    // plus besoin de rouvrir le fichier uploadé pour retrouver la géométrie.
+    const nicadAJourParNicad = new Map(
+      items.filter((it) => !it.dejaAJour).map((it) => [it.nicadAncien, nicadAJourPour(it)] as const),
+    );
+    const featuresAvecNicadAJour = features.map((f) => {
+      const nicad = extractValidNicad(f.properties ?? {}, fieldMapping);
+      const nicadAJour = nicad ? nicadAJourParNicad.get(nicad) : undefined;
+      return nicadAJour
+        ? { ...f, properties: { ...(f.properties ?? {}), nicad_a_jour: nicadAJour } }
+        : f;
+    });
+
+    let geojsonKey: string | null = null;
+    try {
+      geojsonKey = await saveGeoJsonLocally(
+        job.fileName,
+        JSON.stringify({ type: "FeatureCollection", features: featuresAvecNicadAJour }),
+        job.userId,
+      );
+    } catch (err) {
+      // La sauvegarde du GeoJSON est un complément (export shapefile plus
+      // rapide) — un échec ici (disque plein, permissions) ne doit jamais
+      // faire échouer tout le job : le rapport tabulaire reste exploitable,
+      // l'export retombera sur `null` (§65, à traiter côté export).
+      console.error(`[import/run-bascule] sauvegarde GeoJSON échouée (job ${jobId}), rapport conservé sans elle:`, err);
+    }
+
     await prisma.importJob.updateMany({
       where: { id: jobId, status: { not: "cancelled" } },
       data: {
@@ -311,6 +368,7 @@ export async function runBasculeNicadJob(jobId: number): Promise<void> {
             clean: nbClean,
             avecReserve: nbAvecReserve,
           },
+          geojsonKey,
         } as unknown as Prisma.InputJsonValue,
       },
     });

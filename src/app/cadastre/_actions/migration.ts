@@ -9,9 +9,9 @@ import {
   executerMigrationToutes,
   insertOperation,
   updateOperation,
-  getRecentMigrationEnMasseOperations,
 } from "@/lib/cadastre/data";
 import { basculerNicadCore } from "@/lib/cadastre/basculement";
+import { listBasculeNicadJobs } from "@/lib/import/jobs";
 
 export async function previewCommune(input: { syscol2013: string }) {
   await requireUserId();
@@ -24,13 +24,14 @@ export async function previewToutes() {
   return previewMigrationToutes();
 }
 
-/** Historique des opérations de migration ("Migration en masse") — par commune,
- * globale, ou par shapefile : les trois passent par `insertOperation({typeOperation:
- * "basculement"})` ci-dessous, donc un seul filtre couvre les trois. */
+/** Historique de "Migration en masse" — un lot = un FICHIER shapefile
+ * importé (`ImportJob` de kind "bascule-nicad"), pas une opération agrégée
+ * (§65 CONCEPTS-TRAITEMENT-DXF.md : aligné sur la même logique que l'import
+ * "parcelles", qui suit déjà ses lots par fichier plutôt que par opération). */
 export async function historiqueMigrations(input?: { limit?: number }) {
   await requireUserId();
   const limit = Math.min(Math.max(input?.limit ?? 20, 1), 100);
-  return getRecentMigrationEnMasseOperations(limit);
+  return listBasculeNicadJobs(limit);
 }
 
 const executerCommuneSchema = z.object({

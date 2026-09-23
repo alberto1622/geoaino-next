@@ -5836,6 +5836,61 @@ de 30 818 parcelles (Guédiawaye, même fichier que §64) en 4,5 s,
 géométrie ; requête d'historique testée sur de vrais lots déjà en base
 (500 NICAD par lot) — confirmé sans bruit des lignes individuelles.
 
+**Mise à jour (§66)** : cette approche (relire le fichier original à
+l'export) a depuis été abandonnée au profit du stockage du GeoJSON dès le
+job — voir §66. La leçon sur l'extraction NICAD factorisée
+(`extractValidNicad`) et sur le bruit des lignes individuelles dans
+l'historique reste valable telle quelle.
+
+---
+
+## 66. « Migration en masse » v2 : stocker le GeoJSON comme un import parcelles, un seul champ ajouté
+
+**Problème métier** : §65 évitait délibérément de stocker la géométrie
+(pour ne pas alourdir `job.report`) en relisant le fichier original à
+CHAQUE export. Demande explicite : que « Migration en masse » se
+comporte comme un import « parcelles » classique — la géométrie
+persistée comme pour tout autre import shapefile — et que la sortie
+n'apporte qu'UN SEUL changement par rapport à l'entrée : un champ
+`nicad_a_jour` ajouté à chaque parcelle, rien retiré ni modifié.
+
+**Cause technique** : l'import « parcelles » (`run-shapefile-job.ts` →
+`finishParcellesJob`) sauvegarde déjà le GeoJSON complet sur disque via
+`saveGeoJsonLocally` (référencé par une clé, `geojsonKey`) — mécanisme
+que « Migration en masse » (`kind: "bascule-nicad"`) n'utilisait pas du
+tout jusqu'ici, se contentant d'un rapport tabulaire sans géométrie.
+
+**Solution** (`fichier · fonction`) : `runBasculeNicadJob`
+(`lib/import/run-bascule-job.ts`) calcule, pour chaque NICAD identifié,
+`nicad_a_jour` via `nicadAJourPour` — UNIQUEMENT déterministe côté « cas
+simple » (même section, même numéro de parcelle), `null` pour un cas
+complexe (numéro de parcelle attribué séquentiellement seulement au
+moment réel du basculement, jamais deviné). Toutes les features lues
+(y compris les lignes invalides, laissées telles quelles) sont ensuite
+réécrites avec CE SEUL champ en plus de leurs propriétés d'origine, puis
+sauvegardées via `saveGeoJsonLocally` — même fonction que l'import
+parcelles — et la clé stockée dans `report.geojsonKey`. L'export
+(`buildMigrationExportShapefileZip`, `lib/cadastre/export-shapefile.ts`)
+ne rouvre donc plus le shapefile uploadé : il relit directement ce
+GeoJSON déjà traité, ne rejoignant `report.items` que pour les colonnes
+descriptives (statut, réserves) que le GeoJSON ne porte pas lui-même.
+L'historique (`listBasculeNicadJobs`, `lib/import/jobs.ts`) est
+reconstruit à partir des `ImportJob` (`kind: "bascule-nicad"`) — un lot
+= un FICHIER importé, comme pour tout autre import shapefile — plutôt
+que depuis `cad_operations_log` (§65) : `select` explicite qui exclut
+volontairement `report` (pouvant contenir des dizaines de milliers
+d'items) pour ne pas alourdir une simple liste.
+
+**Pourquoi (pièges inclus)** : ce qui semblait une optimisation légitime
+en §65 (éviter de stocker une géométrie volumineuse) est devenu, avec ce
+nouveau besoin, le problème à résoudre — la bonne architecture dépend de
+l'usage prévu, pas d'un principe général « stocker moins ». Validé sur
+le même shapefile réel (Guédiawaye, 33 474 features lues, 30 818 NICAD
+valides, 29 434 avec `nicad_a_jour` déterminé) : toutes les propriétés
+d'origine intactes dans le GeoJSON sauvegardé, et l'export passe de
+4,5 s à **0,8 s** (5,6×) en n'ayant plus à reprojeter/rouvrir le fichier
+uploadé à chaque export.
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait

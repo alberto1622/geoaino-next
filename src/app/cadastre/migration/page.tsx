@@ -837,31 +837,32 @@ export default function MigrationPage() {
             </p>
           ) : (
             <ul className="divide-y divide-border/50">
-              {historique.map((op) => (
+              {historique.map((job) => (
                 <li
-                  key={op.id}
+                  key={job.id}
                   className="flex flex-wrap items-center justify-between gap-3 py-2 text-sm"
                 >
                   <div className="min-w-0">
-                    <span>{op.description}</span>
+                    <span className="font-mono text-xs">{job.fileName}</span>
                     <span className="ml-2 text-xs text-muted-foreground">
-                      {new Date(op.createdAt).toLocaleString("fr-FR")}
+                      {new Date(job.createdAt).toLocaleString("fr-FR")}
                     </span>
                   </div>
                   <div className="flex shrink-0 items-center gap-2 text-xs">
                     <span className="text-muted-foreground">
-                      {op.nbSucces}✓ / {op.nbEchecs}✗
+                      {job.totalBuilt.toLocaleString("fr-FR")} NICAD identifié(s)
                     </span>
                     <span
+                      title={job.error ?? undefined}
                       className={
-                        op.statut === "succes"
+                        job.status === "completed"
                           ? "rounded bg-emerald-500/15 px-2 py-0.5 text-emerald-500"
-                          : op.statut === "echec"
+                          : job.status === "failed" || job.status === "cancelled"
                             ? "rounded bg-rose-500/15 px-2 py-0.5 text-rose-500"
                             : "rounded bg-amber-500/15 px-2 py-0.5 text-amber-500"
                       }
                     >
-                      {op.statut}
+                      {job.status}
                     </span>
                   </div>
                 </li>
