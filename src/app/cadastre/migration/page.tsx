@@ -9,7 +9,7 @@ import {
   type ChangeEvent,
 } from "react";
 import { toast } from "sonner";
-import { Download, Eye, History, Layers, Loader2, Play, Trash2, Upload } from "lucide-react";
+import { ArrowDown, Download, Eye, History, Layers, Loader2, Play, Trash2, Upload } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -710,6 +710,19 @@ export default function MigrationPage() {
                       : "Basculement…"
                     : `Basculer la sélection (${selectedForBascule.size})`}
                 </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="gap-2 text-muted-foreground"
+                  onClick={() =>
+                    document
+                      .getElementById("historique-migrations")
+                      ?.scrollIntoView({ behavior: "smooth", block: "start" })
+                  }
+                >
+                  <ArrowDown className="h-4 w-4" />
+                  Retour à l&apos;historique
+                </Button>
                 <select
                   className="ml-auto h-8 rounded-lg border border-border bg-transparent px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   value={filtreStatut}
@@ -871,7 +884,7 @@ export default function MigrationPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="historique-migrations">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <History className="h-4 w-4" />
