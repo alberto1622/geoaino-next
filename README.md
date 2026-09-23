@@ -173,12 +173,6 @@ Donner des propositions pour le traitement de ce genre de fichier
 - pour les fusions appliquer des intersections
 - ✅Ajouter l'action de fusion des parcelles comme la fusion de section implémenter
 
-email=admin@geoaino.local
-password=GDULNm7CBK0y
-password=
-
-CBK4-3D2S-E8TX-FJ1Q-9R0Y-N0KA-TM
-
 Voici les commandes actuelles pour tester et empaqueter le bureau autonome GeoAino (worktree bureau-autonome, y compris les correctifs référentiels tout juste appliqués).
 
 Prérequis (une fois par machine de build)
@@ -219,10 +213,6 @@ npx electron-builder --config desktop/electron-builder.yml
 
 Note : ce chantier référentiels n'a pas encore été fusionné dans v9.0.0 (revue finale en cours, un lot de correctifs vient d'être committé et est en re-revue). Une fois fusionné, je vous préviendrai — les commandes ci-dessus restent valables dans ce worktree dès maintenant si vous voulez tester avant fusion.
 
-BAMBA-MACHINE-1: Y3V4-AHC3-03Q3-1PPH-GWV2-T9G1-6G
-
-BAMBA-MACHINE-DGID:F2CF-HYGZ-HH91-6PKC-SYFS-J29H-KW
-
 C:\Program Files\GeoAino\resources\app
 
 ## Contexte de Basculement 2013 → 2026
@@ -236,3 +226,12 @@ Si le syscol ne corresponds pas à celui de 2013, donner la correspondance de 20
 Si la section ne corresponds pas à celui de 2026 alors effectuer une jointure spatiale pour tourner la correspondance
 
 afficher la region et le département correspondant
+
+---
+
+Pour la migration de masse, mettez l'historique en fonction des shapefile importés et de charger pas les données en base mais stocker comme le chargement des parcelles et en output remplacer seulement ajouter un champ "nicad_a_jour" correspondant aux nicad de basculement
+
+ajouter dans l'historique, des buttons:
+
+- pour consulter les migrations - avec possibilité d'exportation
+- pour supprimer la migration (avec suppression du fichier en dur)
