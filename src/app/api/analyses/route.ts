@@ -5,13 +5,17 @@ import { requireSession } from "@/lib/analyses/require-session";
 import { analyzeGeoJSON, generateAIReport } from "@/lib/geo-engine";
 import { saveGeoJsonLocally } from "@/lib/geo-storage";
 import { filterOutOfSenegal } from "@/lib/senegal-bounds";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 export async function GET(req: NextRequest) {
   const unauthorized = await requireSession();
   if (unauthorized) return unauthorized;
   const { searchParams } = new URL(req.url);
-  const limit = parseInt(searchParams.get("limit") ?? "20");
-  const offset = parseInt(searchParams.get("offset") ?? "0");
+  const limit = Number(searchParams.get("limit") ?? "20");
+  const offset = Number(searchParams.get("offset") ?? "0");
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isInteger(offset) || offset < 0) {
+    return NextResponse.json({ error: "Paramètres de pagination invalides (limit 1–100, offset ≥ 0)." }, { status: 400 });
+  }
 
   const [rows, total] = await Promise.all([
     // `select` explicite plutôt que `include` (qui embarque TOUTES les
@@ -157,10 +161,11 @@ export async function POST(req: NextRequest) {
       aiReport,
     });
   } catch (err) {
+    console.error("[analyses] POST", err);
     await prisma.analysis.update({
       where: { id: analysis.id },
       data: { status: "FAILED" },
     });
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: publicErrorMessage(err) }, { status: 500 });
   }
 }

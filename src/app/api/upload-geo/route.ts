@@ -6,6 +6,7 @@ import { ingestDxfToParcelles, parcellesToFeatureCollection } from "@/lib/parcel
 import { assignNicad2026FromCommunes } from "@/lib/cadastre/assign-nicad-2026";
 import { parseShapefileBuffers, type ParseResult } from "@/lib/import/geo-parse";
 import { guardUploadRequest, validateUploadedFiles } from "@/lib/upload-guard";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 /**
  * Plafond du nombre de features renvoyées à l'interface (et donc transmises à
@@ -233,7 +234,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   } catch (err) {
     console.error("[upload-geo]", err);
     return NextResponse.json(
-      { error: String(err) },
+      { error: publicErrorMessage(err) },
       { status: 500 }
     );
   }

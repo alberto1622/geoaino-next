@@ -11,6 +11,7 @@ import {
 } from "@/lib/cadastre/sections-data";
 import { getAdminMismatchesForSections, refreshAdminMismatches } from "@/lib/cadastre/admin-mismatch-data";
 import { recordHistory, type SectionsDeleteSnapshot } from "@/lib/cadastre/history";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 export const runtime = "nodejs";
 
@@ -136,6 +137,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ success: true, keptId: outcome.keptId, deleted: ids.length - 1 });
   } catch (err) {
     console.error("[cadastre/sections/merge] POST", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: publicErrorMessage(err) }, { status: 500 });
   }
 }

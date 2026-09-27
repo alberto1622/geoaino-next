@@ -6,10 +6,11 @@ services:
     container_name: geoaino_postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-geoaino123}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requis (.env) - base deja initialisee, reprendre son mot de passe actuel}
       POSTGRES_DB: ${POSTGRES_DB:-geoaino_supreme}
     ports:
-      - "5437:5432"
+      # Lié à la seule machine locale : ni Postgres ni pgAdmin ne sont exposés au réseau.
+      - "127.0.0.1:5437:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -27,12 +28,12 @@ services:
       PGADMIN_CONFIG_SERVER_MODE: "False"
       PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
     ports:
-      - "5051:80"
+      - "127.0.0.1:5051:80"
     volumes:
       - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
     entrypoint: >
       /bin/sh -c "
-      echo \"postgres:5432:*:${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-geoaino123}\" > /var/lib/pgadmin/pgpass &&
+      echo \"postgres:5432:*:${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}\" > /var/lib/pgadmin/pgpass &&
       chmod 600 /var/lib/pgadmin/pgpass &&
       /entrypoint.sh
       "
@@ -45,7 +46,7 @@ services:
   #     dockerfile: Dockerfile
   #   container_name: geoaino_app
   #   environment:
-  #     DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-geoaino123}@postgres:5432/${POSTGRES_DB:-geoaino_db}
+  #     DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-geoaino_db}
   #     NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
   #     NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3001}
   #     OPENAI_API_KEY: ${OPENAI_API_KEY}

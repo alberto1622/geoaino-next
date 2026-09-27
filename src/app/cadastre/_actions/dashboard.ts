@@ -1,5 +1,6 @@
 "use server";
 
+import { z } from "zod";
 import { requireUserId } from "./_auth";
 import {
   countNicads,
@@ -58,5 +59,6 @@ export async function getDashboardStats() {
 
 export async function getRecentOperationsList(input?: { limit?: number }) {
   await requireUserId();
-  return getRecentOperations(input?.limit ?? 20);
+  const limit = z.number().int().min(1).max(200).optional().parse(input?.limit);
+  return getRecentOperations(limit ?? 20);
 }

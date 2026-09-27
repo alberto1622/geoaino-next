@@ -1,6 +1,7 @@
 "use server";
 
 import { requireUserId } from "./_auth";
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 
 /** Dernières modifications sections/parcelles (delete pour l'instant, cf.
@@ -12,7 +13,7 @@ export async function listSectionsHistoryRecent(input: { limit: number }) {
   return prisma.cadHistoryEntry.findMany({
     where: { scope: "sections" },
     orderBy: { createdAt: "desc" },
-    take: input.limit,
+    take: z.number().int().min(1).max(200).parse(input.limit),
     select: { id: true, summary: true, action: true, restoredAt: true, createdAt: true },
   });
 }

@@ -1,5 +1,6 @@
 "use server";
 
+import { z } from "zod";
 import { requireUserId } from "./_auth";
 import {
   getParcelleByCoords,
@@ -9,6 +10,22 @@ import {
   getParcelleByNicad,
   getParcellesCountBySyscol,
 } from "@/lib/cadastre/data";
+
+const syscolSchema = z.string().trim().min(1).max(8);
+const versionSchema = z.enum(["2013", "2026"]).optional();
+
+const coordsSchema = z.object({
+  lat: z.number().finite().min(-90).max(90),
+  lng: z.number().finite().min(-180).max(180),
+  radiusKm: z.number().positive().max(5).optional(),
+});
+const bySyscolSchema = z.object({
+  syscol: syscolSchema,
+  limit: z.number().int().min(1).max(10_000).optional(),
+  version: versionSchema,
+});
+const allSectionsSchema = z.object({ limit: z.number().int().min(1).max(5_000).optional() }).optional();
+const nicadSchema = z.object({ nicad: z.string().trim().min(1).max(32) });
 
 function nicadDisplay(nicad: string | null | undefined) {
   return nicad
@@ -23,7 +40,8 @@ function nicadDisplay(nicad: string | null | undefined) {
 
 export async function parcelleByCoords(input: { lat: number; lng: number; radiusKm?: number }) {
   await requireUserId();
-  const parcelle = await getParcelleByCoords(input.lat, input.lng, input.radiusKm ?? 0.2);
+  const { lat, lng, radiusKm } = coordsSchema.parse(input);
+  const parcelle = await getParcelleByCoords(lat, lng, radiusKm ?? 0.2);
   if (!parcelle) return null;
   return { ...parcelle, nicadDisplay: nicadDisplay(parcelle.nicad) };
 }
@@ -34,22 +52,23 @@ export async function parcellesBySyscol(input: {
   version?: "2013" | "2026";
 }) {
   await requireUserId();
-  return getParcellesBySyscol(input.syscol, input.limit ?? 1000, input.version);
+  const { syscol, limit, version } = bySyscolSchema.parse(input);
+  return getParcellesBySyscol(syscol, limit ?? 1000, version);
 }
 
 export async function sectionsBySyscol(input: { syscol: string }) {
   await requireUserId();
-  return getSectionsWithGeom(input.syscol);
+  return getSectionsWithGeom(syscolSchema.parse(input.syscol));
 }
 
 export async function allSections(input?: { limit?: number }) {
   await requireUserId();
-  return getAllSectionsWithGeom(input?.limit ?? 500);
+  return getAllSectionsWithGeom(allSectionsSchema.parse(input)?.limit ?? 500);
 }
 
 export async function parcelleByNicad(input: { nicad: string }) {
   await requireUserId();
-  const p = await getParcelleByNicad(input.nicad);
+  const p = await getParcelleByNicad(nicadSchema.parse(input).nicad);
   if (!p) return null;
   return { ...p, nicadDisplay: nicadDisplay(p.nicad) };
 }

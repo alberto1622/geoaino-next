@@ -4,6 +4,7 @@ import { guardUploadRequest, validateUploadedFiles } from "@/lib/upload-guard";
 import { saveImportUpload } from "@/lib/import/storage";
 import { resolveSource, toDxfBuffer } from "@/lib/import/source";
 import { buildLayerInventory, readDxfToFeatureCollection } from "@/lib/import/inventory";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 // Lecture DXF (+ conversion DGN) = travail Node (fs, child_process, ogr2ogr).
 export const runtime = "nodejs";
@@ -53,6 +54,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     });
   } catch (err) {
     console.error("[import-jobs/inventory] POST", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: publicErrorMessage(err) }, { status: 500 });
   }
 }

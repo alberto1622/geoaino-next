@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireSession } from "@/lib/analyses/require-session";
 import { fillMissingNicadForAnalysis } from "@/lib/cadastre/nicad-fill-missing";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 export const runtime = "nodejs";
 
@@ -47,6 +48,6 @@ export async function POST(req: NextRequest, { params }: { params: Params }) {
     return NextResponse.json({ success: true, analysisId, dryRun: body.dryRun === true, result });
   } catch (err) {
     console.error("[analyses/nicad-fill] POST", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: publicErrorMessage(err) }, { status: 500 });
   }
 }

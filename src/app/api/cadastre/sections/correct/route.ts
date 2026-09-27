@@ -7,6 +7,7 @@ import {
 } from "@/lib/cadastre/overlap-correction";
 import { refreshOverlaps } from "@/lib/cadastre/sections-data";
 import { refreshAdminMismatches } from "@/lib/cadastre/admin-mismatch-data";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 export const runtime = "nodejs";
 
@@ -69,6 +70,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[cadastre/sections/correct] POST", err);
-    return NextResponse.json({ error: message }, { status: statusForOverlapError(message) });
+    return NextResponse.json({ error: publicErrorMessage(err) }, { status: statusForOverlapError(message) });
   }
 }

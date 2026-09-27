@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { listAdminMismatches } from "@/lib/cadastre/admin-mismatch-data";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 export const runtime = "nodejs";
 
@@ -24,6 +25,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ sourceFichier, mismatches });
   } catch (err) {
     console.error("[cadastre/sections/admin-mismatches] GET", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: publicErrorMessage(err) }, { status: 500 });
   }
 }

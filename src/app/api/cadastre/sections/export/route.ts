@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { buildSectionsShapefileZip } from "@/lib/cadastre/export-shapefile";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 export const runtime = "nodejs";
 
@@ -31,6 +32,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     });
   } catch (err) {
     console.error("[cadastre/sections/export] GET", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: publicErrorMessage(err) }, { status: 500 });
   }
 }

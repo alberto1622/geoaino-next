@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getAdminBoundaries, type AdminLevel } from "@/lib/cadastre/admin-boundaries";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 export const runtime = "nodejs";
 
@@ -42,6 +43,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     });
   } catch (err) {
     console.error("[cadastre/admin-boundaries] GET", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: publicErrorMessage(err) }, { status: 500 });
   }
 }

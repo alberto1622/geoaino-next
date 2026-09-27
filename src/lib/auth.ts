@@ -10,6 +10,9 @@ const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_LIMIT_PER_EMAIL = 5;
 const LOGIN_LIMIT_PER_IP = 20;
 
+/** Intervalle de relecture du rôle en base (cf. callback `jwt`). */
+const ROLE_REFRESH_MS = 5 * 60 * 1000;
+
 /** Erreur lue par la page de connexion (`result.code === "rate_limited"`). */
 class RateLimitedSignin extends CredentialsSignin {
   code = "rate_limited";
@@ -17,7 +20,9 @@ class RateLimitedSignin extends CredentialsSignin {
 
 const config: NextAuthConfig = {
   adapter: PrismaAdapter(prisma),
-  session: { strategy: "jwt" },
+  // 8 h (une journée de travail) au lieu des 30 jours par défaut ; le jeton est
+  // prolongé au plus toutes les 30 min tant que l'utilisateur est actif.
+  session: { strategy: "jwt", maxAge: 8 * 60 * 60, updateAge: 30 * 60 },
   pages: { signIn: "/login" },
   providers: [
     CredentialsProvider({
@@ -59,6 +64,27 @@ const config: NextAuthConfig = {
       if (user) {
         token.id = user.id;
         token.role = (user as { role?: string }).role;
+        token.roleCheckedAt = Date.now();
+        return token;
+      }
+      // Le rôle était figé dans le JWT jusqu'à la reconnexion : on le relit
+      // périodiquement pour qu'une rétrogradation ou une suppression de compte
+      // prenne effet sans attendre l'expiration de la session.
+      const checkedAt = typeof token.roleCheckedAt === "number" ? token.roleCheckedAt : 0;
+      if (token.id && Date.now() - checkedAt > ROLE_REFRESH_MS) {
+        try {
+          const current = await prisma.user.findUnique({
+            where: { id: token.id as string },
+            select: { role: true },
+          });
+          if (!current) return null; // compte supprimé : session invalidée
+          token.role = current.role;
+          token.roleCheckedAt = Date.now();
+        } catch (err) {
+          // Base momentanément indisponible : on garde le jeton, nouvel essai à
+          // la requête suivante (roleCheckedAt inchangé).
+          console.error("[auth] relecture du rôle impossible", err);
+        }
       }
       return token;
     },

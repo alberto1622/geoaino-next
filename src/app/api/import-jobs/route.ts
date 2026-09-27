@@ -10,6 +10,7 @@ import { createImportJob, listImportJobs, type SourceType, type JobKind } from "
 import { runImportJob } from "@/lib/import/run-job";
 import { CADASTRAL_CLASSES, type LayerMapping } from "@/lib/cadastral-filter";
 import { targetFieldsFor, type ShapefileTarget } from "@/lib/import/field-mapping";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 // Lecture DXF + polygonisation = travail lourd exécuté APRÈS la réponse via
 // `after()` : on force le runtime Node (fs, child_process, ogr2ogr) et on relève
@@ -215,7 +216,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return startJob(source, userId, undefined, fileKey);
   } catch (err) {
     console.error("[import-jobs] POST", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: publicErrorMessage(err) }, { status: 500 });
   }
 }
 

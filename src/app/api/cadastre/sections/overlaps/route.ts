@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { listSections, listOverlaps } from "@/lib/cadastre/sections-data";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 export const runtime = "nodejs";
 
@@ -27,6 +28,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ sourceFichier, sections, overlaps });
   } catch (err) {
     console.error("[cadastre/sections/overlaps] GET", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: publicErrorMessage(err) }, { status: 500 });
   }
 }

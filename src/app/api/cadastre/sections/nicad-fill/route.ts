@@ -5,6 +5,7 @@ import { getSection } from "@/lib/cadastre/sections-data";
 import { fillMissingNicadForSection } from "@/lib/cadastre/nicad-fill-missing";
 import { recordHistory } from "@/lib/cadastre/history";
 import { writeGeoJsonByKey } from "@/lib/geo-storage";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 export const runtime = "nodejs";
 
@@ -95,6 +96,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ success: true, sectionId, dryRun: false, result });
   } catch (err) {
     console.error("[cadastre/sections/nicad-fill] POST", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: publicErrorMessage(err) }, { status: 500 });
   }
 }

@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getRevertHandler, recordHistory, type HistoryScope } from "@/lib/cadastre/history";
 import { writeGeoJsonByKey } from "@/lib/geo-storage";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 export const runtime = "nodejs";
 
@@ -78,6 +79,6 @@ export async function POST(req: NextRequest, { params }: { params: Params }): Pr
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("[cadastre/history/restore] POST", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: publicErrorMessage(err) }, { status: 500 });
   }
 }

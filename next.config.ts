@@ -12,7 +12,48 @@ if (desktopBuild) {
   process.env.IMPORT_UPLOADS_DIR ??= path.join(process.cwd(), "uploads", "imports");
 }
 
+const isDev = process.env.NODE_ENV !== "production";
+
+// CSP sans nonce (guide Next « Without Nonces ») : garde le rendu statique.
+// 'unsafe-inline' reste requis pour le script de thème de layout.tsx et les
+// scripts inline de Next. Origines externes réellement utilisées :
+// tuiles OSM (src/lib/tiles-url.ts), icônes Leaflet sur cdnjs, et serveur de
+// tuiles local du mode bureau (http://127.0.0.1:<port>). MapLibre crée ses
+// workers depuis des URL blob:. Pas de `upgrade-insecure-requests` : il
+// casserait les tuiles locales HTTP du mode bureau.
+const csp = [
+  "default-src 'self'",
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' blob: data: https://tile.openstreetmap.org https://cdnjs.cloudflare.com http://127.0.0.1:*",
+  "font-src 'self' data:",
+  "connect-src 'self' https://tile.openstreetmap.org http://127.0.0.1:*",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+const securityHeaders = [
+  { key: "Content-Security-Policy", value: csp },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), browsing-topics=()" },
+  // HSTS : ignoré par les navigateurs sur une réponse HTTP, n'a d'effet que
+  // derrière HTTPS. Exclu du bureau (servi en HTTP local) et du dev. Sans
+  // `includeSubDomains`/`preload` : engagements à prendre sur le domaine réel.
+  ...(!isDev && !desktopBuild
+    ? [{ key: "Strict-Transport-Security", value: "max-age=63072000" }]
+    : []),
+];
+
 const nextConfig: NextConfig = {
+  poweredByHeader: false,
+  async headers() {
+    return [{ source: "/:path*", headers: securityHeaders }];
+  },
   // `output: "standalone"` ne doit s'appliquer QU'au build desktop
   // (`npm run build:standalone`, invoque par `dist:desktop`) : le Dockerfile
   // de l'app web lance un `next build` normal puis `next start` (jamais le

@@ -390,7 +390,10 @@ export async function getNicad(input: { nicad: string }) {
 
 export async function rechercherNicad(input: { query: string; limit?: number }) {
   await requireUserId();
-  return searchNicads(input.query, input.limit ?? 20);
+  const { query, limit } = z
+    .object({ query: z.string().max(100), limit: z.number().int().min(1).max(200).optional() })
+    .parse(input);
+  return searchNicads(query, limit ?? 20);
 }
 
 export async function historiqueNicad(input: { nicad: string }) {
@@ -400,7 +403,8 @@ export async function historiqueNicad(input: { nicad: string }) {
 
 export async function historiqueRecent(input?: { limit?: number }) {
   await requireUserId();
-  return getRecentHistorique(input?.limit ?? 20);
+  const limit = z.number().int().min(1).max(200).optional().parse(input?.limit);
+  return getRecentHistorique(limit ?? 20);
 }
 
 export async function nicadsRecents(input?: { limit?: number }) {

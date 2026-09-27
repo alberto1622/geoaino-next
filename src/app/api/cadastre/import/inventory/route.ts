@@ -5,6 +5,7 @@ import { guardUploadRequest, validateUploadedFiles } from "@/lib/upload-guard";
 import { saveImportUpload } from "@/lib/import/storage";
 import { buildShapefileFieldInventory } from "@/lib/import/shapefile-inventory";
 import type { ShapefileTarget } from "@/lib/import/field-mapping";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -60,6 +61,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ fileKey, fileName: shpFile.name, target, ...inventory });
   } catch (err) {
     console.error("[cadastre/import/inventory] POST", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: publicErrorMessage(err) }, { status: 500 });
   }
 }

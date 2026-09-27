@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { listSectionsGeo } from "@/lib/cadastre/sections-data";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 export const runtime = "nodejs";
 
@@ -41,6 +42,6 @@ export async function GET(): Promise<NextResponse> {
     return NextResponse.json({ boundaries, labels });
   } catch (err) {
     console.error("[cadastre/sections/geojson] GET", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: publicErrorMessage(err) }, { status: 500 });
   }
 }

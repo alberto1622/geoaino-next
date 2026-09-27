@@ -52,8 +52,9 @@ export async function GET(_req: NextRequest, { params }: { params: Params }) {
     if (!res.ok) throw new Error(`GADM HTTP ${res.status}`);
     data = await res.text();
   } catch (err) {
+    console.error(`[admin-boundaries] GADM niveau ${level}`, err);
     return NextResponse.json(
-      { error: `Impossible de télécharger GADM niveau ${level}: ${String(err)}` },
+      { error: `Impossible de télécharger GADM niveau ${level}.` },
       { status: 502 }
     );
   }

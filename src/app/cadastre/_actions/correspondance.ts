@@ -14,6 +14,18 @@ import {
   getChangementMaps,
 } from "@/lib/cadastre/data";
 
+const listSchema = z
+  .object({
+    region: z.string().max(100).optional(),
+    departement: z.string().max(100).optional(),
+    statut: z.enum(["confirme", "provisoire", "sans_correspondance"]).optional(),
+    typeChangement: z.string().max(100).optional(),
+    search: z.string().max(200).optional(),
+    limit: z.number().int().min(1).max(1_000).optional(),
+    offset: z.number().int().min(0).optional(),
+  })
+  .optional();
+
 export async function listCorrespondances(input?: {
   region?: string;
   departement?: string;
@@ -24,14 +36,15 @@ export async function listCorrespondances(input?: {
   offset?: number;
 }) {
   await requireUserId();
+  const data = listSchema.parse(input);
   return getCorrespondances({
-    region: input?.region,
-    departement: input?.departement,
-    statut: input?.statut,
-    typeChangement: input?.typeChangement,
-    search: input?.search,
-    limit: input?.limit ?? 100,
-    offset: input?.offset ?? 0,
+    region: data?.region,
+    departement: data?.departement,
+    statut: data?.statut,
+    typeChangement: data?.typeChangement,
+    search: data?.search,
+    limit: data?.limit ?? 100,
+    offset: data?.offset ?? 0,
   });
 }
 

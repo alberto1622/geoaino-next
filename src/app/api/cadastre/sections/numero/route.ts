@@ -9,6 +9,7 @@ import {
 import { normalizeSection } from "@/lib/nicad";
 import { syncNicadForSectionChange, type NicadSyncResult } from "@/lib/cadastre/nicad-section-sync";
 import { recordHistory, type SectionsNumeroSnapshot } from "@/lib/cadastre/history";
+import { publicErrorMessage } from "@/lib/api-errors";
 
 export const runtime = "nodejs";
 
@@ -126,6 +127,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ success: true, sectionId, numSection, nicadSync, nicadSyncError });
   } catch (err) {
     console.error("[cadastre/sections/numero] POST", err);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: publicErrorMessage(err) }, { status: 500 });
   }
 }
