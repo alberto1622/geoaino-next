@@ -98,8 +98,21 @@ export default function CorrespondancesPage() {
     setRows(list);
   }
 
+  // Rechargement automatique sur changement de filtre ; `search` est appliqué
+  // au clic (bouton), d'où son absence volontaire des dépendances.
   useEffect(() => {
-    reload();
+    let cancelled = false;
+    listCorrespondances({
+      statut: statut || undefined,
+      typeChangement: typeChangement || undefined,
+      search: search || undefined,
+      limit: 500,
+    }).then((list) => {
+      if (!cancelled) setRows(list as Correspondance[]);
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statut, typeChangement]);
 

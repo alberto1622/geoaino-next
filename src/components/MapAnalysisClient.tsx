@@ -1621,26 +1621,31 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   // La table attributaire est éditable dès qu'elle contient des parcelles.
   const tableDeletable = tableRows.length > 0;
 
-  // Populate table when an error is selected
-  useEffect(() => {
-    if (!selectedError) return;
+  // Populate table when an error is selected. Ajustement d'état pendant le
+  // rendu (motif React « adjusting state when a prop changes ») plutôt qu'un
+  // effet : mêmes déclencheurs (erreur sélectionnée, index NICAD), sans rendu
+  // en cascade.
+  const [tableSource, setTableSource] = useState({ error: selectedError, props: nicadToProps });
+  if (tableSource.error !== selectedError || tableSource.props !== nicadToProps) {
+    setTableSource({ error: selectedError, props: nicadToProps });
     // Les doublons sont gérés à part (groupe complet via fetchNicadGroup) : ne pas
     // écraser la table avec la seule Parcelle 1/2 de l'erreur.
-    if (selectedError.errorType?.toUpperCase() === "DUPLICATE") return;
-    const rows: Record<string, unknown>[] = [];
-    if (selectedError.nicad1) {
-      const p = nicadToProps.get(selectedError.nicad1);
-      if (p) rows.push({ _role: "Parcelle 1", ...p });
+    if (selectedError && selectedError.errorType?.toUpperCase() !== "DUPLICATE") {
+      const rows: Record<string, unknown>[] = [];
+      if (selectedError.nicad1) {
+        const p = nicadToProps.get(selectedError.nicad1);
+        if (p) rows.push({ _role: "Parcelle 1", ...p });
+      }
+      if (selectedError.nicad2) {
+        const p = nicadToProps.get(selectedError.nicad2);
+        if (p) rows.push({ _role: "Parcelle 2", ...p });
+      }
+      if (rows.length > 0) {
+        setTableRows(rows);
+        setTableOpen(true);
+      }
     }
-    if (selectedError.nicad2) {
-      const p = nicadToProps.get(selectedError.nicad2);
-      if (p) rows.push({ _role: "Parcelle 2", ...p });
-    }
-    if (rows.length > 0) {
-      setTableRows(rows);
-      setTableOpen(true);
-    }
-  }, [selectedError, nicadToProps]);
+  }
 
   const handleSearchNicad = useCallback(() => {
     const query = nicadSearch.trim();

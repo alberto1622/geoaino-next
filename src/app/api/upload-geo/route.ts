@@ -6,6 +6,7 @@ import { ingestDxfToParcelles, parcellesToFeatureCollection } from "@/lib/parcel
 import { assignNicad2026FromCommunes } from "@/lib/cadastre/assign-nicad-2026";
 import { parseShapefileBuffers, type ParseResult } from "@/lib/import/geo-parse";
 import { guardUploadRequest, validateUploadedFiles } from "@/lib/upload-guard";
+import { assertZipEntryCount, createZipReader } from "@/lib/import/safe-zip";
 import { publicErrorMessage } from "@/lib/api-errors";
 
 /**
@@ -91,6 +92,8 @@ async function parseDgnFile(buf: Buffer): Promise<ParseResult> {
 
 async function parseZip(buffer: Buffer): Promise<ParseResult> {
   const zip = await JSZip.loadAsync(buffer);
+  assertZipEntryCount(zip);
+  const reader = createZipReader(); // budget de décompression partagé par l'archive
   const files = Object.keys(zip.files).filter((f) => !zip.files[f].dir);
 
   // Tout DXF présent dans le ZIP doit passer par le processus de construction
@@ -98,14 +101,14 @@ async function parseZip(buffer: Buffer): Promise<ParseResult> {
   // format : on le route donc vers le pipeline d'ingestion `parcelle-ingestion`.
   const dxfInZip = files.find((f) => f.toLowerCase().endsWith(".dxf"));
   if (dxfInZip) {
-    const buf = Buffer.from(await zip.files[dxfInZip].async("arraybuffer"));
+    const buf = await reader.buffer(zip.files[dxfInZip]);
     return parseDxfAsParcelles(buf);
   }
 
   // Un DGN compressé est routé vers le même pipeline (conversion DGN→DXF puis NICAD).
   const dgnInZip = files.find((f) => f.toLowerCase().endsWith(".dgn"));
   if (dgnInZip) {
-    const buf = Buffer.from(await zip.files[dgnInZip].async("arraybuffer"));
+    const buf = await reader.buffer(zip.files[dgnInZip]);
     return parseDgnFile(buf);
   }
 
@@ -113,7 +116,7 @@ async function parseZip(buffer: Buffer): Promise<ParseResult> {
     (f) => f.toLowerCase().endsWith(".geojson") || f.toLowerCase().endsWith(".json")
   );
   if (geojsonFile) {
-    const content = await zip.files[geojsonFile].async("string");
+    const content = await reader.text(zip.files[geojsonFile]);
     const parsed = JSON.parse(content);
     return {
       geoJson: content,
@@ -136,12 +139,12 @@ async function parseZip(buffer: Buffer): Promise<ParseResult> {
     const dbfFile = files.find((f) => f.toLowerCase() === (base + ".dbf").toLowerCase());
     const prjFile = files.find((f) => f.toLowerCase() === (base + ".prj").toLowerCase());
 
-    const shpBuf = Buffer.from(await zip.files[shpFile].async("arraybuffer"));
+    const shpBuf = await reader.buffer(zip.files[shpFile]);
     const dbfBuf = dbfFile
-      ? Buffer.from(await zip.files[dbfFile].async("arraybuffer"))
+      ? await reader.buffer(zip.files[dbfFile])
       : undefined;
     const prjBuf = prjFile
-      ? Buffer.from(await zip.files[prjFile].async("arraybuffer"))
+      ? await reader.buffer(zip.files[prjFile])
       : undefined;
 
     const result = await parseShapefileBuffers(shpBuf, dbfBuf, prjBuf);

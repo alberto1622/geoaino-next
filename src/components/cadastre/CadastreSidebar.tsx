@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -31,6 +31,29 @@ import {
 import { cn } from "@/lib/utils";
 
 const COLLAPSE_STORAGE_KEY = "geoaino-cadastre-sidebar-collapsed";
+
+// Préférence « repliée » lue via useSyncExternalStore : « dépliée » au rendu
+// serveur/hydratation, puis valeur réelle — même principe que ThemeProvider.
+const collapseListeners = new Set<() => void>();
+
+function subscribeCollapsed(listener: () => void) {
+  collapseListeners.add(listener);
+  return () => {
+    collapseListeners.delete(listener);
+  };
+}
+
+function getCollapsedSnapshot(): boolean {
+  try {
+    return window.localStorage.getItem(COLLAPSE_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function getCollapsedServerSnapshot(): boolean {
+  return false;
+}
 
 export const CADASTRE_NAV = [
   {
@@ -80,20 +103,19 @@ export const CADASTRE_NAV = [
 
 export function CadastreSidebar() {
   const pathname = usePathname();
-  // Fixed "expanded" on SSR — server and client first render match, no
-  // hydration mismatch; the real preference is synced after mount (same
-  // pattern as ThemeProvider).
-  const [collapsed, setCollapsed] = useState(false);
-
-  useEffect(() => {
-    const stored = window.localStorage.getItem(COLLAPSE_STORAGE_KEY);
-    if (stored === "1") setCollapsed(true);
-  }, []);
+  const collapsed = useSyncExternalStore(
+    subscribeCollapsed,
+    getCollapsedSnapshot,
+    getCollapsedServerSnapshot,
+  );
 
   const toggle = () => {
-    const next = !collapsed;
-    setCollapsed(next);
-    window.localStorage.setItem(COLLAPSE_STORAGE_KEY, next ? "1" : "0");
+    try {
+      window.localStorage.setItem(COLLAPSE_STORAGE_KEY, collapsed ? "0" : "1");
+    } catch {
+      return; // stockage indisponible : préférence non modifiable
+    }
+    collapseListeners.forEach((l) => l());
   };
 
   return (

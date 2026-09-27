@@ -31,28 +31,45 @@ export default function GenerationPage() {
   const [result, setResult] = useState<GenResult | null>(null);
   const [pending, startTransition] = useTransition();
 
-  // Charger les communes selon la version
-  useEffect(() => {
+  // Changer de version ou de commune remet à zéro les sélections dépendantes :
+  // fait dans les gestionnaires d'événement plutôt que dans les effets (évite
+  // un rendu en cascade, règle react-hooks/set-state-in-effect).
+  function changeVersion(v: Version) {
+    setVersion(v);
     setSyscol("");
     setSection("");
     setSections([]);
+  }
+
+  function changeSyscol(value: string) {
+    setSyscol(value);
+    setSection("");
+    setSections([]);
+  }
+
+  // Charger les communes selon la version
+  useEffect(() => {
+    let cancelled = false;
     (async () => {
       const list = version === "2013" ? await listCommunes2013() : await listCommunes2026();
-      setCommunes(list as Commune[]);
+      if (!cancelled) setCommunes(list as Commune[]);
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [version]);
 
   // Charger les sections de la commune sélectionnée
   useEffect(() => {
-    setSection("");
-    if (!syscol) {
-      setSections([]);
-      return;
-    }
+    if (!syscol) return;
+    let cancelled = false;
     (async () => {
       const list = await listSectionsByCommune({ syscol, version });
-      setSections(list as Section[]);
+      if (!cancelled) setSections(list as Section[]);
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [syscol, version]);
 
   function handleGenerate() {
@@ -107,7 +124,7 @@ export default function GenerationPage() {
                   type="button"
                   variant={version === v ? "default" : "outline"}
                   size="sm"
-                  onClick={() => setVersion(v)}
+                  onClick={() => changeVersion(v)}
                 >
                   Syscol {v}
                 </Button>
@@ -120,7 +137,7 @@ export default function GenerationPage() {
               <label className="mb-1.5 block text-xs font-medium text-muted-foreground">
                 Commune ({communes.length})
               </label>
-              <select className={selectCls} value={syscol} onChange={(e) => setSyscol(e.target.value)}>
+              <select className={selectCls} value={syscol} onChange={(e) => changeSyscol(e.target.value)}>
                 <option value="">— Sélectionner —</option>
                 {communes.map((c) => (
                   <option key={c.id} value={c.syscolPadded}>

@@ -1,4 +1,3 @@
-"use server";
 import * as shapefile from "shapefile";
 import JSZip from "jszip";
 import { parseStringPromise } from "xml2js";

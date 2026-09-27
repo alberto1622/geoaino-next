@@ -5982,5 +5982,39 @@ signalée.
 
 ---
 
+## 70. Archives ZIP de plans CAO : extraction bornée (protection « bombe ZIP »)
+
+**Problème métier** : un DXF/DGN peut être déposé compressé dans un ZIP
+(`/api/upload-geo`, import en lot `/api/import-jobs`). Une archive de
+quelques centaines de Ko peut se décompresser en dizaines de Go : le
+serveur (ou le poste du mode bureau) sature sa mémoire et tombe, pour tous
+les utilisateurs.
+
+**Cause technique** : les fichiers internes étaient lus d'un bloc
+(`zip.files[nom].async("arraybuffer")`) sans aucune limite, et le contrôle
+de taille de l'envoi (500 Mo, `upload-guard.ts`) ne porte que sur l'archive
+**compressée**. Les tailles décompressées annoncées dans l'en-tête ZIP ne
+sont pas fiables : elles peuvent être falsifiées.
+
+**Solution** (`fichier · fonction`) : `lib/import/safe-zip.ts ·
+createZipReader` lit chaque entrée en flux (`nodeStream`) et compte les
+octets **réellement produits** ; au-delà du budget de l'archive
+(`MAX_UNZIPPED_MB`, 1 500 Mo par défaut, partagé par toutes les entrées
+lues d'une même archive) la lecture est interrompue avec une
+`ZipTooLargeError` au message explicite. `assertZipEntryCount` refuse
+d'emblée plus de 10 000 entrées. Branché dans `upload-geo/route.ts ·
+parseZip` et `lib/import/source.ts · resolveSource`.
+
+**Pourquoi (pièges inclus)** : le budget de 1 500 Mo laisse une large
+marge au-dessus des plans réels (~300 Mo décompressés pour les plus gros
+DXF cadastraux). Testé : archive de 199 Ko se décompressant en 200 Mo,
+refusée en ~95 ms avec un plafond de 20 Mo, sans tout charger en mémoire ;
+une entrée normale reste lue à l'identique. Les ZIP que le serveur
+fabrique lui-même (paire .shp/.dbf persistée par `saveImportUpload`, relue
+par `run-shapefile-job.ts`) ne sont pas concernés : leur contenu est déjà
+borné par la taille de l'envoi.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

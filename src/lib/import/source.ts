@@ -9,6 +9,7 @@ import JSZip from "jszip";
 import { convertDgnToDxf } from "../dgn-to-dxf";
 import { convertDgnV7ToDxf } from "../dgn-parser";
 import type { SourceType } from "./jobs";
+import { assertZipEntryCount, createZipReader } from "./safe-zip";
 
 export function sourceTypeFromName(name: string): SourceType | null {
   const n = name.toLowerCase();
@@ -31,12 +32,13 @@ export async function resolveSource(file: File): Promise<ResolvedSource | null> 
 
   if (file.name.toLowerCase().endsWith(".zip")) {
     const zip = await JSZip.loadAsync(buf);
+    assertZipEntryCount(zip);
     const names = Object.keys(zip.files).filter((f) => !zip.files[f].dir);
     const inner =
       names.find((f) => f.toLowerCase().endsWith(".dxf")) ??
       names.find((f) => f.toLowerCase().endsWith(".dgn"));
     if (inner) {
-      const innerBuf = Buffer.from(await zip.files[inner].async("arraybuffer"));
+      const innerBuf = await createZipReader().buffer(zip.files[inner]);
       return { buffer: innerBuf, fileName: inner, sourceType: sourceTypeFromName(inner)! };
     }
   }

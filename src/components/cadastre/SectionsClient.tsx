@@ -1973,7 +1973,7 @@ export default function SectionsClient() {
     });
   }, [selectedSources, batches, performDeleteBatch]);
 
-  const pending = overlaps.filter((o) => o.status === "PENDING");
+  const pending = useMemo(() => overlaps.filter((o) => o.status === "PENDING"), [overlaps]);
   const pendingMismatches = shownAdminMismatches.filter(
     (m) => m.status === "PENDING",
   );

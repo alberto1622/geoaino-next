@@ -16,6 +16,8 @@ export const metadata: Metadata = {
     template: "%s — GéoAino",
   },
   description: "Détection des erreurs topologiques, correction et rapports d'analyse des données cadastrales du Sénégal.",
+  // Outil interne : ne pas indexer (cf. src/app/robots.ts).
+  robots: { index: false, follow: false },
   openGraph: {
     title: "GéoAino — Fiabilisation des données cadastrales",
     description:

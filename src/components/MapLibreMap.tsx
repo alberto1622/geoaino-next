@@ -228,7 +228,6 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
   const [mapReady, setMapReady] = useState(false);
   const [popup, setPopup] = useState<PopupState | null>(null);
   const [blinkOpacity, setBlinkOpacity] = useState(0);
-  const [blinkColor, setBlinkColor] = useState("#ffffff");
   const [cursor, setCursor] = useState("grab");
   // Limites de sections (chargées une fois, à la première activation).
   const [sectionsData, setSectionsData] = useState<SectionsData | null>(null);
@@ -410,22 +409,31 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
   );
 
   // ── Blink animation ───────────────────────────────────────────────────────
+  // Erreur à faire clignoter et sa couleur : valeurs dérivées (pas d'état) ;
+  // l'effet ne pilote que le minuteur d'opacité.
+  const blinkError = useMemo(
+    () => (selectedErrorId && blinkNicad ? errors.find((e) => e.id === selectedErrorId) ?? null : null),
+    [selectedErrorId, blinkNicad, errors],
+  );
+  const blinkColor = blinkError ? errorTypeColor(blinkError.errorType) : "#ffffff";
+  const shownBlinkOpacity = blinkError ? blinkOpacity : 0;
+
   useEffect(() => {
     if (blinkTimerRef.current) { clearInterval(blinkTimerRef.current); blinkTimerRef.current = null; }
-    if (!selectedErrorId || !blinkNicad) { setBlinkOpacity(0); return; }
-    const err = errors.find((e) => e.id === selectedErrorId);
-    if (!err) { setBlinkOpacity(0); return; }
-    setBlinkColor(errorTypeColor(err.errorType));
+    if (!blinkError) return;
     // Clignotement renforcé pour les doublons : plus rapide et plus contrasté.
     const period = blinkIntense ? 200 : 420;
     const hi = blinkIntense ? 0.95 : 0.65;
     const lo = blinkIntense ? 0.25 : 0.05;
     let bright = true;
     const tick = () => { bright = !bright; setBlinkOpacity(bright ? hi : lo); };
-    tick();
+    const first = setTimeout(tick, 0);
     blinkTimerRef.current = setInterval(tick, period);
-    return () => { if (blinkTimerRef.current) clearInterval(blinkTimerRef.current); };
-  }, [selectedErrorId, blinkNicad, errors, blinkIntense]);
+    return () => {
+      clearTimeout(first);
+      if (blinkTimerRef.current) clearInterval(blinkTimerRef.current);
+    };
+  }, [blinkError, blinkIntense]);
 
   // ── Fit bounds initial (emprise globale via map-meta) ─────────────────────
   useEffect(() => {
@@ -597,7 +605,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
           source-layer="parcelles"
           type="fill"
           filter={blinkFilter}
-          paint={{ "fill-color": blinkColor, "fill-opacity": blinkOpacity }}
+          paint={{ "fill-color": blinkColor, "fill-opacity": shownBlinkOpacity }}
         />
         <Layer
           id="blink-line"
@@ -605,7 +613,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
           source-layer="parcelles"
           type="line"
           filter={blinkFilter}
-          paint={{ "line-color": blinkColor, "line-width": blinkIntense ? 6 : 3, "line-opacity": blinkOpacity }}
+          paint={{ "line-color": blinkColor, "line-width": blinkIntense ? 6 : 3, "line-opacity": shownBlinkOpacity }}
         />
 
         {/* ── Anchor: error type layers insert before this, selection highlight inserts after ── */}

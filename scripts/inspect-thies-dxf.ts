@@ -15,7 +15,7 @@ async function main() {
   const stream = fs.createReadStream(file, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
-  let prevCode: string | null = null;
+  const prevCode: string | null = null;
   let lineNo = 0;
 
   // Suivi de section
@@ -29,7 +29,7 @@ async function main() {
   const blockNames = new Set<string>();
 
   let curEntityType: string | null = null;
-  let expectLayerValue = false;
+  const expectLayerValue = false;
 
   // On lit paire par paire : ligne paire = code, ligne impaire = valeur
   let code: string | null = null;

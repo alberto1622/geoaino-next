@@ -21,9 +21,9 @@ const MISSING_NICAD_VALUES = new Set([
   "", "null", "undefined", "na", "n/a", "néant", "neant", "aucun", "sans nicad", "0", "-",
 ]);
 const isMissingNicad = (nicad: string): boolean => MISSING_NICAD_VALUES.has(nicad.trim().toLowerCase());
-const isPolygonal = (f: any): boolean => f?.geometry?.type === "Polygon" || f?.geometry?.type === "MultiPolygon";
+const isPolygonal = (f: GeoJSON.Feature | null | undefined): boolean => f?.geometry?.type === "Polygon" || f?.geometry?.type === "MultiPolygon";
 
-function representativePoint(feature: any): [number, number] | null {
+function representativePoint(feature: GeoJSON.Feature): [number, number] | null {
   try {
     return turf.pointOnFeature(feature).geometry.coordinates as [number, number];
   } catch {
@@ -35,7 +35,7 @@ function representativePoint(feature: any): [number, number] | null {
   }
 }
 
-type GeoFC = { type: "FeatureCollection"; features: any[] };
+type GeoFC = { type: "FeatureCollection"; features: GeoJSON.Feature[] };
 const geoCache = new Map<number, GeoFC | null>();
 
 async function loadAnalysisGeoJson(analysis: { id: number; correctedData: string | null; geojsonKey: string | null; geoJsonData: string | null }): Promise<GeoFC | null> {
@@ -64,7 +64,7 @@ interface SectionReport {
   nonPolygonalOrUntestable: number;
 }
 
-async function analyzeSection(numSection: string, geomGeoJson: any, sourceFichier: string): Promise<SectionReport> {
+async function analyzeSection(numSection: string, geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon, sourceFichier: string): Promise<SectionReport> {
   const report: SectionReport = {
     numSection,
     sourceFichier,
@@ -95,7 +95,7 @@ async function analyzeSection(numSection: string, geomGeoJson: any, sourceFichie
       if (!point) continue;
       let inside = false;
       try {
-        inside = turf.booleanPointInPolygon(turf.point(point), sectionPoly as any);
+        inside = turf.booleanPointInPolygon(turf.point(point), sectionPoly);
       } catch {
         continue;
       }
@@ -121,12 +121,12 @@ async function main() {
   const target = process.argv[2];
 
   const sections = target
-    ? await prisma.$queryRaw<Array<{ numSection: string; sourceFichier: string; geomGeoJson: any }>>`
+    ? await prisma.$queryRaw<Array<{ numSection: string; sourceFichier: string; geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon }>>`
         SELECT "numSection", "sourceFichier", "geomGeoJson"
         FROM "limite_section"
         WHERE "numSection" = ${target}
       `
-    : await prisma.$queryRaw<Array<{ numSection: string; sourceFichier: string; geomGeoJson: any }>>`
+    : await prisma.$queryRaw<Array<{ numSection: string; sourceFichier: string; geomGeoJson: GeoJSON.Polygon | GeoJSON.MultiPolygon }>>`
         SELECT "numSection", "sourceFichier", "geomGeoJson"
         FROM "limite_section"
         WHERE "numSection" IS NOT NULL AND "numSection" <> ''
