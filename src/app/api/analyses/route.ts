@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
+import { requireSession } from "@/lib/analyses/require-session";
 import { analyzeGeoJSON, generateAIReport } from "@/lib/geo-engine";
 import { saveGeoJsonLocally } from "@/lib/geo-storage";
 import { filterOutOfSenegal } from "@/lib/senegal-bounds";
 
 export async function GET(req: NextRequest) {
+  const unauthorized = await requireSession();
+  if (unauthorized) return unauthorized;
   const { searchParams } = new URL(req.url);
   const limit = parseInt(searchParams.get("limit") ?? "20");
   const offset = parseInt(searchParams.get("offset") ?? "0");
@@ -56,7 +59,10 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const session = await auth();
-  const userId = session?.user?.id ?? undefined;
+  const userId = session?.user?.id;
+  if (!userId) {
+    return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
+  }
 
   const body = await req.json();
   const { fileName, fileFormat, fileSize, geoJsonData, adminBoundaryData, commune, region, microstationReport } = body;

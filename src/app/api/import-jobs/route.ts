@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
 import JSZip from "jszip";
 import { auth } from "@/lib/auth";
-import { saveImportUpload } from "@/lib/import/storage";
+import { requireSession } from "@/lib/analyses/require-session";
+import { saveImportUpload, resolveImportKey } from "@/lib/import/storage";
+import { guardUploadRequest, validateUploadedFiles } from "@/lib/upload-guard";
 import { resolveSource, type ResolvedSource } from "@/lib/import/source";
 import { createImportJob, listImportJobs, type SourceType, type JobKind } from "@/lib/import/jobs";
 import { runImportJob } from "@/lib/import/run-job";
@@ -96,6 +98,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     const session = await auth();
     const userId = session?.user?.id ?? null;
+    if (!userId) {
+      return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
+    }
 
     const contentType = req.headers.get("content-type") ?? "";
 
@@ -110,6 +115,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       };
       if (!body.fileKey || !body.fileName) {
         return NextResponse.json({ error: "Requête invalide : fileKey et fileName requis." }, { status: 400 });
+      }
+      // La clé revient du client : elle doit désigner un fichier du dossier d'import.
+      if (!resolveImportKey(body.fileKey)) {
+        return NextResponse.json({ error: "Requête invalide : fileKey inconnu." }, { status: 400 });
       }
 
       if (body.sourceType === "SHP") {
@@ -156,11 +165,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
 
     // Voie multipart : upload direct (sans mappage).
+    const guard = await guardUploadRequest(req);
+    if ("response" in guard) return guard.response;
+
     const formData = await req.formData();
     const files = formData.getAll("files") as File[];
     if (!files.length) {
       return NextResponse.json({ error: "Aucun fichier fourni" }, { status: 400 });
     }
+    const invalid = validateUploadedFiles(files);
+    if (invalid) return invalid;
 
     const shpFile = files.find((f) => f.name.toLowerCase().endsWith(".shp"));
     if (shpFile) {
@@ -207,6 +221,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
 /** GET /api/import-jobs — liste les jobs récents. */
 export async function GET(): Promise<NextResponse> {
+  const unauthorized = await requireSession();
+  if (unauthorized) return unauthorized;
   const jobs = await listImportJobs(20);
   return NextResponse.json({ jobs });
 }

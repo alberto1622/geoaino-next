@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import JSZip from "jszip";
-import { auth } from "@/lib/auth";
+import { guardUploadRequest, validateUploadedFiles } from "@/lib/upload-guard";
 import { saveImportUpload } from "@/lib/import/storage";
 import { buildShapefileFieldInventory } from "@/lib/import/shapefile-inventory";
 import type { ShapefileTarget } from "@/lib/import/field-mapping";
@@ -20,10 +20,8 @@ const VALID_TARGETS: ShapefileTarget[] = ["cad-parcelles", "cad-sections", "sect
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
-    }
+    const guard = await guardUploadRequest(req);
+    if ("response" in guard) return guard.response;
 
     const formData = await req.formData();
     const target = String(formData.get("target") ?? "") as ShapefileTarget;
@@ -35,6 +33,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     }
 
     const files = formData.getAll("files") as File[];
+    const invalid = validateUploadedFiles(files);
+    if (invalid) return invalid;
     const shpFile = files.find((f) => f.name.toLowerCase().endsWith(".shp"));
     const dbfFile = files.find((f) => f.name.toLowerCase().endsWith(".dbf"));
     const prjFile = files.find((f) => f.name.toLowerCase().endsWith(".prj"));

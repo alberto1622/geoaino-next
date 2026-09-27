@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
+import { requireSession } from "@/lib/analyses/require-session";
 
 export async function GET() {
+  const unauthorized = await requireSession();
+  if (unauthorized) return unauthorized;
   const reports = await prisma.report.findMany({
     orderBy: { createdAt: "desc" },
     take: 50,
@@ -13,6 +16,9 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "Authentification requise" }, { status: 401 });
+  }
   const body = await req.json();
   const { analysisId, reportType = "DETAILED" } = body;
 

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getImportJob } from "@/lib/import/jobs";
+import { requireSession } from "@/lib/analyses/require-session";
 
 export const runtime = "nodejs";
 
@@ -12,6 +13,8 @@ export async function GET(
   _req: NextRequest,
   ctx: RouteContext<"/api/import-jobs/[id]">,
 ): Promise<NextResponse> {
+  const unauthorized = await requireSession();
+  if (unauthorized) return unauthorized;
   const { id } = await ctx.params;
   const jobId = Number(id);
   if (!Number.isInteger(jobId)) {

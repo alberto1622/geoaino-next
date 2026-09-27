@@ -5,6 +5,7 @@ import { convertDgnToDxf } from "@/lib/dgn-to-dxf";
 import { ingestDxfToParcelles, parcellesToFeatureCollection } from "@/lib/parcelle-ingestion";
 import { assignNicad2026FromCommunes } from "@/lib/cadastre/assign-nicad-2026";
 import { parseShapefileBuffers, type ParseResult } from "@/lib/import/geo-parse";
+import { guardUploadRequest, validateUploadedFiles } from "@/lib/upload-guard";
 
 /**
  * Plafond du nombre de features renvoyées à l'interface (et donc transmises à
@@ -160,12 +161,17 @@ async function parseZip(buffer: Buffer): Promise<ParseResult> {
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
+    const guard = await guardUploadRequest(req);
+    if ("response" in guard) return guard.response;
+
     const formData = await req.formData();
     const files = formData.getAll("files") as File[];
 
     if (!files.length) {
       return NextResponse.json({ error: "Aucun fichier fourni" }, { status: 400 });
     }
+    const invalid = validateUploadedFiles(files);
+    if (invalid) return invalid;
 
     const shpFile = files.find((f) => f.name.toLowerCase().endsWith(".shp"));
     const dbfFile = files.find((f) => f.name.toLowerCase().endsWith(".dbf"));

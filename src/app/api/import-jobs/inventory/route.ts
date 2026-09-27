@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { auth } from "@/lib/auth";
+import { guardUploadRequest, validateUploadedFiles } from "@/lib/upload-guard";
 import { saveImportUpload } from "@/lib/import/storage";
 import { resolveSource, toDxfBuffer } from "@/lib/import/source";
 import { buildLayerInventory, readDxfToFeatureCollection } from "@/lib/import/inventory";
@@ -20,13 +20,16 @@ export const maxDuration = 300;
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
-    await auth(); // réservé aux sessions authentifiées (cohérent avec le démarrage)
+    const guard = await guardUploadRequest(req);
+    if ("response" in guard) return guard.response;
 
     const formData = await req.formData();
     const files = formData.getAll("files") as File[];
     if (!files.length) {
       return NextResponse.json({ error: "Aucun fichier fourni" }, { status: 400 });
     }
+    const invalid = validateUploadedFiles(files);
+    if (invalid) return invalid;
 
     const candidate = files.find((f) => /\.(dxf|dgn|zip)$/i.test(f.name)) ?? files[0];
     const source = await resolveSource(candidate);

@@ -30,16 +30,33 @@ export async function saveImportUpload(fileName: string, data: Buffer): Promise<
   return `${LOCAL_PREFIX}${fullPath}`;
 }
 
+/**
+ * Résout une clé `local:<chemin>` en chemin absolu et vérifie qu'il reste DANS
+ * le dossier d'import. La clé peut revenir du client (voie JSON de
+ * `/api/import-jobs`) : sans ce contrôle, `local:C:/...` permettrait de lire
+ * puis supprimer n'importe quel fichier du serveur. Renvoie `null` sinon.
+ */
+export function resolveImportKey(key: string): string | null {
+  if (!key.startsWith(LOCAL_PREFIX)) return null;
+  const root = path.resolve(UPLOAD_DIR);
+  const resolved = path.resolve(key.slice(LOCAL_PREFIX.length));
+  const rel = path.relative(root, resolved);
+  if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return null;
+  return resolved;
+}
+
 /** Relit le buffer du fichier source à partir de sa clé. */
 export async function loadImportUpload(key: string): Promise<Buffer> {
-  const filePath = key.startsWith(LOCAL_PREFIX) ? key.slice(LOCAL_PREFIX.length) : key;
+  const filePath = resolveImportKey(key);
+  if (!filePath) throw new Error("Clé de fichier d'import invalide.");
   return fs.readFile(filePath);
 }
 
 /** Supprime le fichier source (nettoyage post-import). */
 export async function deleteImportUpload(key: string | null | undefined): Promise<void> {
   if (!key) return;
-  const filePath = key.startsWith(LOCAL_PREFIX) ? key.slice(LOCAL_PREFIX.length) : key;
+  const filePath = resolveImportKey(key);
+  if (!filePath) return;
   try {
     await fs.unlink(filePath);
   } catch {

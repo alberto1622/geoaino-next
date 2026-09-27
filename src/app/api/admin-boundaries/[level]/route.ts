@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireSession } from "@/lib/analyses/require-session";
 
 const GADM_URLS: Record<string, string> = {
   "1": "https://geodata.ucdavis.edu/gadm/gadm4.1/json/gadm41_SEN_1.json",
@@ -22,6 +23,8 @@ const LEVEL_NAMES: Record<string, string> = {
 type Params = Promise<{ level: string }>;
 
 export async function GET(_req: NextRequest, { params }: { params: Params }) {
+  const unauthorized = await requireSession();
+  if (unauthorized) return unauthorized;
   const { level } = await params;
 
   if (!GADM_URLS[level]) {
@@ -38,7 +41,7 @@ export async function GET(_req: NextRequest, { params }: { params: Params }) {
 
   if (existing?.geojsonData) {
     return new NextResponse(existing.geojsonData, {
-      headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=86400" },
+      headers: { "Content-Type": "application/json", "Cache-Control": "private, max-age=86400" },
     });
   }
 
@@ -66,6 +69,6 @@ export async function GET(_req: NextRequest, { params }: { params: Params }) {
   }
 
   return new NextResponse(data, {
-    headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=86400" },
+    headers: { "Content-Type": "application/json", "Cache-Control": "private, max-age=86400" },
   });
 }

@@ -24,7 +24,9 @@ export default function LoginPage() {
         password,
         redirect: false,
       });
-      if (result?.error) {
+      if (result?.code === "rate_limited") {
+        toast.error("Trop de tentatives de connexion. Réessayez dans 15 minutes.");
+      } else if (result?.error) {
         toast.error("Identifiants incorrects");
       } else {
         toast.success("Connexion réussie");
