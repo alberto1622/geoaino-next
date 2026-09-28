@@ -1722,6 +1722,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
         }),
       });
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `Erreur ${res.status}`);
       setChatMessages((prev) => [
         ...prev,
         { role: "assistant", content: data.message },
