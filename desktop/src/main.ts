@@ -316,6 +316,23 @@ function assurerLicenceActivee(): boolean {
       if (licenceEstValide(candidate)) {
         enregistrerLicence(candidate);
         licence = candidate;
+        // Confirmation explicite : sans elle, l'utilisateur passe directement
+        // a l'ecran de chargement sans savoir si l'import a ete pris en compte.
+        // `emisLe` est une date ISO (generer-licence.ts) : affichee en francais.
+        const dateEmission = new Date(candidate.emisLe);
+        const emisLeLisible = Number.isNaN(dateEmission.getTime())
+          ? candidate.emisLe
+          : dateEmission.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
+        dialog.showMessageBoxSync({
+          type: "info",
+          title: "Activation reussie",
+          message: "GeoAino est active sur cette machine.",
+          detail:
+            `Licence attribuee a : ${candidate.client}\n` +
+            `Emise le : ${emisLeLisible}\n\n` +
+            "L'application va maintenant demarrer.",
+          buttons: ["Continuer"],
+        });
         continue; // la boucle while re-teste licenceEstValide(licence) -> sort cette fois
       }
       dialog.showErrorBox(
