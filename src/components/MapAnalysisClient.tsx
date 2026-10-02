@@ -42,7 +42,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { NavBar } from "@/components/NavBar";
-import ReactMarkdown from "react-markdown";
+import { Markdown } from "@/components/Markdown";
 import { toast } from "sonner";
 import { toNum, errorTypeColor } from "@/lib/utils";
 import { useAnalysisUpdateListener } from "@/lib/analyses/live-refresh";
@@ -2588,8 +2588,8 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                     </p>
                   </div>
                 ) : aiReport ? (
-                  <div className="prose prose-invert prose-xs max-w-none text-xs leading-relaxed">
-                    <ReactMarkdown>{aiReport}</ReactMarkdown>
+                  <div className="prose prose-invert prose-xs max-w-none text-xs leading-relaxed prose-code:before:content-none prose-code:after:content-none">
+                    <Markdown>{aiReport}</Markdown>
                   </div>
                 ) : (
                   <div className="text-center py-8">
@@ -2634,7 +2634,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                       >
                         {msg.role === "assistant" ? (
                           <div className="prose prose-invert prose-xs max-w-none">
-                            <ReactMarkdown>{msg.content}</ReactMarkdown>
+                            <Markdown>{msg.content}</Markdown>
                           </div>
                         ) : (
                           msg.content

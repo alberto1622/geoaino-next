@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { NavBar } from "@/components/NavBar";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import ReactMarkdown from "react-markdown";
+import { Markdown } from "@/components/Markdown";
 import { toast } from "sonner";
 import { toNum } from "@/lib/utils";
 import { exportReportPDF } from "@/lib/exportPdf";
@@ -195,8 +195,8 @@ export default function ReportsClient({ user, reports }: Props) {
                   </CardHeader>
                   <CardContent className="flex-1 overflow-hidden p-0">
                     <ScrollArea className="h-full px-6 pb-6">
-                      <div className="prose prose-invert prose-sm max-w-none">
-                        <ReactMarkdown>{selected.content || "Contenu non disponible"}</ReactMarkdown>
+                      <div className="prose prose-invert prose-sm max-w-none prose-code:before:content-none prose-code:after:content-none">
+                        <Markdown>{selected.content || "Contenu non disponible"}</Markdown>
                       </div>
                     </ScrollArea>
                   </CardContent>
