@@ -4445,7 +4445,7 @@ remplissage sans double capture du contour.
   (ce paragraphe) selon les réglages de l'export ODA/MicroStation.
 
 **Cas concret vérifié : « Associative Region » MicroStation, contour vs fond
-(imges/image-1.png, image-2.png, parcelle 00002)** — l'utilisateur a
+(ressources/captures/image-1.png, image-2.png, parcelle 00002)** — l'utilisateur a
 identifié, au clic MicroStation sur la MÊME parcelle, deux tooltips
 distincts : « Associative Region \ Complex Shape » (le fond rempli) et
 « Associative Region \ Line String » (le contour source), avec l'hypothèse
@@ -4880,7 +4880,7 @@ une fois le noding réussi).
 
 **Nouveau patron identifié : extraction partielle par fenêtre MicroStation
 (« fence select ») — un taux de dangle massivement amplifié, pas une
-régression du pipeline (imges/image-4.png, ZIG-test.dxf, commune
+régression du pipeline (ressources/captures/image-4.png, ZIG-test.dxf, commune
 d'Oussouye)**. L'utilisateur a sélectionné une zone à la souris dans
 MicroStation et exporté ce seul sous-ensemble (`ZIG-test.dxf`, 143,7 Mo,
 contre 318,7 Mo pour le fichier complet ZIG.dxf). Rejoué de bout en bout
@@ -4965,7 +4965,7 @@ calque, hors pipeline complet) :
 
 ## 53 bis. Un grand `Shape` déjà fermé englobant des `LINE` intérieures : les subdivisions ne peuvent structurellement jamais se raccrocher à son bord
 
-**Problème métier** (imges/image-6.png) : un bloc/îlot est tracé comme UN
+**Problème métier** (ressources/captures/image-6.png) : un bloc/îlot est tracé comme UN
 grand rectangle déjà fermé (« Shape », calque Limites Parcelles), et les
 parcelles individuelles à l'intérieur (00255, 00257, 00258…) sont
 subdivisées par de simples `LINE` qui rejoignent le bord de ce rectangle.

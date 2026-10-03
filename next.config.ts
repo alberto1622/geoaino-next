@@ -88,7 +88,7 @@ const nextConfig: NextConfig = {
   // aussi (revue finale, Finding 2) tout le reste de l'arbre projet sans
   // rapport avec le runtime standalone : `src/` (Next compile deja son
   // contenu utile dans `.next/server`, la source brute n'est jamais lue a
-  // l'execution), `scripts/`, `ML/`, `traitements_process/` (avec un PDF de
+  // l'execution), `scripts/`, `ML/`, `docs/ressources/traitements_process/` (avec un PDF de
   // documentation interne), `docs/`, des `.md` et `.geojson` epars, et meme
   // un `hs_err_pid*.log` de crash JVM laisse par une machine de build —
   // livres tels quels aux clients dans l'installateur. Cette exclusion
@@ -109,7 +109,6 @@ const nextConfig: NextConfig = {
       "./src/**",
       "./scripts/**",
       "./ML/**",
-      "./traitements_process/**",
       "./docs/**",
       "./*.md",
       "./*.geojson",
