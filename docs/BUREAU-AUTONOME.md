@@ -166,6 +166,30 @@ Les référentiels administratifs (voir section dédiée plus haut) doivent
 npx tsx desktop/scripts/generer-referentiels.ts --url "postgresql://postgres:PASSWORD@HOST:PORT/DB_WEB"
 ```
 
+### Fond de carte hors ligne (`desktop/vendor/tiles/senegal.mbtiles`)
+
+Les cartes lisent un MBTiles OpenMapTiles via la route `/api/tiles`.
+Electron passe son chemin à Next par `BASEMAP_MBTILES_PATH` (`runtime-env.ts`),
+et `electron-builder.yml` l'embarque dans `resources/tiles/`. Le principe est
+détaillé dans `docs/CONCEPTS-TRAITEMENT-DXF.md` §71. Le fichier (~126 Mo)
+n'est **pas** committé. Pour le générer, **hors du dépôt**, sinon le build
+Next tente de parcourir les fichiers de travail :
+
+```bash
+mkdir ../geoaino-tiles-build && cd ../geoaino-tiles-build
+curl -L -o planetiler.jar https://github.com/onthegomap/planetiler/releases/latest/download/planetiler.jar
+curl -L -o senegal-and-gambia-latest.osm.pbf https://download.geofabrik.de/africa/senegal-and-gambia-latest.osm.pbf
+# --download récupère les données complémentaires (~1,4 Go : océans, Natural Earth, lacs).
+# Si la connexion coupe, retélécharger data/sources/water-polygons-split-3857.zip
+# avec `curl -C -` puis relancer sans --download.
+java -Xmx3g -jar planetiler.jar --osm-path=senegal-and-gambia-latest.osm.pbf --download --output=senegal.mbtiles --force
+cp senegal.mbtiles ../geoaino-next/desktop/vendor/tiles/senegal.mbtiles
+```
+
+Côté web, définir `BASEMAP_MBTILES_PATH` (chemin absolu du même fichier).
+Sans cette variable, les cartes reviennent aux tuiles OSM publiques,
+soumises au bridage du serveur `tile.openstreetmap.org`.
+
 ---
 
 ## 3. Commandes de build

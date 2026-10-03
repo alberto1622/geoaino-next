@@ -2,7 +2,7 @@
 
 import "leaflet/dist/leaflet.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getTileUrlTemplate } from "@/lib/tiles-url";
+import { addLeafletBasemap } from "@/lib/basemap";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CadHistoryPanel } from "@/components/cadastre/CadHistoryPanel";
 import { JobProgressSteps, type JobProgressStep } from "@/components/import/JobProgressSteps";
@@ -437,10 +437,7 @@ export default function SectionsClient() {
         [12.3, -17.6],
         [16.7, -11.3],
       ]);
-      L.tileLayer(getTileUrlTemplate(), {
-        attribution: "© OpenStreetMap",
-        maxZoom: 19,
-      }).addTo(map);
+      void addLeafletBasemap(L, map);
       mapRef.current = map;
       map.on("zoomend", () => setMapZoom(map.getZoom()));
       // Le conteneur est dimensionné en flex (hauteur = espace restant de

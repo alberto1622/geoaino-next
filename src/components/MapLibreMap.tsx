@@ -3,33 +3,14 @@ import RMap, {
   Source, Layer, NavigationControl, ScaleControl, Popup, Marker,
 } from "react-map-gl/maplibre";
 import type { MapRef, MapLayerMouseEvent } from "react-map-gl/maplibre";
-import type { StyleSpecification } from "maplibre-gl";
 import { Component, useState, useEffect, useRef, useCallback, useMemo, type ReactNode } from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { errorTypeColor } from "@/lib/utils";
-import { getTileUrl } from "@/lib/tiles-url";
+import { useBasemapStyle } from "@/lib/basemap";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const INITIAL_VIEW = { longitude: -14.5, latitude: 14.5, zoom: 7 };
-
-// Self-contained raster style — no external style.json needed
-const MAP_STYLE: StyleSpecification = {
-  version: 8,
-  sources: {
-    osm: {
-      type: "raster",
-      tiles: [getTileUrl()],
-      tileSize: 256,
-      // OSM ne sert des tuiles que jusqu'au zoom 19. Au-delà (parcelles/slivers
-      // minuscules), MapLibre agrandit les tuiles z19 au lieu de demander des
-      // tuiles z20+ inexistantes (qui provoquaient des erreurs "Failed to fetch").
-      maxzoom: 19,
-      attribution: "© OpenStreetMap contributors",
-    },
-  },
-  layers: [{ id: "osm", type: "raster", source: "osm" }],
-};
 
 // Valeurs de NICAD considérées « manquantes » (alignées sur geo-engine).
 const MISSING_NICAD_VALUES = [
@@ -226,6 +207,9 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
   const boundsCacheRef = useRef<Map<string, [[number, number], [number, number]] | null>>(new Map());
 
   const [mapReady, setMapReady] = useState(false);
+  // Fond de carte (local vectoriel, sinon OSM) : résolu avant d'afficher la carte
+  // pour ne pas changer de style à chaud (ce qui rechargerait les couches).
+  const basemapStyle = useBasemapStyle();
   const [popup, setPopup] = useState<PopupState | null>(null);
   const [blinkOpacity, setBlinkOpacity] = useState(0);
   const [cursor, setCursor] = useState("grab");
@@ -522,11 +506,12 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
   return (
     <div className="w-full h-full relative">
     <MapErrorBoundary>
+      {basemapStyle && (
       <RMap
         ref={mapRef}
         initialViewState={INITIAL_VIEW}
         style={{ width: "100%", height: "100%" }}
-        mapStyle={MAP_STYLE}
+        mapStyle={basemapStyle}
         onClick={handleClick}
         interactiveLayerIds={["parcelles-fill"]}
         onMouseEnter={() => setCursor("pointer")}
@@ -534,7 +519,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
         cursor={cursor}
         onLoad={() => setMapReady(true)}
         onMoveEnd={(e) => setZoom(e.viewState.zoom)}
-        attributionControl={false}
+        attributionControl={{ compact: true }}
       >
         <NavigationControl position="top-right" showCompass={false} />
         <ScaleControl position="bottom-left" maxWidth={100} unit="metric" />
@@ -861,6 +846,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
           </Popup>
         )}
       </RMap>
+      )}
     </MapErrorBoundary>
 
       {/* ── Légende (petite, dynamique) ── */}

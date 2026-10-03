@@ -6016,5 +6016,70 @@ borné par la taille de l'envoi.
 
 ---
 
+## 71. Fond de carte local : tuiles vectorielles OpenMapTiles servies par l'application
+
+**Problème métier** : la carte « Gestion des sections » restait en partie
+noire, et les autres cartes s'affichaient de façon aléatoire. Hors
+connexion (mode bureau), aucune carte n'avait de fond, alors que la version
+bureau est présentée comme utilisable sans réseau.
+
+**Cause technique** : trois défauts cumulés.
+1. Toutes les cartes utilisaient le serveur public `tile.openstreetmap.org`.
+   Sa politique d'usage exclut les applications et ne garantit aucun service :
+   il bride les requêtes. Mesuré : sur deux chargements identiques, l'un
+   reçoit ses 24 tuiles, l'autre aucune en 25 s, sans que la page soit
+   bloquée (elle répondait en 3 ms).
+2. Le fichier `desktop/vendor/tiles/senegal.mbtiles` (21 Ko) n'était pas une
+   base de tuiles mais une page HTML « 404 », enregistrée par un
+   téléchargement raté.
+3. La bascule vers le tileserver local reposait sur `NEXT_PUBLIC_TILES_PORT`,
+   fixée au lancement d'Electron. Or Next fige les variables `NEXT_PUBLIC_*`
+   au build : dans le bundle livré, la variable était vide et toutes les
+   cartes partaient sur OSM.
+
+**Solution** (`fichier · fonction`) :
+- Tuiles : MBTiles OpenMapTiles du Sénégal et de la Gambie, généré par
+  Planetiler à partir de l'extrait Geofabrik (zoom 0 à 14, 126 Mo, 94 311
+  tuiles). Procédure dans `docs/BUREAU-AUTONOME.md`.
+- Serveur : `lib/basemap-tiles.ts · getBasemapTile` lit le fichier désigné
+  par `BASEMAP_MBTILES_PATH` (variable lue à l'exécution, pas au build).
+  `app/api/tiles/[z]/[x]/[y]/route.ts` sert la tuile, session requise ;
+  `/api/tiles/status` indique si le fond local est disponible.
+- Client : `lib/basemap.ts`. `useBasemapStyle` fournit le style aux cartes
+  MapLibre, `addLeafletBasemap` ajoute le fond aux cartes Leaflet via
+  `@maplibre/maplibre-gl-leaflet`. Le style « Positron » est servi depuis
+  `public/basemap/` avec ses icônes et ses polices. Si le fond local est absent,
+  les cartes reviennent aux tuiles raster OSM.
+- Bureau : `runtime-env.ts` définit `BASEMAP_MBTILES_PATH` ; le tileserver
+  séparé est supprimé.
+
+**Pourquoi (pièges inclus)** :
+- **TMS ou XYZ** : le MBTiles numérote les lignes depuis le bas (TMS), le
+  client depuis le haut (XYZ). D'où `tile_row = 2^z − 1 − y` : sans cette
+  inversion, les tuiles s'affichent en miroir nord-sud.
+- **Compression** : Planetiler stocke les tuiles en gzip. La route ajoute
+  `Content-Encoding: gzip` si les deux premiers octets valent `1f 8b`, sinon
+  MapLibre reçoit des octets illisibles.
+- **Tuile absente → 204** : les zones vides (mer, hors emprise) n'ont pas de
+  tuile. Un 204 est traité comme une tuile vide ; un 404 polluerait la
+  console.
+- **Polices** : un serveur statique ne sait pas combiner une pile de polices
+  (`"Metropolis Regular,Noto Sans Regular"`). Chaque couche du style ne garde
+  donc que sa première police. Seules les plages de caractères utiles sont
+  livrées : latin et accents, arabe (1536–1791), ponctuation générale.
+- **`node:sqlite` plutôt que `sqlite3`** : module intégré à Node 22+ (image
+  Docker `node:22-alpine`, Node 24 d'Electron), donc pas de module natif à
+  compiler ni à empaqueter.
+- **Pas de repli `path.join(process.cwd(), …)`** : un chemin calculé ainsi
+  fait balayer tout le projet par le traceur de fichiers de Next. Le chemin
+  vient uniquement de la variable d'environnement.
+- **Style figé avant l'affichage** : les cartes MapLibre attendent le style
+  avant de s'afficher, car changer de style à chaud supprimerait les couches
+  de données ajoutées par l'application.
+- **Attribution** : l'attribution OSM / OpenMapTiles est désormais affichée
+  (mode compact). La licence ODbL l'impose, et elle était masquée jusqu'ici.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

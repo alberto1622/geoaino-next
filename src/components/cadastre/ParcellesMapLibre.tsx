@@ -2,30 +2,13 @@
 
 import RMap, { Source, Layer, NavigationControl, ScaleControl, Popup } from "react-map-gl/maplibre";
 import type { MapRef, MapLayerMouseEvent } from "react-map-gl/maplibre";
-import type { StyleSpecification } from "maplibre-gl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { errorTypeColor, severityColor } from "@/lib/utils";
-import { getTileUrl } from "@/lib/tiles-url";
+import { useBasemapStyle } from "@/lib/basemap";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const INITIAL_VIEW = { longitude: -14.5, latitude: 14.5, zoom: 7 };
-
-// Style autonome (raster OSM) — copié de MapLibreMap.tsx (non exporté là-bas,
-// duplication volontairement acceptée pour ce petit composant read-only).
-const MAP_STYLE: StyleSpecification = {
-  version: 8,
-  sources: {
-    osm: {
-      type: "raster",
-      tiles: [getTileUrl()],
-      tileSize: 256,
-      maxzoom: 19,
-      attribution: "© OpenStreetMap contributors",
-    },
-  },
-  layers: [{ id: "osm", type: "raster", source: "osm" }],
-};
 
 const PARCEL_COLOR = "#64748b";
 
@@ -83,6 +66,7 @@ interface Props {
 export default function ParcellesMapLibre({ selectedIds, errorsById, hiddenTypes, fitBounds }: Props) {
   const mapRef = useRef<MapRef | null>(null);
   const [mapReady, setMapReady] = useState(false);
+  const basemapStyle = useBasemapStyle();
   const [cursor, setCursor] = useState("grab");
   const [popup, setPopup] = useState<{ lng: number; lat: number; html: string } | null>(null);
 
@@ -171,19 +155,21 @@ export default function ParcellesMapLibre({ selectedIds, errorsById, hiddenTypes
     [errorsById],
   );
 
+  if (!basemapStyle) return null;
+
   return (
     <RMap
       ref={mapRef}
       initialViewState={INITIAL_VIEW}
       style={{ width: "100%", height: "100%" }}
-      mapStyle={MAP_STYLE}
+      mapStyle={basemapStyle}
       onClick={handleClick}
       interactiveLayerIds={interactiveLayerIds}
       onMouseEnter={() => setCursor("pointer")}
       onMouseLeave={() => setCursor("grab")}
       cursor={cursor}
       onLoad={() => setMapReady(true)}
-      attributionControl={false}
+      attributionControl={{ compact: true }}
     >
       <NavigationControl position="top-right" showCompass={false} />
       <ScaleControl position="bottom-left" maxWidth={100} unit="metric" />

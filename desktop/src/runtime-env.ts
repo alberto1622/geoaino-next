@@ -55,7 +55,8 @@ export function secretAuthPersiste(): string {
 export function construireEnvRuntime(options: {
   portPostgres: number;
   portNext: number;
-  portTuiles?: number;
+  /** MBTiles du fond de carte (lu par /api/tiles, cf. src/lib/basemap-tiles.ts). */
+  cheminFondCarte: string;
 }): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -91,7 +92,7 @@ export function construireEnvRuntime(options: {
     // Necessaire pour tout process enfant lance avec `process.execPath`
     // (serveur Next standalone, CLI Prisma pour la synchronisation du schema).
     ELECTRON_RUN_AS_NODE: "1",
-    // Port du serveur local de tuiles (tileserver-gl) pour le mode offline.
-    NEXT_PUBLIC_TILES_PORT: String(options.portTuiles ?? ""),
+    // Fond de carte hors ligne (tuiles vectorielles OpenMapTiles).
+    BASEMAP_MBTILES_PATH: options.cheminFondCarte,
   };
 }

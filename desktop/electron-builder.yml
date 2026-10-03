@@ -42,10 +42,11 @@ extraResources:
     to: node_modules/@prisma
   - from: prisma
     to: prisma
-  # tileserver-gl embarque : tuiles OSM raster + vecteur pour le mode offline.
-  # Le vendor est buildé separement via scripts/setup-tileserver.mjs.
-  - from: desktop/vendor/tileserver
-    to: tileserver
+  # Fond de carte hors ligne : MBTiles OpenMapTiles (Planetiler), lu par la
+  # route Next /api/tiles via BASEMAP_MBTILES_PATH (cf. runtime-env.ts).
+  # Generation : docs/BUREAU-AUTONOME.md, section « Fond de carte ».
+  - from: desktop/vendor/tiles/senegal.mbtiles
+    to: tiles/senegal.mbtiles
 win:
   target: nsis
   icon: icon.ico

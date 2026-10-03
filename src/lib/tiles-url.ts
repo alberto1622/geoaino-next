@@ -1,18 +1,9 @@
 /**
- * Résout l'URL des tuiles de carte en mode desktop offline.
- * Si NEXT_PUBLIC_TILES_PORT est défini, utilise le serveur local (tileserver-gl).
- * Sinon, bascule sur le serveur public OpenStreetMap.
+ * Tuiles raster OSM publiques : fond de REPLI uniquement, quand le fond local
+ * (MBTiles servi par /api/tiles) n'est pas installé — cf. `basemap.ts`.
+ *
+ * L'ancienne bascule vers un tileserver local via `NEXT_PUBLIC_TILES_PORT`
+ * ne fonctionnait pas : Next fige les variables `NEXT_PUBLIC_*` au build,
+ * alors que le port n'était connu qu'au lancement du bureau.
  */
-export function getTileUrl(): string {
-  const port = process.env.NEXT_PUBLIC_TILES_PORT;
-  if (port) {
-    // tileserver-gl sert les tuiles via /data/senegal/{z}/{x}/{y}.png
-    return `http://127.0.0.1:${port}/data/senegal/{z}/{x}/{y}.png`;
-  }
-  // Fallback public (web)
-  return `https://tile.openstreetmap.org/{z}/{x}/{y}.png`;
-}
-
-export function getTileUrlTemplate(): string {
-  return getTileUrl().replace("{s}", "abc");
-}
+export const OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
