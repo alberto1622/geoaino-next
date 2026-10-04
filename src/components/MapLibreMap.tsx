@@ -8,6 +8,7 @@ import { AlertTriangle, RefreshCw } from "lucide-react";
 import { errorTypeColor } from "@/lib/utils";
 import { useBasemapStyle } from "@/lib/basemap";
 import { CursorCoordinates, useCursorStore } from "@/components/map/CursorCoordinates";
+import { BasemapSwitcher } from "@/components/map/BasemapSwitcher";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -527,7 +528,8 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
       >
         <NavigationControl position="top-right" showCompass={false} />
         <ScaleControl position="bottom-left" maxWidth={100} unit="metric" />
-        <CursorCoordinates store={cursorStore} className="bottom-9 left-2" />
+        <BasemapSwitcher className="bottom-9 left-2" />
+        <CursorCoordinates store={cursorStore} className="bottom-[4.5rem] left-2" />
 
         {/* ── Parcelles (tuiles vectorielles MVT, couche « parcelles ») ── */}
         <Source id="parcelles" type="vector" tiles={[tilesUrl]} minzoom={0} maxzoom={20}>

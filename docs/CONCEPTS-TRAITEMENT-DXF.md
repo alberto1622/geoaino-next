@@ -6050,6 +6050,13 @@ bureau est présentée comme utilisable sans réseau.
   `@maplibre/maplibre-gl-leaflet`. Le style « Positron » est servi depuis
   `public/basemap/` avec ses icônes et ses polices. Si le fond local est absent,
   les cartes reviennent aux tuiles raster OSM.
+- Sélecteur de fond (`components/map/BasemapSwitcher.tsx`) : Clair
+  (Positron), Sombre (Dark Matter) ou OSM (en ligne). Le choix est partagé
+  par toutes les cartes et mémorisé dans le navigateur (`localStorage`). Pour
+  MapLibre, un changement de fond remplace tout le style : `react-map-gl`
+  rajoute les couches déclarées en JSX (`<Source>`/`<Layer>`), mais une couche
+  ajoutée par `map.addLayer` serait perdue. Pour Leaflet,
+  `attachLeafletBasemap` retire l'ancienne couche de fond et pose la nouvelle.
 - Bureau : `runtime-env.ts` définit `BASEMAP_MBTILES_PATH` ; le tileserver
   séparé est supprimé.
 

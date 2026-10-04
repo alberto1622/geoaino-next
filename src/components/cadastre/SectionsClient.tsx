@@ -2,7 +2,8 @@
 
 import "leaflet/dist/leaflet.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { addLeafletBasemap } from "@/lib/basemap";
+import { attachLeafletBasemap } from "@/lib/basemap";
+import { BasemapSwitcher } from "@/components/map/BasemapSwitcher";
 import { CursorCoordinates, useCursorStore } from "@/components/map/CursorCoordinates";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CadHistoryPanel } from "@/components/cadastre/CadHistoryPanel";
@@ -439,7 +440,7 @@ export default function SectionsClient() {
         [12.3, -17.6],
         [16.7, -11.3],
       ]);
-      void addLeafletBasemap(L, map);
+      attachLeafletBasemap(L, map);
       mapRef.current = map;
       // Coordonnées du curseur (bandeau UTM 28N / WGS84)
       map.on("mousemove", (e: { latlng: { lat: number; lng: number } }) => cursorStore.set({ lng: e.latlng.lng, lat: e.latlng.lat }));
@@ -2439,7 +2440,8 @@ export default function SectionsClient() {
             ref={mapEl}
             className="h-full min-h-125 w-full rounded-xl border border-border/60"
           />
-          <CursorCoordinates store={cursorStore} className="bottom-2 left-2" />
+          <BasemapSwitcher className="bottom-2 left-2" />
+          <CursorCoordinates store={cursorStore} className="bottom-11 left-2" />
           {loadingData && (
             <div className="absolute right-3 top-3 rounded-lg bg-background/90 px-3 py-1.5 text-xs shadow">
               Chargement…

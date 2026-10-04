@@ -1,7 +1,8 @@
 "use client";
 import "leaflet/dist/leaflet.css";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { addLeafletBasemap } from "@/lib/basemap";
+import { attachLeafletBasemap } from "@/lib/basemap";
+import { BasemapSwitcher } from "@/components/map/BasemapSwitcher";
 import { CursorCoordinates, useCursorStore } from "@/components/map/CursorCoordinates";
 import { Layers } from "lucide-react";
 
@@ -100,7 +101,7 @@ export default function LeafletMap({ geoJson, errors, selectedErrorId, onFeature
 
     const map = L.map(mapRef.current, { center: [14.6928, -17.4467], zoom: 10, zoomControl: true });
 
-    void addLeafletBasemap(L, map);
+    attachLeafletBasemap(L, map);
     // Coordonnées du curseur (bandeau UTM 28N / WGS84)
     map.on("mousemove", (e: { latlng: { lat: number; lng: number } }) => cursorStore.set({ lng: e.latlng.lng, lat: e.latlng.lat }));
     // `mouseleave` natif : le `mouseout` de Leaflet ne part pas toujours en quittant la carte.
@@ -364,7 +365,8 @@ export default function LeafletMap({ geoJson, errors, selectedErrorId, onFeature
   return (
     <div className="relative w-full h-full" style={{ minHeight: "400px" }}>
       <div ref={mapRef} className="w-full h-full" />
-      <CursorCoordinates store={cursorStore} className="bottom-2 left-2" />
+      <BasemapSwitcher className="bottom-2 left-2" />
+          <CursorCoordinates store={cursorStore} className="bottom-11 left-2" />
 
       <div className="absolute top-3 right-3 z-[1000]">
         <div className="relative">

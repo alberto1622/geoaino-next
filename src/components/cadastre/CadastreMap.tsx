@@ -12,7 +12,8 @@ import { listChangementMaps } from "@/app/cadastre/_actions/correspondance";
 import { parcellesBySyscol, parcelleByCoords } from "@/app/cadastre/_actions/carte";
 import { NicadDisplay } from "@/components/cadastre/NicadDisplay";
 import { SENEGAL_BBOX } from "@/lib/senegal-bounds";
-import { addLeafletBasemap } from "@/lib/basemap";
+import { attachLeafletBasemap } from "@/lib/basemap";
+import { BasemapSwitcher } from "@/components/map/BasemapSwitcher";
 import { CursorCoordinates, useCursorStore } from "@/components/map/CursorCoordinates";
 
 type Version = "2013" | "2026";
@@ -152,7 +153,7 @@ export default function CadastreMap() {
       if (cancelled || !mapEl.current || mapRef.current) return;
       LRef.current = L;
       const map = L.map(mapEl.current).fitBounds(SENEGAL_LEAFLET_BOUNDS);
-      void addLeafletBasemap(L, map);
+      attachLeafletBasemap(L, map);
       mapRef.current = map;
       // Coordonnées du curseur (bandeau UTM 28N / WGS84)
       map.on("mousemove", (e: { latlng: { lat: number; lng: number } }) => cursorStore.set({ lng: e.latlng.lng, lat: e.latlng.lat }));
@@ -511,7 +512,8 @@ export default function CadastreMap() {
         </div>
         <div className="relative">
           <div ref={mapEl} className="h-[600px] w-full rounded-xl border border-border/60" />
-          <CursorCoordinates store={cursorStore} className="bottom-2 left-2" />
+          <BasemapSwitcher className="bottom-2 left-2" />
+          <CursorCoordinates store={cursorStore} className="bottom-11 left-2" />
           {loading && (
             <div className="absolute right-3 top-3 rounded-lg bg-background/90 px-3 py-1.5 text-xs shadow">
               Chargement des parcelles…
