@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { NavBar } from "@/components/NavBar";
-import { toNum } from "@/lib/utils";
+import { toNum, errorTypeLabel } from "@/lib/utils";
 
 const PAGE_SIZE = 100;
 
@@ -447,7 +447,7 @@ export default function AnalysisTableClient({ user, analysis, errorIndex }: Prop
                             <div className="flex flex-col gap-0.5">
                               {errs.slice(0, 2).map((e, ei) => (
                                 <span key={ei} className={`text-[9px] font-mono ${SEVERITY_COLOR[e.severity] || "text-muted-foreground"}`}>
-                                  {e.errorType}
+                                  {errorTypeLabel(e.errorType)}
                                 </span>
                               ))}
                               {errs.length > 2 && (

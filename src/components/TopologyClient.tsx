@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { NavBar } from "@/components/NavBar";
-import { errorTypeColor, toNum } from "@/lib/utils";
+import { errorTypeColor, toNum, errorTypeLabel } from "@/lib/utils";
 
 const MapLibreMap = dynamic(() => import("@/components/MapLibreMap"), { ssr: false });
 
@@ -159,7 +159,7 @@ export default function TopologyClient({ user, analysis }: Props) {
                 >
                   <div className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full shrink-0" style={{ background: errorTypeColor(err.errorType) }} />
-                    <span className="font-mono">{err.errorType}</span>
+                    <span>{errorTypeLabel(err.errorType)}</span>
                     <Badge
                       variant={err.severity.toLowerCase() as "critical" | "high" | "medium" | "low"}
                       className="text-[8px] h-3.5 px-1 ml-auto"

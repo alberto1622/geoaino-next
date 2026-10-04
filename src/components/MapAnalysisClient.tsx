@@ -29,6 +29,8 @@ import {
   ChevronLeft,
   Upload,
   Combine,
+  Ruler,
+  Pentagon,
 } from "lucide-react";
 import { useUndoHistory, useUndoRedoShortcuts } from "@/hooks/use-undo-history";
 import { Button } from "@/components/ui/button";
@@ -43,8 +45,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { NavBar } from "@/components/NavBar";
 import { Markdown } from "@/components/Markdown";
+import { LayersPanel } from "@/components/map/LayersPanel";
+import type { MeasureMode } from "@/components/MapLibreMap";
 import { toast } from "sonner";
-import { toNum, errorTypeColor } from "@/lib/utils";
+import { toNum, errorTypeColor, errorTypeLabel } from "@/lib/utils";
 import { useAnalysisUpdateListener } from "@/lib/analyses/live-refresh";
 
 // ── Limites administratives (régions / départements / communes) ──────────────
@@ -565,6 +569,22 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     communes: false,
     centres_services_fiscaux: false,
   });
+  // Panneau « Couches » (façon QGIS) et outil de mesure de la carte.
+  const [layersOpen, setLayersOpen] = useState(false);
+  const [parcellesVisible, setParcellesVisible] = useState(true);
+  const [parcellesOpacity, setParcellesOpacity] = useState(0.22);
+  const [erreursVisible, setErreursVisible] = useState(true);
+  const [conformesVisible, setConformesVisible] = useState(true);
+  const [measureMode, setMeasureMode] = useState<MeasureMode>(null);
+  // Échap quitte l'outil de mesure.
+  useEffect(() => {
+    if (!measureMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMeasureMode(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [measureMode]);
   // Masque/affiche le panneau latéral gauche pour libérer de l'espace carte.
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   // Largeur du panneau latéral (redimensionnable par glisser sur son bord droit).
@@ -2338,7 +2358,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                         className="w-2 h-2 rounded-full inline-block mr-1"
                         style={{ background: errorTypeColor(type) }}
                       />
-                      {type} ({count})
+                      {errorTypeLabel(type)} ({count})
                     </button>
                   );
                 })}
@@ -2388,8 +2408,8 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                           className="w-2 h-2 rounded-full shrink-0"
                           style={{ background: errorTypeColor(err.errorType) }}
                         />
-                        <span className="text-[10px] font-mono">
-                          {err.errorType}
+                        <span className="text-[11px] font-medium">
+                          {errorTypeLabel(err.errorType)}
                         </span>
                         <Badge
                           variant={
@@ -3023,6 +3043,11 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
               sansSectionHighlight={showSansSection}
               deletedNicads={deletedNicads}
               adminLevels={ADMIN_LEVELS.filter((level) => adminShow[level])}
+              parcellesVisible={parcellesVisible}
+              parcellesOpacity={parcellesOpacity}
+              erreursVisible={erreursVisible}
+              conformesVisible={conformesVisible}
+              measureMode={measureMode}
             />
             {/* Annuler/rétablir — coin haut-gauche de la carte, sur la même
                 ligne que le panneau latéral, juste à sa droite. */}
@@ -3043,7 +3068,70 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
               >
                 <Redo2 className="w-3.5 h-3.5" />
               </button>
+              <span className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
+              <button
+                type="button"
+                onClick={() => {
+                  setLayersOpen((v) => !v);
+                  setMeasureMode(null);
+                }}
+                aria-pressed={layersOpen}
+                title="Couches"
+                className={`flex items-center gap-1 px-1.5 py-1 rounded text-xs transition-colors cursor-pointer ${layersOpen ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary/40"}`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Couches</span>
+              </button>
+              {([
+                ["distance", Ruler, "Mesurer une distance"],
+                ["surface", Pentagon, "Mesurer une surface"],
+              ] as const).map(([mode, Icon, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => {
+                    setMeasureMode((m) => (m === mode ? null : mode));
+                    setLayersOpen(false);
+                  }}
+                  aria-pressed={measureMode === mode}
+                  title={`${label} (Échap pour quitter)`}
+                  aria-label={label}
+                  className={`flex items-center gap-1 px-1.5 py-1 rounded text-xs transition-colors cursor-pointer ${measureMode === mode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary/40"}`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                </button>
+              ))}
             </div>
+            {layersOpen && (
+              <LayersPanel
+                className="top-12 left-2"
+                onClose={() => setLayersOpen(false)}
+                groups={[
+                  {
+                    title: "Analyse",
+                    items: [
+                      { id: "erreurs", label: "Erreurs topologiques", color: errorTypeColor("overlap"), checked: erreursVisible, onToggle: setErreursVisible },
+                      { id: "sans-section", label: "Parcelles sans section", color: "#f97316", checked: showSansSection, onToggle: setShowSansSection },
+                      { id: "conformes", label: "Parcelles conformes", color: "#22c55e", checked: conformesVisible, onToggle: setConformesVisible },
+                      { id: "parcelles", label: "Parcelles", color: "#6b7280", checked: parcellesVisible, onToggle: setParcellesVisible, opacity: parcellesOpacity, onOpacity: setParcellesOpacity },
+                    ],
+                  },
+                  {
+                    title: "Référentiels",
+                    items: [
+                      { id: "sections", label: "Limites de sections", color: "#ef4444", checked: showSections, onToggle: setShowSections },
+                      ...ADMIN_LEVELS.map((level) => ({
+                        id: `admin-${level}`,
+                        label: ADMIN_STYLES[level].label,
+                        color: ADMIN_STYLES[level].color,
+                        checked: adminShow[level],
+                        onToggle: (v: boolean) => setAdminShow((prev) => ({ ...prev, [level]: v })),
+                      })),
+                    ],
+                  },
+                ]}
+              />
+            )}
             <Button
               variant="outline"
               size="sm"

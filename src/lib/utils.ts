@@ -29,6 +29,25 @@ export function severityColor(severity: string): string {
   }
 }
 
+const ERROR_TYPE_LABELS_FR: Record<string, string> = {
+  overlap: "Chevauchement",
+  gap: "Trou",
+  sliver: "Esquille",
+  duplicate: "Doublon NICAD",
+  invalid_geom: "Géométrie invalide",
+  boundary_cross: "Sort des limites administratives",
+  missing_nicad: "NICAD manquant",
+  short_nicad: "NICAD trop court",
+  self_intersect: "Auto-intersection",
+  section_mismatch: "Incohérence de section",
+  multi_numero: "Plusieurs numéros",
+};
+
+/** Libellé français d'un type d'erreur (`MISSING_NICAD` → « NICAD manquant »). */
+export function errorTypeLabel(type: string): string {
+  return ERROR_TYPE_LABELS_FR[type?.toLowerCase()] ?? type;
+}
+
 export function errorTypeColor(type: string): string {
   switch (type?.toLowerCase()) {
     case "overlap": return "#ef4444";

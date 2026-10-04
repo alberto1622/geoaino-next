@@ -6088,5 +6088,36 @@ bureau est présentée comme utilisable sans réseau.
 
 ---
 
+## 72. Outil de mesure : distance et surface géodésiques, pas planes
+
+**Problème métier** : les agents comparent à l'écran une parcelle à son plan
+ou mesurent l'écart entre deux limites. Ils ont besoin d'un outil de mesure
+comme dans QGIS ou ArcGIS, sur la carte d'analyse (`/map/[id]`).
+
+**Cause technique** : la carte affiche des coordonnées WGS84 (degrés). Une
+distance ou une surface calculée directement sur des degrés n'a pas de sens :
+un degré de longitude ne mesure pas la même chose qu'un degré de latitude.
+
+**Solution** (`fichier · fonction`) : `lib/measure.ts · lengthMeters`
+(haversine) et `areaSquareMeters` (aire sphérique, méthode de Chamberlain et
+Duquette), sur une sphère de rayon moyen 6 371 008,8 m. Ce sont les mêmes
+formules que `turf.length` et `turf.area` (turf 7), sans embarquer turf côté
+client. `MapLibreMap.tsx` passe en mode mesure via `measureMode` : un clic
+ajoute un point au lieu d'identifier une parcelle, le double-clic ne zoome
+plus, et Échap quitte le mode.
+
+**Pourquoi (pièges inclus)** :
+- **Validé contre turf** : écart nul en longueur comme en surface, sur un
+  tracé à Dakar.
+- **Écart avec l'UTM** : sur ce même rectangle de 0,58 km², l'aire calculée
+  en UTM 28N est inférieure de 0,27 %. C'est l'effet du facteur d'échelle de
+  la projection, normal et sans conséquence pour une mesure à l'écran. Pour
+  une surface **officielle**, la référence reste le calcul PostGIS en
+  EPSG:32628 (`ST_Area(ST_Transform(geom, 32628))`).
+- **Rayon** : turf 7 utilise le rayon moyen et non le rayon équatorial
+  (6 378 137 m). Avec ce dernier, l'écart montait à 0,22 %.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

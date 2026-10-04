@@ -14,7 +14,7 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, AreaChart, Area, CartesianGrid,
 } from "recharts";
-import { toNum } from "@/lib/utils";
+import { toNum, errorTypeLabel } from "@/lib/utils";
 
 const ERROR_COLORS: Record<string, string> = {
   OVERLAP: "#ef4444", GAP: "#f59e0b", SLIVER: "#a855f7",
@@ -112,7 +112,7 @@ export default function DashboardClient({ user, stats, period, selectedAnalysisI
   );
 
   const pieData = Object.entries(stats.errorsByType).map(([type, count]) => ({
-    name: type,
+    name: errorTypeLabel(type),
     value: count,
     color: ERROR_COLORS[type] || "#6b7280",
   }));

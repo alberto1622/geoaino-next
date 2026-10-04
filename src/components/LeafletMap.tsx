@@ -1,5 +1,6 @@
 "use client";
 import "leaflet/dist/leaflet.css";
+import { errorTypeLabel } from "@/lib/utils";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { attachLeafletBasemap } from "@/lib/basemap";
 import { BasemapSwitcher } from "@/components/map/BasemapSwitcher";
@@ -341,7 +342,7 @@ export default function LeafletMap({ geoJson, errors, selectedErrorId, onFeature
           { pane: "errorGeomPane", style: () => style }
         );
         lyr.bindPopup(
-          `<div style="font-family:monospace;font-size:11px;max-width:220px"><b style="color:${color}">${err.errorType}</b> [${err.severity}]<br/>NICAD: ${err.nicad1 || "?"}<br/>${err.description?.slice(0, 100) || ""}${err.area ? `<br/>Surface: ${err.area.toFixed(2)} m²` : ""}</div>`,
+          `<div style="font-family:monospace;font-size:11px;max-width:220px"><b style="color:${color}">${errorTypeLabel(err.errorType)}</b> [${err.severity}]<br/>NICAD: ${err.nicad1 || "?"}<br/>${err.description?.slice(0, 100) || ""}${err.area ? `<br/>Surface: ${err.area.toFixed(2)} m²` : ""}</div>`,
           { autoPan: false }
         );
         lyr.addTo(map);

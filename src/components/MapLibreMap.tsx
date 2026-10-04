@@ -9,6 +9,7 @@ import { errorTypeColor } from "@/lib/utils";
 import { useBasemapStyle } from "@/lib/basemap";
 import { CursorCoordinates, useCursorStore } from "@/components/map/CursorCoordinates";
 import { BasemapSwitcher } from "@/components/map/BasemapSwitcher";
+import { lengthMeters, areaSquareMeters, formatLength, formatArea, type LngLat } from "@/lib/measure";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -72,6 +73,13 @@ interface Props {
   deletedNicads?: string[];
   /** Niveaux de limites administratives actifs (régions/départements/communes, référentiel national). */
   adminLevels?: AdminLevel[];
+  /** Liste de couches (panneau « Couches ») : visibilité/opacité par groupe. */
+  parcellesVisible?: boolean;
+  parcellesOpacity?: number;
+  erreursVisible?: boolean;
+  conformesVisible?: boolean;
+  /** Outil de mesure actif (clics = points de mesure au lieu d'identifier une parcelle). */
+  measureMode?: MeasureMode;
 }
 
 /** Couleur des parcelles sans section (orange, distinct des types d'erreur). */
@@ -200,7 +208,9 @@ function computeBbox(features: unknown[]): [[number, number], [number, number]] 
   return found ? [[w, s], [e, n]] : null;
 }
 
-export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, errors, selectedErrorId, blinkIntense = false, onFeatureClick, selectedNicads = [], searchedNicads = [], focusTarget, conformeHighlight = false, nonConformeNicads = [], occurrences = [], occurrencesBounds = null, occurrenceEditMode = false, onOccurrenceKeep, showSections = false, sansSectionHighlight = false, deletedNicads = [], adminLevels = [] }: Props) {
+export type MeasureMode = "distance" | "surface" | null;
+
+export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, errors, selectedErrorId, blinkIntense = false, onFeatureClick, selectedNicads = [], searchedNicads = [], focusTarget, conformeHighlight = false, nonConformeNicads = [], occurrences = [], occurrencesBounds = null, occurrenceEditMode = false, onOccurrenceKeep, showSections = false, sansSectionHighlight = false, deletedNicads = [], adminLevels = [], parcellesVisible = true, parcellesOpacity = 0.22, erreursVisible = true, conformesVisible = true, measureMode = null }: Props) {
   const mapRef = useRef<MapRef>(null);
   const blinkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const onClickRef = useRef(onFeatureClick);
@@ -506,6 +516,41 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
     setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, html: sectionRow + rows });
   }, []);
 
+  // ── Outil de mesure ───────────────────────────────────────────────────────
+  // Points rattachés au mode qui les a saisis : changer de mode repart de zéro
+  // sans effet de synchronisation.
+  const [measure, setMeasure] = useState<{ mode: MeasureMode; pts: LngLat[] }>({ mode: null, pts: [] });
+  const measurePts = useMemo(() => (measureMode && measure.mode === measureMode ? measure.pts : []), [measure, measureMode]);
+  const handleMeasureClick = useCallback(
+    (e: MapLayerMouseEvent) => {
+      setMeasure((m) => ({
+        mode: measureMode,
+        pts: [...(m.mode === measureMode ? m.pts : []), [e.lngLat.lng, e.lngLat.lat] as LngLat],
+      }));
+    },
+    [measureMode],
+  );
+  const measureFc = useMemo<GeoJSON.FeatureCollection>(() => {
+    const features: GeoJSON.Feature[] = measurePts.map((c) => ({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: c } }));
+    if (measurePts.length >= 2) {
+      const line = measureMode === "surface" && measurePts.length >= 3 ? [...measurePts, measurePts[0]] : measurePts;
+      features.push({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: line } });
+    }
+    if (measureMode === "surface" && measurePts.length >= 3) {
+      features.push({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [[...measurePts, measurePts[0]]] } });
+    }
+    return { type: "FeatureCollection", features };
+  }, [measurePts, measureMode]);
+  const measureValue =
+    measureMode === "distance"
+      ? measurePts.length >= 2 ? formatLength(lengthMeters(measurePts)) : null
+      : measureMode === "surface" && measurePts.length >= 3
+        ? formatArea(areaSquareMeters(measurePts))
+        : null;
+  const measurePerimeter =
+    measureMode === "surface" && measurePts.length >= 3 ? formatLength(lengthMeters([...measurePts, measurePts[0]])) : null;
+  const errVis = erreursVisible ? "visible" : "none";
+
   return (
     <div className="w-full h-full relative">
     <MapErrorBoundary>
@@ -515,11 +560,12 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
         initialViewState={INITIAL_VIEW}
         style={{ width: "100%", height: "100%" }}
         mapStyle={basemapStyle}
-        onClick={handleClick}
-        interactiveLayerIds={["parcelles-fill"]}
+        onClick={measureMode ? handleMeasureClick : handleClick}
+        interactiveLayerIds={measureMode ? [] : ["parcelles-fill"]}
+        doubleClickZoom={!measureMode}
         onMouseEnter={() => setCursor("pointer")}
         onMouseLeave={() => setCursor("grab")}
-        cursor={cursor}
+        cursor={measureMode ? "crosshair" : cursor}
         onLoad={() => setMapReady(true)}
         onMouseMove={(e) => cursorStore.set(e.lngLat)}
         onMouseOut={() => cursorStore.set(null)}
@@ -533,8 +579,8 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
 
         {/* ── Parcelles (tuiles vectorielles MVT, couche « parcelles ») ── */}
         <Source id="parcelles" type="vector" tiles={[tilesUrl]} minzoom={0} maxzoom={20}>
-          <Layer id="parcelles-fill" source-layer="parcelles" type="fill" paint={{ "fill-color": "#6b7280", "fill-opacity": 0.22 }} filter={notDeletedFilter} />
-          <Layer id="parcelles-line" source-layer="parcelles" type="line" paint={{ "line-color": "#9ca3af", "line-width": 0.8, "line-opacity": 0.6 }} filter={notDeletedFilter} />
+          <Layer id="parcelles-fill" source-layer="parcelles" type="fill" layout={{ visibility: parcellesVisible ? "visible" : "none" }} paint={{ "fill-color": "#6b7280", "fill-opacity": parcellesOpacity }} filter={notDeletedFilter} />
+          <Layer id="parcelles-line" source-layer="parcelles" type="line" layout={{ visibility: parcellesVisible ? "visible" : "none" }} paint={{ "line-color": "#9ca3af", "line-width": 0.8, "line-opacity": Math.min(1, 0.6 * (parcellesOpacity / 0.22)) }} filter={notDeletedFilter} />
         </Source>
 
         {/* ── Limites de sections (table limite_section) — contours rouges ── */}
@@ -574,6 +620,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
           <Layer
             id="error-geoms-fill"
             type="fill"
+            layout={{ visibility: errVis }}
             paint={{
               "fill-color": ["coalesce", ["get", "_color"], "#ef4444"] as any,
               "fill-opacity": ["coalesce", ["get", "_opacity"], 0.22] as any,
@@ -582,6 +629,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
           <Layer
             id="error-geoms-line"
             type="line"
+            layout={{ visibility: errVis }}
             paint={{
               "line-color": ["coalesce", ["get", "_color"], "#ef4444"] as any,
               "line-width": ["case", ["coalesce", ["get", "_selected"], false], 2.5, 1.2] as any,
@@ -621,7 +669,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
         {/* ── Parcelles conformes (vert) — surlignage optionnel ──
             Conforme = NICAD valide (≥ 8 car., pas une valeur « vide ») ET absent de
             la liste des NICAD en erreur. Même définition que le décompte « conformes ». ── */}
-        {conformeHighlight && (
+        {conformeHighlight && conformesVisible && (
           <>
             <Layer
               id="conforme-fill"
@@ -653,6 +701,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
           source="parcelles"
           source-layer="parcelles"
           type="fill"
+          layout={{ visibility: errVis }}
           beforeId="error-type-top"
           paint={{ "fill-color": errorTypeColor("missing_nicad"), "fill-opacity": 0.5 }}
           filter={["all", ["==", ["get", "_nstat"], "missing"], notDeletedFilter] as any}
@@ -662,6 +711,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
           source="parcelles"
           source-layer="parcelles"
           type="fill"
+          layout={{ visibility: errVis }}
           beforeId="error-type-top"
           paint={{ "fill-color": errorTypeColor("short_nicad"), "fill-opacity": 0.5 }}
           filter={["all", ["==", ["get", "_nstat"], "short"], notDeletedFilter] as any}
@@ -701,6 +751,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
             source="parcelles"
             source-layer="parcelles"
             type="fill"
+            layout={{ visibility: errVis }}
             beforeId="error-type-top"
             paint={{ "fill-color": errorTypeColor(type), "fill-opacity": 0.45 }}
             filter={["in", ["get", "_nicad"], ["literal", nicadsByType[type] ?? []]] as any}
@@ -746,6 +797,15 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
           paint={{ "line-color": "#eab308", "line-width": 3, "line-opacity": 1 }}
           filter={["in", ["get", "_nicad"], ["literal", searchedNicads]] as any}
         />
+
+        {/* ── Outil de mesure (au-dessus de tout) ── */}
+        {measureMode && measurePts.length > 0 && (
+          <Source id="measure" type="geojson" data={measureFc}>
+            <Layer id="measure-fill" type="fill" filter={["==", ["geometry-type"], "Polygon"] as any} paint={{ "fill-color": "#f59e0b", "fill-opacity": 0.18 }} />
+            <Layer id="measure-line" type="line" filter={["==", ["geometry-type"], "LineString"] as any} paint={{ "line-color": "#f59e0b", "line-width": 2.5, "line-dasharray": [2, 1] }} />
+            <Layer id="measure-pts" type="circle" filter={["==", ["geometry-type"], "Point"] as any} paint={{ "circle-radius": 4, "circle-color": "#ffffff", "circle-stroke-color": "#f59e0b", "circle-stroke-width": 2 }} />
+          </Source>
+        )}
 
         {/* ── Annotations des occurrences d'un doublon (centroïdes numérotés) ──
             En mode édition, chaque marqueur est cliquable : « conserver celle-ci »
@@ -855,6 +915,42 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
       </RMap>
       )}
     </MapErrorBoundary>
+
+      {/* ── Résultat de la mesure ── */}
+      {measureMode && (
+        <div className="absolute left-2 top-12 z-10 w-64 rounded-lg border border-border bg-card/95 p-2.5 text-xs shadow-lg backdrop-blur-sm" role="status" aria-live="polite">
+          <div className="font-semibold">{measureMode === "distance" ? "Mesure de distance" : "Mesure de surface"}</div>
+          {measureValue ? (
+            <>
+              <div className="mt-1 font-mono text-sm text-primary">{measureValue}</div>
+              {measurePerimeter && <div className="font-mono text-muted-foreground">Périmètre : {measurePerimeter}</div>}
+            </>
+          ) : (
+            <div className="mt-1 text-muted-foreground">
+              Cliquez sur la carte pour placer {measureMode === "distance" ? "au moins 2 points" : "au moins 3 sommets"}.
+            </div>
+          )}
+          {measurePts.length > 0 && (
+            <div className="mt-2 flex gap-1.5">
+              <button
+                type="button"
+                onClick={() => setMeasure({ mode: measureMode, pts: measurePts.slice(0, -1) })}
+                className="rounded border border-border px-2 py-0.5 hover:bg-muted"
+              >
+                Retirer le dernier point
+              </button>
+              <button
+                type="button"
+                onClick={() => setMeasure({ mode: measureMode, pts: [] })}
+                className="rounded border border-border px-2 py-0.5 hover:bg-muted"
+              >
+                Effacer
+              </button>
+            </div>
+          )}
+          <div className="mt-1.5 text-[10px] text-muted-foreground">Mesure géodésique (WGS84) · {measurePts.length} point(s)</div>
+        </div>
+      )}
 
       {/* ── Légende (petite, dynamique) ── */}
       <div className="pointer-events-none absolute bottom-3 right-3 z-10 max-w-[180px] rounded-lg border border-border/60 bg-background/90 p-2 text-[11px] shadow-md backdrop-blur">
