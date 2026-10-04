@@ -5,6 +5,7 @@ import type { MapRef, MapLayerMouseEvent } from "react-map-gl/maplibre";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { errorTypeColor, severityColor } from "@/lib/utils";
 import { useBasemapStyle } from "@/lib/basemap";
+import { CursorCoordinates, useCursorStore } from "@/components/map/CursorCoordinates";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -67,6 +68,7 @@ export default function ParcellesMapLibre({ selectedIds, errorsById, hiddenTypes
   const mapRef = useRef<MapRef | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const basemapStyle = useBasemapStyle();
+  const cursorStore = useCursorStore();
   const [cursor, setCursor] = useState("grab");
   const [popup, setPopup] = useState<{ lng: number; lat: number; html: string } | null>(null);
 
@@ -169,10 +171,13 @@ export default function ParcellesMapLibre({ selectedIds, errorsById, hiddenTypes
       onMouseLeave={() => setCursor("grab")}
       cursor={cursor}
       onLoad={() => setMapReady(true)}
+      onMouseMove={(e) => cursorStore.set(e.lngLat)}
+      onMouseOut={() => cursorStore.set(null)}
       attributionControl={{ compact: true }}
     >
       <NavigationControl position="top-right" showCompass={false} />
       <ScaleControl position="bottom-left" maxWidth={100} unit="metric" />
+      <CursorCoordinates store={cursorStore} className="bottom-9 left-2" />
 
       {selectedIds.map((id) => (
         <Source key={`parcelles-${id}`} id={`parcelles-${id}`} type="vector" tiles={[tilesUrlFor(id)]} minzoom={0} maxzoom={20}>

@@ -7,6 +7,7 @@ import { Component, useState, useEffect, useRef, useCallback, useMemo, type Reac
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { errorTypeColor } from "@/lib/utils";
 import { useBasemapStyle } from "@/lib/basemap";
+import { CursorCoordinates, useCursorStore } from "@/components/map/CursorCoordinates";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -210,6 +211,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
   // Fond de carte (local vectoriel, sinon OSM) : résolu avant d'afficher la carte
   // pour ne pas changer de style à chaud (ce qui rechargerait les couches).
   const basemapStyle = useBasemapStyle();
+  const cursorStore = useCursorStore();
   const [popup, setPopup] = useState<PopupState | null>(null);
   const [blinkOpacity, setBlinkOpacity] = useState(0);
   const [cursor, setCursor] = useState("grab");
@@ -518,11 +520,14 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
         onMouseLeave={() => setCursor("grab")}
         cursor={cursor}
         onLoad={() => setMapReady(true)}
+        onMouseMove={(e) => cursorStore.set(e.lngLat)}
+        onMouseOut={() => cursorStore.set(null)}
         onMoveEnd={(e) => setZoom(e.viewState.zoom)}
         attributionControl={{ compact: true }}
       >
         <NavigationControl position="top-right" showCompass={false} />
         <ScaleControl position="bottom-left" maxWidth={100} unit="metric" />
+        <CursorCoordinates store={cursorStore} className="bottom-9 left-2" />
 
         {/* ── Parcelles (tuiles vectorielles MVT, couche « parcelles ») ── */}
         <Source id="parcelles" type="vector" tiles={[tilesUrl]} minzoom={0} maxzoom={20}>

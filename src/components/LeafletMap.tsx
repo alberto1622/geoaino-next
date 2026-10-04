@@ -2,6 +2,7 @@
 import "leaflet/dist/leaflet.css";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { addLeafletBasemap } from "@/lib/basemap";
+import { CursorCoordinates, useCursorStore } from "@/components/map/CursorCoordinates";
 import { Layers } from "lucide-react";
 
 const ERROR_COLORS: Record<string, string> = {
@@ -52,6 +53,7 @@ export default function LeafletMap({ geoJson, errors, selectedErrorId, onFeature
   const mapRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapInstanceRef = useRef<any>(null);
+  const cursorStore = useCursorStore();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const adminLayerRefs = useRef<Record<AdminKey, any>>({ "1": null, "2": null, "3": null });
   const adminCacheRef = useRef<Record<AdminKey, unknown>>({ "1": null, "2": null, "3": null });
@@ -99,6 +101,10 @@ export default function LeafletMap({ geoJson, errors, selectedErrorId, onFeature
     const map = L.map(mapRef.current, { center: [14.6928, -17.4467], zoom: 10, zoomControl: true });
 
     void addLeafletBasemap(L, map);
+    // Coordonnées du curseur (bandeau UTM 28N / WGS84)
+    map.on("mousemove", (e: { latlng: { lat: number; lng: number } }) => cursorStore.set({ lng: e.latlng.lng, lat: e.latlng.lat }));
+    // `mouseleave` natif : le `mouseout` de Leaflet ne part pas toujours en quittant la carte.
+    map.getContainer().addEventListener("mouseleave", () => cursorStore.set(null));
 
     // Custom panes ensure correct Z-order regardless of add sequence
     map.createPane("parcelPane").style.zIndex = "340";        // neutral base parcels
@@ -112,7 +118,7 @@ export default function LeafletMap({ geoJson, errors, selectedErrorId, onFeature
 
     mapInstanceRef.current = map;
     return () => { map.remove(); mapInstanceRef.current = null; };
-  }, []);
+  }, [cursorStore]); // magasin stable (useState) : n'entraîne aucune réinitialisation
 
   // ── Toggle admin boundary layer ─────────────────────────────────────────────
   const toggleAdminLayer = useCallback(async (key: AdminKey) => {
@@ -358,6 +364,7 @@ export default function LeafletMap({ geoJson, errors, selectedErrorId, onFeature
   return (
     <div className="relative w-full h-full" style={{ minHeight: "400px" }}>
       <div ref={mapRef} className="w-full h-full" />
+      <CursorCoordinates store={cursorStore} className="bottom-2 left-2" />
 
       <div className="absolute top-3 right-3 z-[1000]">
         <div className="relative">

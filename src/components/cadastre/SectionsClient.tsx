@@ -3,6 +3,7 @@
 import "leaflet/dist/leaflet.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { addLeafletBasemap } from "@/lib/basemap";
+import { CursorCoordinates, useCursorStore } from "@/components/map/CursorCoordinates";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CadHistoryPanel } from "@/components/cadastre/CadHistoryPanel";
 import { JobProgressSteps, type JobProgressStep } from "@/components/import/JobProgressSteps";
@@ -290,6 +291,7 @@ const BATCH_ACTION_LABELS = {
 export default function SectionsClient() {
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
+  const cursorStore = useCursorStore();
   const resizeObsRef = useRef<ResizeObserver | null>(null);
   const LRef = useRef<any>(null);
   const sectionsLayerRef = useRef<any>(null);
@@ -439,6 +441,10 @@ export default function SectionsClient() {
       ]);
       void addLeafletBasemap(L, map);
       mapRef.current = map;
+      // Coordonnées du curseur (bandeau UTM 28N / WGS84)
+      map.on("mousemove", (e: { latlng: { lat: number; lng: number } }) => cursorStore.set({ lng: e.latlng.lng, lat: e.latlng.lat }));
+      // `mouseleave` natif : le `mouseout` de Leaflet ne part pas toujours en quittant la carte.
+      map.getContainer().addEventListener("mouseleave", () => cursorStore.set(null));
       map.on("zoomend", () => setMapZoom(map.getZoom()));
       // Le conteneur est dimensionné en flex (hauteur = espace restant de
       // l'écran) : Leaflet doit recalculer sa taille quand elle change.
@@ -457,7 +463,7 @@ export default function SectionsClient() {
         mapRef.current = null;
       }
     };
-  }, []);
+  }, [cursorStore]); // magasin stable (useState) : n'entraîne aucune réinitialisation
 
   const loadLatestHistoryEntry = useCallback(async () => {
     try {
@@ -2433,6 +2439,7 @@ export default function SectionsClient() {
             ref={mapEl}
             className="h-full min-h-125 w-full rounded-xl border border-border/60"
           />
+          <CursorCoordinates store={cursorStore} className="bottom-2 left-2" />
           {loadingData && (
             <div className="absolute right-3 top-3 rounded-lg bg-background/90 px-3 py-1.5 text-xs shadow">
               Chargement…

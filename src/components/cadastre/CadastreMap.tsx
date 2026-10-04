@@ -13,6 +13,7 @@ import { parcellesBySyscol, parcelleByCoords } from "@/app/cadastre/_actions/car
 import { NicadDisplay } from "@/components/cadastre/NicadDisplay";
 import { SENEGAL_BBOX } from "@/lib/senegal-bounds";
 import { addLeafletBasemap } from "@/lib/basemap";
+import { CursorCoordinates, useCursorStore } from "@/components/map/CursorCoordinates";
 
 type Version = "2013" | "2026";
 
@@ -121,6 +122,7 @@ export default function CadastreMap() {
   const mapEl = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null);
+  const cursorStore = useCursorStore();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const layerRef = useRef<any>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -152,6 +154,10 @@ export default function CadastreMap() {
       const map = L.map(mapEl.current).fitBounds(SENEGAL_LEAFLET_BOUNDS);
       void addLeafletBasemap(L, map);
       mapRef.current = map;
+      // Coordonnées du curseur (bandeau UTM 28N / WGS84)
+      map.on("mousemove", (e: { latlng: { lat: number; lng: number } }) => cursorStore.set({ lng: e.latlng.lng, lat: e.latlng.lat }));
+      // `mouseleave` natif : le `mouseout` de Leaflet ne part pas toujours en quittant la carte.
+      map.getContainer().addEventListener("mouseleave", () => cursorStore.set(null));
 
       // Identification au clic
       map.on("click", async (e: { latlng: { lat: number; lng: number } }) => {
@@ -178,7 +184,7 @@ export default function CadastreMap() {
         mapRef.current = null;
       }
     };
-  }, []);
+  }, [cursorStore]); // magasin stable (useState) : n'entraîne aucune réinitialisation
 
   // Changer de millésime : réinitialiser la sélection et la couche affichée
   // (la région par défaut sera re-résolue par l'effet ci-dessous)
@@ -505,6 +511,7 @@ export default function CadastreMap() {
         </div>
         <div className="relative">
           <div ref={mapEl} className="h-[600px] w-full rounded-xl border border-border/60" />
+          <CursorCoordinates store={cursorStore} className="bottom-2 left-2" />
           {loading && (
             <div className="absolute right-3 top-3 rounded-lg bg-background/90 px-3 py-1.5 text-xs shadow">
               Chargement des parcelles…
