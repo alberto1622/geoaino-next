@@ -29,6 +29,7 @@ import {
   ChevronLeft,
   Upload,
   Combine,
+  Pencil,
 } from "lucide-react";
 import { useUndoHistory, useUndoRedoShortcuts } from "@/hooks/use-undo-history";
 import { Button } from "@/components/ui/button";
@@ -47,6 +48,8 @@ import { LayersPanel } from "@/components/map/LayersPanel";
 import { geometryAreaSquareMeters, formatArea } from "@/lib/measure";
 import { MapToolsBar } from "@/components/map/MapToolsBar";
 import { useMeasureMode } from "@/lib/use-measure";
+import { MAX_SELECTION, type SelectOp } from "@/lib/map-selection";
+import type { SelectedFeature } from "@/components/MapLibreMap";
 import { toast } from "sonner";
 import { toNum, errorTypeColor, errorTypeLabel } from "@/lib/utils";
 import { useAnalysisUpdateListener } from "@/lib/analyses/live-refresh";
@@ -312,6 +315,50 @@ const SEVERITY_LABELS: Record<string, string> = {
   LOW: "Faible",
 };
 
+// Édition du NICAD d'une parcelle sélectionnée (barre d'actions de l'outil
+// « Sélectionner »). Remonté via `key` quand le NICAD courant change.
+function SelectionNicadEditor({
+  current,
+  onSubmit,
+}: {
+  current: string;
+  onSubmit: (nicad: string) => void;
+}) {
+  const [value, setValue] = useState(current);
+  const trimmed = value.trim();
+  const changed = trimmed !== "" && trimmed !== current;
+  return (
+    <form
+      className="flex items-center gap-1"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (changed) onSubmit(trimmed);
+      }}
+    >
+      <label htmlFor="selection-nicad" className="sr-only">
+        NICAD de la parcelle sélectionnée
+      </label>
+      <input
+        id="selection-nicad"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        maxLength={32}
+        placeholder="NICAD"
+        className="h-6 w-36 rounded border border-border bg-background px-1.5 font-mono text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+      />
+      <button
+        type="submit"
+        disabled={!changed}
+        title="Modifier le NICAD"
+        className="flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        <Pencil className="h-3.5 w-3.5" />
+        Modifier
+      </button>
+    </form>
+  );
+}
+
 // Cellule d'action « mode édition doublon » : réassigner le NICAD de cette
 // occurrence (input local) ou la conserver en supprimant les autres. L'input est
 // pré-rempli au NICAD courant et remis à jour quand celui-ci change (rename/suppr.).
@@ -576,6 +623,8 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   const [erreursVisible, setErreursVisible] = useState(true);
   const [conformesVisible, setConformesVisible] = useState(true);
   const [measureMode, setMeasureMode] = useMeasureMode(); // Échap pour quitter
+  // Outil « Sélectionner » (clic / rectangle, Maj ajoute, Ctrl retire).
+  const [selectMode, setSelectMode] = useState(false);
   // Masque/affiche le panneau latéral gauche pour libérer de l'espace carte.
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   // Largeur du panneau latéral (redimensionnable par glisser sur son bord droit).
@@ -1093,6 +1142,72 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     ],
   );
 
+  // Outil « Sélectionner » : la sélection carte EST la table attributaire,
+  // toutes lignes cochées, de sorte que les actions (supprimer, fusionner,
+  // modifier le NICAD) s'appliquent directement. Clé d'identité : NICAD, sinon
+  // le point intérieur (parcelle sans NICAD).
+  const handleSelectFeatures = useCallback(
+    (items: SelectedFeature[], op: SelectOp) => {
+      if (items.length > MAX_SELECTION) {
+        toast.warning(
+          `Sélection limitée à ${MAX_SELECTION} parcelles — zoomez ou réduisez le rectangle.`,
+        );
+        items = items.slice(0, MAX_SELECTION);
+      }
+      const keyOf = (r: Record<string, unknown>) =>
+        rowNicad(r) ||
+        (Array.isArray(r._point) ? `pt:${(r._point as number[]).join(",")}` : "");
+      const picked = items.map(({ props, point }) => {
+        const clean: Record<string, unknown> = Object.fromEntries(
+          Object.entries(props).filter(([k]) => !k.startsWith("_")),
+        );
+        if (point) clean._point = point;
+        return clean;
+      });
+      // Les lignes d'un groupe doublon (« Occurrence n ») ne sont pas une
+      // sélection carte : on repart d'une sélection vide.
+      const base =
+        op === "replace" ||
+        tableRows.some((r) => String(r._role ?? "").startsWith("Occurrence"))
+          ? []
+          : tableRows;
+      let next: Record<string, unknown>[];
+      if (op === "remove") {
+        const drop = new Set(picked.map(keyOf).filter(Boolean));
+        next = base.filter((r) => !drop.has(keyOf(r)));
+      } else {
+        const have = new Set(base.map(keyOf).filter(Boolean));
+        next = [...base];
+        for (const r of picked) {
+          const k = keyOf(r);
+          if (k && have.has(k)) continue;
+          if (k) have.add(k);
+          next.push(r);
+        }
+        if (next.length > MAX_SELECTION) {
+          toast.warning(`Sélection limitée à ${MAX_SELECTION} parcelles.`);
+          next = next.slice(0, MAX_SELECTION);
+        }
+      }
+      clearDuplicateFocus();
+      setSearchedNicad(null);
+      setTableRows(
+        next.map((r, i) => ({
+          ...r,
+          _role: next.length === 1 ? "Sélectionné" : `P${i + 1}`,
+        })),
+      );
+      setSelectedRows(new Set(next.map((_, i) => i)));
+      if (next.length > 0) setTableOpen(true);
+    },
+    [tableRows, clearDuplicateFocus],
+  );
+
+  const clearSelection = useCallback(() => {
+    setTableRows([]);
+    setSelectedRows(new Set());
+  }, []);
+
   // Select a duplicate group → zoom sur toutes les occurrences + annotations +
   // table de comparaison. Le blink intense reste piloté par `selectedError`.
   const selectDuplicateGroup = useCallback(
@@ -1418,6 +1533,26 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
     [mergeRows, selectedRows],
   );
 
+  // Raccourcis de l'outil « Sélectionner » (comme QGIS) : Échap désélectionne,
+  // puis quitte l'outil ; Suppr supprime la sélection (après confirmation).
+  useEffect(() => {
+    if (!selectMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (confirmState) return; // la boîte de confirmation gère ses touches
+      if (e.key === "Escape") {
+        if (tableRows.length > 0) clearSelection();
+        else setSelectMode(false);
+      } else if (e.key === "Delete" && selectedRows.size > 0) {
+        e.preventDefault();
+        handleDeleteSelectedParcels();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectMode, confirmState, tableRows.length, selectedRows.size, clearSelection, handleDeleteSelectedParcels]);
+
   // Mode édition doublons : conserve l'occurrence `keepIndex` et supprime toutes
   // les autres occurrences du même NICAD (résolution du doublon en un clic).
   const handleKeepOnlyOccurrence = useCallback(
@@ -1533,7 +1668,11 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
       if (target === current) return;
       setConfirmState({
         title: "Réassigner le NICAD",
-        description: `Réassigner le NICAD de l'occurrence ${index + 1} : « ${current || "—"} » → « ${target} » ?`,
+        description: `Réassigner le NICAD ${
+          String(row._role ?? "").startsWith("Occurrence")
+            ? `de l'occurrence ${index + 1}`
+            : "de la parcelle"
+        } : « ${current || "—"} » → « ${target} » ?`,
         confirmLabel: "Réassigner",
         run: () => void performRenameOccurrence(index, newNicad),
       });
@@ -3049,6 +3188,8 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
               erreursVisible={erreursVisible}
               conformesVisible={conformesVisible}
               measureMode={measureMode}
+              selectMode={selectMode}
+              onSelectFeatures={handleSelectFeatures}
             />
             {/* Annuler/rétablir — coin haut-gauche de la carte, sur la même
                 ligne que le panneau latéral, juste à sa droite. */}
@@ -3058,6 +3199,8 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
               onToggleLayers={setLayersOpen}
               measureMode={measureMode}
               onMeasureMode={setMeasureMode}
+              selectMode={selectMode}
+              onSelectMode={setSelectMode}
             >
               <button
                 onClick={() => void performUndo()}
@@ -3076,6 +3219,68 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                 <Redo2 className="w-3.5 h-3.5" />
               </button>
             </MapToolsBar>
+            {/* Barre d'actions de la sélection (outil « Sélectionner »). */}
+            {selectMode && selectedRows.size > 0 && (
+              <div
+                role="toolbar"
+                aria-label="Actions sur la sélection"
+                className="absolute bottom-16 left-1/2 z-[1000] flex max-w-[calc(100%-1rem)] -translate-x-1/2 flex-wrap items-center gap-1 rounded-lg border border-border bg-card/95 px-2 py-1 text-xs shadow-lg backdrop-blur-sm"
+              >
+                <span className="px-1 font-medium text-foreground">
+                  {selectedRows.size} parcelle{selectedRows.size > 1 ? "s" : ""}{" "}
+                  sélectionnée{selectedRows.size > 1 ? "s" : ""}
+                </span>
+                <span className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
+                {selectedRows.size === 1 && (
+                  <SelectionNicadEditor
+                    key={`sel-nicad-${rowNicad(tableRows[Array.from(selectedRows)[0]] ?? {})}`}
+                    current={rowNicad(tableRows[Array.from(selectedRows)[0]] ?? {})}
+                    onSubmit={(nicad) =>
+                      handleRenameOccurrence(Array.from(selectedRows)[0], nicad)
+                    }
+                  />
+                )}
+                {selectedRows.size >= 2 && (
+                  <button
+                    type="button"
+                    onClick={handleMergeSelectedParcels}
+                    disabled={mergingRows}
+                    className="flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Combine className="h-3.5 w-3.5" />
+                    Fusionner
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleDeleteSelectedParcels}
+                  disabled={deletingRows}
+                  title="Supprimer la sélection (Suppr)"
+                  className="flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Supprimer
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTableOpen(true)}
+                  title="Ouvrir la table attributaire"
+                  className="flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground"
+                >
+                  <Table2 className="h-3.5 w-3.5" />
+                  Attributs
+                </button>
+                <button
+                  type="button"
+                  onClick={clearSelection}
+                  title="Désélectionner (Échap)"
+                  aria-label="Désélectionner"
+                  className="flex cursor-pointer items-center rounded px-1 py-1 text-muted-foreground transition-colors hover:bg-secondary/40 hover:text-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
             {layersOpen && (
               <LayersPanel
                 className="top-12 left-2"

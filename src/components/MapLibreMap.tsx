@@ -12,6 +12,7 @@ import { BasemapSwitcher } from "@/components/map/BasemapSwitcher";
 import { MeasurePanel } from "@/components/map/MeasurePanel";
 import { MeasureLayers } from "@/components/map/MeasureLayers";
 import { useMeasurePoints, type MeasureMode } from "@/lib/use-measure";
+import { interiorPoint, MAX_SELECTION, selectOpFromEvent, SELECT_COLOR, SELECT_CURSOR, type SelectOp } from "@/lib/map-selection";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -82,7 +83,20 @@ interface Props {
   conformesVisible?: boolean;
   /** Outil de mesure actif (clics = points de mesure au lieu d'identifier une parcelle). */
   measureMode?: MeasureMode;
+  /** Outil « Sélectionner » actif : clic / rectangle = sélection (Maj ajoute, Ctrl retire). */
+  selectMode?: boolean;
+  /** Parcelles touchées par un clic ou un rectangle de sélection, avec l'opération demandée. */
+  onSelectFeatures?: (items: SelectedFeature[], op: SelectOp) => void;
 }
+
+/** Parcelle sélectionnée : propriétés de tuile + point intérieur (localisateur serveur). */
+export interface SelectedFeature {
+  props: Record<string, unknown>;
+  point: [number, number] | null;
+}
+
+/** En deçà de ce déplacement (px), un appui-relâché est un clic, pas un rectangle. */
+const SELECT_CLICK_TOLERANCE = 4;
 
 /** Couleur des parcelles sans section (orange, distinct des types d'erreur). */
 const SANS_SECTION_COLOR = "#f97316";
@@ -212,11 +226,13 @@ function computeBbox(features: unknown[]): [[number, number], [number, number]] 
 
 export type { MeasureMode } from "@/lib/use-measure";
 
-export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, errors, selectedErrorId, blinkIntense = false, onFeatureClick, selectedNicads = [], searchedNicads = [], focusTarget, conformeHighlight = false, nonConformeNicads = [], occurrences = [], occurrencesBounds = null, occurrenceEditMode = false, onOccurrenceKeep, showSections = false, sansSectionHighlight = false, deletedNicads = [], adminLevels = [], parcellesVisible = true, parcellesOpacity = 0.22, erreursVisible = true, conformesVisible = true, measureMode = null }: Props) {
+export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, errors, selectedErrorId, blinkIntense = false, onFeatureClick, selectedNicads = [], searchedNicads = [], focusTarget, conformeHighlight = false, nonConformeNicads = [], occurrences = [], occurrencesBounds = null, occurrenceEditMode = false, onOccurrenceKeep, showSections = false, sansSectionHighlight = false, deletedNicads = [], adminLevels = [], parcellesVisible = true, parcellesOpacity = 0.22, erreursVisible = true, conformesVisible = true, measureMode = null, selectMode = false, onSelectFeatures }: Props) {
   const mapRef = useRef<MapRef>(null);
   const blinkTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const onClickRef = useRef(onFeatureClick);
   useEffect(() => { onClickRef.current = onFeatureClick; });
+  const onSelectRef = useRef(onSelectFeatures);
+  useEffect(() => { onSelectRef.current = onSelectFeatures; });
   // Cache des emprises par NICAD résolues côté serveur (évite de re-fetcher).
   const boundsCacheRef = useRef<Map<string, [[number, number], [number, number]] | null>>(new Map());
 
@@ -526,6 +542,69 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
   );
   const errVis = erreursVisible ? "visible" : "none";
 
+  // ── Outil « Sélectionner » (clic ou rectangle, comme ArcGIS / QGIS) ──────
+  // Le glisser trace un rectangle au lieu de déplacer la carte (dragPan et
+  // boxZoom coupés en mode sélection ; la molette zoome toujours). Les
+  // parcelles sont lues dans les tuiles AFFICHÉES (queryRenderedFeatures) :
+  // une couche masquée ou une parcelle supprimée n'est jamais sélectionnée.
+  const [selBox, setSelBox] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const handleSelectMouseDown = useCallback((e: MapLayerMouseEvent) => {
+    const map = mapRef.current?.getMap();
+    const oe = e.originalEvent as MouseEvent;
+    if (!map || oe.button !== 0) return;
+    const op = selectOpFromEvent(oe);
+    const rect = map.getCanvasContainer().getBoundingClientRect();
+    const start = { x: e.point.x, y: e.point.y };
+    const toLocal = (ev: MouseEvent) => ({ x: ev.clientX - rect.left, y: ev.clientY - rect.top });
+    const onMove = (ev: MouseEvent) => {
+      const p = toLocal(ev);
+      setSelBox({ x0: start.x, y0: start.y, x1: p.x, y1: p.y });
+    };
+    const onUp = (ev: MouseEvent) => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      setSelBox(null);
+      const end = toLocal(ev);
+      const isClick =
+        Math.abs(end.x - start.x) < SELECT_CLICK_TOLERANCE && Math.abs(end.y - start.y) < SELECT_CLICK_TOLERANCE;
+      if (!map.getLayer("parcelles-fill")) return;
+      const items: SelectedFeature[] = [];
+      if (isClick) {
+        // Clic : l'entité du dessus seulement (parcelles superposées), localisée
+        // par le point cliqué lui-même (intérieur par construction).
+        const feat = map.queryRenderedFeatures([start.x, start.y], { layers: ["parcelles-fill"] })[0];
+        if (feat?.properties) {
+          const ll = map.unproject([start.x, start.y]);
+          items.push({ props: feat.properties as Record<string, unknown>, point: [ll.lng, ll.lat] });
+        }
+      } else {
+        const feats = map.queryRenderedFeatures(
+          [
+            [Math.min(start.x, end.x), Math.min(start.y, end.y)],
+            [Math.max(start.x, end.x), Math.max(start.y, end.y)],
+          ],
+          { layers: ["parcelles-fill"] },
+        );
+        // Une parcelle à cheval sur plusieurs tuiles revient en plusieurs
+        // morceaux : dédoublonnage par NICAD quand il existe.
+        const seen = new Set<string>();
+        for (const f of feats) {
+          const props = (f.properties ?? {}) as Record<string, unknown>;
+          const nicad = String(props._nicad ?? "");
+          if (nicad) {
+            if (seen.has(nicad)) continue;
+            seen.add(nicad);
+          }
+          items.push({ props, point: interiorPoint(f.geometry) });
+          if (items.length > MAX_SELECTION) break;
+        }
+      }
+      onSelectRef.current?.(items, op);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, []);
+
   return (
     <div className="w-full h-full relative">
     <MapErrorBoundary>
@@ -535,12 +614,15 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
         initialViewState={INITIAL_VIEW}
         style={{ width: "100%", height: "100%" }}
         mapStyle={basemapStyle}
-        onClick={measureMode ? handleMeasureClick : handleClick}
-        interactiveLayerIds={measureMode ? [] : ["parcelles-fill"]}
-        doubleClickZoom={!measureMode}
+        onClick={measureMode ? handleMeasureClick : selectMode ? undefined : handleClick}
+        onMouseDown={selectMode && !measureMode ? handleSelectMouseDown : undefined}
+        interactiveLayerIds={measureMode || selectMode ? [] : ["parcelles-fill"]}
+        doubleClickZoom={!measureMode && !selectMode}
+        dragPan={!selectMode || !!measureMode}
+        boxZoom={!selectMode}
         onMouseEnter={() => setCursor("pointer")}
         onMouseLeave={() => setCursor("grab")}
-        cursor={measureMode ? "crosshair" : cursor}
+        cursor={measureMode ? "crosshair" : selectMode ? SELECT_CURSOR : cursor}
         onLoad={() => setMapReady(true)}
         onMouseMove={(e) => cursorStore.set(e.lngLat)}
         onMouseOut={() => cursorStore.set(null)}
@@ -884,6 +966,22 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
       </RMap>
       )}
     </MapErrorBoundary>
+
+      {/* ── Rectangle de sélection en cours ── */}
+      {selBox && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute z-10"
+          style={{
+            left: Math.min(selBox.x0, selBox.x1),
+            top: Math.min(selBox.y0, selBox.y1),
+            width: Math.abs(selBox.x1 - selBox.x0),
+            height: Math.abs(selBox.y1 - selBox.y0),
+            border: `1.5px dashed ${SELECT_COLOR}`,
+            background: `${SELECT_COLOR}1f`,
+          }}
+        />
+      )}
 
       {/* ── Résultat de la mesure ── */}
       <MeasurePanel mode={measureMode} pts={measure.pts} onUndo={measure.undo} onClear={measure.clear} className="left-2 top-12" />

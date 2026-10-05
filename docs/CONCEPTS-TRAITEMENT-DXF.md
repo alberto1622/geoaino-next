@@ -6190,5 +6190,50 @@ lieu de 8–9,4 s ; réponse de 4,4 Mo au lieu de 6,4 Mo.
 
 ---
 
+## 74. Sélection multiple sur la carte d'analyse (outil « Sélectionner »)
+
+**Problème métier** : corriger un lot de parcelles (supprimer des doublons,
+fusionner des morceaux, corriger un NICAD) obligeait à cliquer les parcelles
+une à une. Le clic, lui, ouvrait aussi la fiche et le panneau d'erreur. Les
+agents attendent le geste des SIG bureautiques (ArcGIS, QGIS) : un outil de
+sélection dédié, avec son curseur, le rectangle et les touches de modification.
+
+**Solution** (`fichier · fonction`) :
+- **Outil** : bouton « Sélectionner » de `components/map/MapToolsBar.tsx`,
+  exclusif avec la mesure (§72). Curseur flèche + cadre pointillé
+  (`lib/map-selection.ts · SELECT_CURSOR`).
+- **Gestes** (`components/MapLibreMap.tsx · handleSelectMouseDown`) :
+  - clic : la parcelle du dessus ; glisser : rectangle ;
+  - Maj ajoute, Ctrl retire (`selectOpFromEvent`, conventions QGIS) ;
+  - en mode sélection, `dragPan` et `boxZoom` sont coupés (la molette zoome
+    toujours).
+- **Sélection = table attributaire** (`MapAnalysisClient.tsx ·
+  handleSelectFeatures`) : toutes les lignes sont cochées, donc les actions
+  existantes s'appliquent telles quelles. La barre d'actions propose
+  Fusionner (≥ 2), Supprimer, Modifier le NICAD (1 parcelle) et Attributs.
+  Suppr supprime, après confirmation. Échap désélectionne, puis quitte l'outil.
+  Aucune nouvelle route : `features/delete`, `features/merge` et
+  `features/update-nicad` sont réutilisées.
+
+**Pourquoi (pièges inclus)** :
+- **Point intérieur, pas centroïde** : le serveur retrouve chaque parcelle par
+  un localisateur (`lib/analyses/feature-locator.ts · resolveLocator`), d'abord
+  par point-dans-polygone. Le centroïde d'une parcelle en L ou en U tombe hors
+  de la parcelle. `interiorPoint` balaie l'emprise à mi-hauteur et prend le
+  milieu du plus large segment intérieur, en règle pair-impair, donc trous
+  compris. Pour un clic, le point cliqué sert directement.
+- **Morceaux de tuiles** : `queryRenderedFeatures` renvoie une parcelle à cheval
+  sur plusieurs tuiles en plusieurs morceaux. Ils sont dédoublonnés par
+  `_nicad`. Une parcelle sans NICAD peut donc apparaître deux fois dans un
+  rectangle ; le second localisateur est ignoré côté serveur (« non
+  localisée »).
+- **Seulement ce qui est affiché** : la requête porte sur les tuiles rendues.
+  Une couche masquée (panneau Couches) ou une parcelle déjà supprimée n'est
+  jamais sélectionnée.
+- **Plafond de 500 parcelles** (`MAX_SELECTION`) : au-delà, la table et la
+  requête d'édition (un localisateur par parcelle) deviennent lourdes.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*

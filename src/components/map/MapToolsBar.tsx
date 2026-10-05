@@ -1,19 +1,23 @@
 "use client";
 import type { ReactNode } from "react";
-import { Layers, Ruler, Pentagon } from "lucide-react";
+import { Layers, Ruler, Pentagon, SquareDashedMousePointer } from "lucide-react";
 import type { MeasureMode } from "@/lib/use-measure";
 
 /**
- * Barre d'outils de carte : « Couches » (si `onToggleLayers` est fourni) et
- * outils de mesure. `children` s'insère en tête (ex. annuler/rétablir).
+ * Barre d'outils de carte : « Couches » (si `onToggleLayers` est fourni),
+ * « Sélectionner » (si `onSelectMode` est fourni) et outils de mesure.
+ * `children` s'insère en tête (ex. annuler/rétablir).
  * Ouvrir les couches quitte la mesure et inversement : leurs encarts
- * occupent le même coin.
+ * occupent le même coin. Sélection et mesure s'excluent : un clic carte ne
+ * peut servir qu'à un outil à la fois.
  */
 export function MapToolsBar({
   layersOpen = false,
   onToggleLayers,
   measureMode,
   onMeasureMode,
+  selectMode = false,
+  onSelectMode,
   className = "",
   children,
 }: {
@@ -21,6 +25,8 @@ export function MapToolsBar({
   onToggleLayers?: (open: boolean) => void;
   measureMode: MeasureMode;
   onMeasureMode: (m: MeasureMode) => void;
+  selectMode?: boolean;
+  onSelectMode?: (on: boolean) => void;
   className?: string;
   children?: ReactNode;
 }) {
@@ -47,6 +53,21 @@ export function MapToolsBar({
           <span>Couches</span>
         </button>
       )}
+      {onSelectMode && (
+        <button
+          type="button"
+          onClick={() => {
+            onSelectMode(!selectMode);
+            onMeasureMode(null);
+          }}
+          aria-pressed={selectMode}
+          title={"Sélectionner des entités : clic ou rectangle\nMaj : ajouter · Ctrl : retirer · Suppr : supprimer · Échap : désélectionner / quitter"}
+          aria-label="Sélectionner des entités"
+          className={btn(selectMode)}
+        >
+          <SquareDashedMousePointer className="w-3.5 h-3.5" />
+        </button>
+      )}
       {([
         ["distance", Ruler, "Mesurer une distance"],
         ["surface", Pentagon, "Mesurer une surface"],
@@ -57,6 +78,7 @@ export function MapToolsBar({
           onClick={() => {
             onMeasureMode(measureMode === mode ? null : mode);
             onToggleLayers?.(false);
+            onSelectMode?.(false);
           }}
           aria-pressed={measureMode === mode}
           title={`${label} (Échap pour quitter)`}
