@@ -13,7 +13,9 @@ function ensureMeasuringStyle(): void {
   const style = document.createElement("style");
   style.id = STYLE_ID;
   style.textContent =
-    ".geoaino-measuring .leaflet-interactive, .geoaino-measuring .leaflet-marker-icon { pointer-events: none !important; }";
+    // Canevas inclus : en rendu canevas (preferCanvas), c'est l'élément <canvas>
+    // qui capte le clic et le redistribue à la couche touchée.
+    ".geoaino-measuring .leaflet-interactive, .geoaino-measuring .leaflet-marker-icon, .geoaino-measuring .leaflet-overlay-pane canvas { pointer-events: none !important; }";
   document.head.appendChild(style);
 }
 

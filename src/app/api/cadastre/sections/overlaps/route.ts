@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { listSections, listOverlaps } from "@/lib/cadastre/sections-data";
 import { publicErrorMessage } from "@/lib/api-errors";
+import { roundGeometry } from "@/lib/geojson-precision";
 
 export const runtime = "nodejs";
 
@@ -25,7 +26,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       listSections(sourceFichier),
       listOverlaps(sourceFichier),
     ]);
-    return NextResponse.json({ sourceFichier, sections, overlaps });
+    // Coordonnées arrondies à ~1 cm : réponse d'affichage uniquement (cf.
+    // geojson-precision.ts), ~31 % de JSON en moins sur les gros lots.
+    return NextResponse.json({
+      sourceFichier,
+      sections: sections.map((s) => ({ ...s, geomGeoJson: roundGeometry(s.geomGeoJson) })),
+      overlaps: overlaps.map((o) => ({ ...o, intersectionGeoJson: roundGeometry(o.intersectionGeoJson) })),
+    });
   } catch (err) {
     console.error("[cadastre/sections/overlaps] GET", err);
     return NextResponse.json({ error: publicErrorMessage(err) }, { status: 500 });

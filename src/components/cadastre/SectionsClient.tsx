@@ -294,6 +294,9 @@ const BATCH_ACTION_LABELS = {
   ignore: "Ignorer",
 } as const;
 
+/** Lignes de la table des sections affichées par tranche. */
+const SECTIONS_TABLE_PAGE = 200;
+
 export default function SectionsClient() {
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
@@ -310,6 +313,10 @@ export default function SectionsClient() {
   // Couches par id (sections et intersections) : sélections restylées en place
   // SANS reconstruire les couches (sinon un popup ouvert serait refermé).
   const sectionLayersRef = useRef<Map<number, any>>(new Map());
+  // Style appliqué à chaque couche de section (clé JSON) : le restylage ne
+  // touche que les sections dont le style change réellement — réappliquer
+  // le même style aux 4 500+ couches coûtait ~0,8 s à chaque reconstruction.
+  const sectionStyleKeyRef = useRef<Map<number, string>>(new Map());
   const overlapLayersRef = useRef<Map<number, any>>(new Map());
   const adminMismatchesLayerRef = useRef<any>(null);
   const adminMismatchLayersRef = useRef<Map<number, any>>(new Map());
@@ -393,6 +400,10 @@ export default function SectionsClient() {
   const [savingNumero, setSavingNumero] = useState<number | null>(null);
   // Filtre "Sans numéro" : restreint table ET carte aux sections numSection === null.
   const [showUnnumberedOnly, setShowUnnumberedOnly] = useState(false);
+  // Table des sections : rendu par tranches. Avec 4 500+ sections, une table
+  // HTML complète (dizaines de milliers d'éléments) pesait sur le chargement
+  // et sur chaque rendu de la page ; la carte, elle, affiche toujours tout.
+  const [sectionsTableLimit, setSectionsTableLimit] = useState(SECTIONS_TABLE_PAGE);
   // Sélection multiple de chevauchements pour un traitement groupé (découpe
   // A/B, auto, ignorer) — même principe que `mergeSelection` mais restreinte
   // aux chevauchements PENDING (voir `activeOverlapSelection` plus bas).
@@ -446,7 +457,11 @@ export default function SectionsClient() {
       });
       // Vue initiale : emprise du Sénégal entier (recadrée ensuite sur les
       // données via fitBounds quand un lot est chargé).
-      const map = L.map(mapEl.current).fitBounds([
+      // Rendu canevas : 4 500+ polygones de sections + limites administratives.
+      // En SVG (défaut), le navigateur passait ~1,5 s à peindre un nœud DOM
+      // par section ; un canevas unique est redessiné en une fois. Tooltips,
+      // popups, clics et setStyle fonctionnent à l'identique.
+      const map = L.map(mapEl.current, { preferCanvas: true }).fitBounds([
         [12.3, -17.6],
         [16.7, -11.3],
       ]);
@@ -487,7 +502,11 @@ export default function SectionsClient() {
   }, []);
 
   // `srcs = []` → toutes les sections stockées, tous lots confondus.
+  // Numéro de la dernière requête de chargement : une réponse dépassée par une
+  // plus récente est ignorée (sinon deux redessins complets des couches).
+  const fetchSeqRef = useRef(0);
   const fetchData = useCallback(async (srcs: string[]) => {
+    const seq = ++fetchSeqRef.current;
     setLoadingData(true);
     setSelectedSources(srcs);
     // Clé stable indépendante de l'ordre de sélection, pour détecter un vrai
@@ -508,17 +527,20 @@ export default function SectionsClient() {
         mismatchUrl += `?${params.toString()}`;
       }
       const [res, mismatchRes] = await Promise.all([fetch(url), fetch(mismatchUrl)]);
-      const data = await res.json();
+      // Les deux corps sont lus AVANT toute mise à jour d'état : sections,
+      // chevauchements et débordements arrivent dans le même rendu, donc un
+      // seul redessin des 4 500+ sections au lieu de deux.
+      const [data, mismatchData] = await Promise.all([res.json(), mismatchRes.json()]);
+      if (seq !== fetchSeqRef.current) return; // réponse dépassée
       if (!res.ok) throw new Error(data.error || "Chargement échoué");
       setSections(data.sections ?? []);
       setOverlaps(data.overlaps ?? []);
-      const mismatchData = await mismatchRes.json();
       setAdminMismatches(mismatchRes.ok ? (mismatchData.mismatches ?? []) : []);
       void loadLatestHistoryEntry();
     } catch (err) {
-      toast.error(String(err));
+      if (seq === fetchSeqRef.current) toast.error(String(err));
     } finally {
-      setLoadingData(false);
+      if (seq === fetchSeqRef.current) setLoadingData(false);
     }
   }, [loadLatestHistoryEntry]);
 
@@ -1153,18 +1175,19 @@ export default function SectionsClient() {
 
     const secGroup = L.featureGroup();
     sectionLayersRef.current.clear();
+    sectionStyleKeyRef.current.clear();
     for (const s of displayedSections) {
       if (!s.geomGeoJson) continue;
       const hasError = pendingSectionIds.has(s.id);
       const unnumbered = !s.numSection;
       const color = lotCompareColor(s.sourceFichier, selectedSources) ?? sectionColor(hasError, unnumbered);
       try {
-        const gj = L.geoJSON(s.geomGeoJson as any, {
-          style:
-            hasError || unnumbered
-              ? { color, weight: 2, fillColor: color, fillOpacity: 0.35 }
-              : { color, weight: 1.2, fillColor: color, fillOpacity: 0.15 },
-        });
+        const baseStyle =
+          hasError || unnumbered
+            ? { color, weight: 2, fillColor: color, fillOpacity: 0.35 }
+            : { color, weight: 1.2, fillColor: color, fillOpacity: 0.15 };
+        const gj = L.geoJSON(s.geomGeoJson as any, { style: baseStyle });
+        sectionStyleKeyRef.current.set(s.id, JSON.stringify(baseStyle));
         gj.bindTooltip(
           `Section <b>${escHtml(s.numSection ?? "—")}</b><br/>${escHtml(s.commune ?? "—")}` +
             (hasError
@@ -1176,6 +1199,10 @@ export default function SectionsClient() {
         );
         // Popup au clic : identité de la zone + suppression directe depuis la
         // carte (une zone récupérée à tort comme section se repère à l'œil).
+        // Construit À L'OUVERTURE (fonction passée à bindPopup) et non pour les
+        // 4 500+ sections au chargement : ~10 éléments DOM par section évités,
+        // et le contenu reflète toujours l'état courant (fusion, correction).
+        const buildPopup = () => {
         const popup = document.createElement("div");
         popup.style.cssText = "font-size:12px;min-width:170px";
         const info = document.createElement("div");
@@ -1218,7 +1245,6 @@ export default function SectionsClient() {
           numeroBtn.disabled = batchCorrectingRef.current;
         };
         syncNumeroBtn();
-        gj.on("popupopen", syncNumeroBtn);
         numeroWrap.appendChild(numeroInput);
         numeroWrap.appendChild(numeroBtn);
         const mergeBtn = document.createElement("button");
@@ -1234,7 +1260,6 @@ export default function SectionsClient() {
             : "Sélectionner pour fusionner";
         };
         syncMergeBtn();
-        gj.on("popupopen", syncMergeBtn);
         mergeBtn.onclick = () => {
           toggleMergeSelection(s.id);
           map.closePopup();
@@ -1269,7 +1294,9 @@ export default function SectionsClient() {
         popup.appendChild(numeroWrap);
         popup.appendChild(mergeBtn);
         popup.appendChild(delBtn);
-        gj.bindPopup(popup);
+        return popup;
+        };
+        gj.bindPopup(buildPopup);
         if (hasError) {
           // Clic sur une section en erreur : sélectionne son chevauchement dans
           // la liste de droite (clics répétés = cycle si plusieurs).
@@ -1426,8 +1453,7 @@ export default function SectionsClient() {
       const src = sourceById.get(id);
       const color =
         (src != null ? lotCompareColor(src, selectedSources) : null) ?? sectionColor(hasError, unnumbered);
-      try {
-        layer.setStyle(
+      const style =
           id === deletingSectionId
             ? {
                 color: "#ef4444",
@@ -1445,8 +1471,12 @@ export default function SectionsClient() {
                 }
               : hasError || unnumbered
                 ? { color, weight: 2, fillColor: color, fillOpacity: 0.35 }
-                : { color, weight: 1.2, fillColor: color, fillOpacity: 0.15 },
-        );
+                : { color, weight: 1.2, fillColor: color, fillOpacity: 0.15 };
+      const key = JSON.stringify(style);
+      if (sectionStyleKeyRef.current.get(id) === key) continue;
+      try {
+        layer.setStyle(style);
+        sectionStyleKeyRef.current.set(id, key);
       } catch {
         /* ignore */
       }
@@ -3019,7 +3049,7 @@ export default function SectionsClient() {
                           </tr>
                         </thead>
                         <tbody>
-                          {displayedSections.map((s) => (
+                          {displayedSections.slice(0, sectionsTableLimit).map((s) => (
                             <tr
                               key={s.id}
                               onClick={() => zoomToSection(s)}
@@ -3187,6 +3217,16 @@ export default function SectionsClient() {
                           ))}
                         </tbody>
                       </table>
+                      {displayedSections.length > sectionsTableLimit && (
+                        <button
+                          type="button"
+                          onClick={() => setSectionsTableLimit((n) => n + SECTIONS_TABLE_PAGE)}
+                          className="mt-1 w-full rounded border border-border/60 py-1 text-[11px] text-muted-foreground hover:bg-secondary/40 hover:text-foreground"
+                        >
+                          Afficher {Math.min(SECTIONS_TABLE_PAGE, displayedSections.length - sectionsTableLimit)} de plus
+                          {" "}({sectionsTableLimit} sur {displayedSections.length} affichées)
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}

@@ -6137,5 +6137,58 @@ plus, et Échap quitte le mode.
 
 ---
 
+## 73. Chargement de « Gestion des sections » : 4 547 sections sans bloquer la page
+
+**Problème métier** : avec tous les lots chargés (4 547 sections), la page
+restait figée par à-coups pendant 20 à 30 s, les clics ne répondaient pas.
+
+**Cause technique** (mesurée par instrumentation, pas supposée) :
+1. **Table HTML complète** des 4 547 sections, plusieurs cellules et boutons
+   par ligne : React créait des dizaines de milliers d'éléments au chargement,
+   puis les comparait à chaque changement d'état de la page. C'était le coût
+   principal.
+2. **Trois redessins complets** de la carte au lieu d'un : sections et
+   chevauchements, puis débordements, étaient enregistrés en deux temps, et
+   deux chargements pouvaient se croiser.
+3. **Restylage redondant** : après chaque reconstruction, un effet
+   réappliquait le même style aux 4 547 couches (~0,8 s).
+4. **Rendu SVG** : un nœud DOM par section, ~1,5 s de peinture.
+5. **Fenêtre de chaque section construite à l'avance** : ~10 éléments × 4 547.
+6. **Réponse réseau de 6,4 Mo** : coordonnées à 15 décimales.
+
+**Solution** (`fichier · fonction`) :
+- **Table** (`SectionsClient.tsx`) : affichage par tranches de 200 lignes
+  (`SECTIONS_TABLE_PAGE`, bouton « Afficher 200 de plus ») ; la carte, elle,
+  dessine toujours toutes les sections.
+- **Chargement** (`fetchData`) : les deux réponses sont lues avant toute mise à
+  jour d'état, et une réponse dépassée est ignorée (`fetchSeqRef`).
+- **Restylage** : `sectionStyleKeyRef` mémorise le style appliqué ; seules les
+  sections dont le style change réellement sont touchées.
+- **Rendu** : `L.map(..., { preferCanvas: true })`.
+- **Fenêtres** : `bindPopup(buildPopup)`, construite à l'ouverture.
+- **Réseau** : `lib/geojson-precision.ts · roundGeometry` dans
+  `api/cadastre/sections/overlaps` — 7 décimales, soit ~1,1 cm au sol.
+
+**Résultats** (serveur de développement, même machine, deux mesures de chaque
+côté) : page réactive à 9 s au lieu de 21–24 s ; blocage cumulé de 0,8 s au
+lieu de 8–9,4 s ; réponse de 4,4 Mo au lieu de 6,4 Mo.
+
+**Pourquoi (pièges inclus)** :
+- **Arrondi des coordonnées** : il ne vaut que pour l'affichage. Les
+  géométries en base et les calculs serveur (fusion, découpe, export) gardent
+  leur pleine précision, puisque le client ne renvoie jamais ces géométries.
+- **Canevas et outil de mesure** : en canevas, c'est l'élément `<canvas>` qui
+  capte les clics. La règle du mode mesure (`lib/leaflet-measure.ts`) le
+  neutralise aussi (`.leaflet-overlay-pane canvas`), sinon un clic de mesure
+  ouvrait la fenêtre de la section.
+- **Cache de styles** : les effets de clignotement ne touchent que les couches
+  de chevauchements et de débordements, jamais celles des sections, donc le
+  cache reste juste.
+- **Double chargement** : il venait du mode strict de React en développement
+  (effets exécutés deux fois au montage). La protection `fetchSeqRef` vaut
+  aussi en production, si l'utilisateur change de lot pendant un chargement.
+
+---
+
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
 foi** — mettre la doc à jour en conséquence.*
