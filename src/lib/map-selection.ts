@@ -93,3 +93,87 @@ export function interiorPoint(geom: unknown): [number, number] | null {
   }
   return best;
 }
+
+// ── Tests géométriques pour les cartes sans requête de rendu (Leaflet) ──────
+// MapLibre sait interroger ses tuiles (`queryRenderedFeatures`) ; une carte
+// Leaflet, non : la sélection y est calculée sur les géométries GeoJSON.
+
+/** Emprise [w, s, e, n] = [minLng, minLat, maxLng, maxLat]. */
+export type BBox = [number, number, number, number];
+
+function polygonsOf(geom: unknown): Ring[][] {
+  const g = geom as { type?: string; coordinates?: unknown } | null;
+  if (!g || !Array.isArray(g.coordinates)) return [];
+  if (g.type === "Polygon") return [g.coordinates as Ring[]];
+  if (g.type === "MultiPolygon") return g.coordinates as Ring[][];
+  return [];
+}
+
+/** Emprise d'un Polygon / MultiPolygon (`null` si vide ou autre type). */
+export function geometryBBox(geom: unknown): BBox | null {
+  const b: BBox = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const rings of polygonsOf(geom)) {
+    for (const [x, y] of rings[0] ?? []) {
+      if (x < b[0]) b[0] = x;
+      if (y < b[1]) b[1] = y;
+      if (x > b[2]) b[2] = x;
+      if (y > b[3]) b[3] = y;
+    }
+  }
+  return b[0] <= b[2] ? b : null;
+}
+
+export function bboxesIntersect(a: BBox, b: BBox): boolean {
+  return a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
+}
+
+/** Point dans un polygone (anneaux en règle pair-impair : trous exclus). */
+function pointInRings(x: number, y: number, rings: Ring[]): boolean {
+  let inside = false;
+  for (const ring of rings) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i];
+      const [xj, yj] = ring[j];
+      if (yi > y !== yj > y && x < xi + ((y - yi) * (xj - xi)) / (yj - yi)) inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/** Point [lng, lat] à l'intérieur d'un Polygon / MultiPolygon. */
+export function pointInGeometry(pt: [number, number], geom: unknown): boolean {
+  return polygonsOf(geom).some((rings) => pointInRings(pt[0], pt[1], rings));
+}
+
+/** Segments [p1, p2] et [p3, p4] sécants (orientations opposées des deux côtés). */
+function segmentsCross(p1: number[], p2: number[], p3: number[], p4: number[]): boolean {
+  const o = (a: number[], b: number[], c: number[]) =>
+    Math.sign((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]));
+  return o(p1, p2, p3) !== o(p1, p2, p4) && o(p3, p4, p1) !== o(p3, p4, p2);
+}
+
+/**
+ * Le polygone touche-t-il le rectangle ? Sémantique « intersecte » du
+ * rectangle de sélection QGIS : une entité à cheval sur le bord est prise.
+ * Trois cas : un sommet du polygone dans le rectangle, un coin du rectangle
+ * dans le polygone (rectangle tracé à l'intérieur d'une grande entité), ou un
+ * bord du polygone qui traverse un bord du rectangle.
+ */
+export function geometryIntersectsBBox(geom: unknown, box: BBox): boolean {
+  const [w, s, e, n] = box;
+  const corners = [[w, s], [e, s], [e, n], [w, n]];
+  for (const rings of polygonsOf(geom)) {
+    for (const ring of rings) {
+      for (const [x, y] of ring) if (x >= w && x <= e && y >= s && y <= n) return true;
+    }
+    if (corners.some(([x, y]) => pointInRings(x, y, rings))) return true;
+    for (const ring of rings) {
+      for (let i = 1; i < ring.length; i++) {
+        for (let k = 0; k < 4; k++) {
+          if (segmentsCross(ring[i - 1], ring[i], corners[k], corners[(k + 1) % 4])) return true;
+        }
+      }
+    }
+  }
+  return false;
+}

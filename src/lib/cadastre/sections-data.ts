@@ -449,6 +449,19 @@ export async function deleteSection(id: number, db: Db = prisma): Promise<void> 
   await db.$executeRaw`DELETE FROM "limite_section" WHERE id = ${id}`;
 }
 
+/** Supprime plusieurs sections (et leurs chevauchements/mismatchs
+ * administratifs) — sélection multiple de la carte, même logique que
+ * `deleteSection`, en trois requêtes au lieu de trois par section. */
+export async function deleteSections(ids: number[], db: Db = prisma): Promise<void> {
+  if (ids.length === 0) return;
+  await db.$executeRaw`
+    DELETE FROM "limite_section_overlap"
+    WHERE "sectionAId" IN (${Prisma.join(ids)}) OR "sectionBId" IN (${Prisma.join(ids)})
+  `;
+  await db.$executeRaw`DELETE FROM "limite_section_admin_mismatch" WHERE "sectionId" IN (${Prisma.join(ids)})`;
+  await db.$executeRaw`DELETE FROM "limite_section" WHERE id IN (${Prisma.join(ids)})`;
+}
+
 /**
  * Cherche une AUTRE section de la même commune portant déjà ce numéro —
  * l'unicité du numéro de section n'est vraie que PAR COMMUNE (cf.

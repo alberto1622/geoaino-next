@@ -9,6 +9,15 @@ import { MapToolsBar } from "@/components/map/MapToolsBar";
 import { MeasurePanel } from "@/components/map/MeasurePanel";
 import { useMeasureMode, useMeasurePoints } from "@/lib/use-measure";
 import { useLeafletMeasure } from "@/lib/leaflet-measure";
+import { useLeafletSelect, type SelectHit } from "@/lib/leaflet-select";
+import {
+  bboxesIntersect,
+  geometryBBox,
+  geometryIntersectsBBox,
+  MAX_SELECTION,
+  pointInGeometry,
+  type SelectOp,
+} from "@/lib/map-selection";
 import { CursorCoordinates, useCursorStore } from "@/components/map/CursorCoordinates";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CadHistoryPanel } from "@/components/cadastre/CadHistoryPanel";
@@ -304,6 +313,10 @@ export default function SectionsClient() {
   // Panneau « Couches » et outil de mesure de la carte.
   const [layersOpen, setLayersOpen] = useState(false);
   const [measureMode, setMeasureMode] = useMeasureMode(); // Échap pour quitter
+  // Outil « Sélectionner » (clic / rectangle, Maj ajoute, Ctrl retire) : il
+  // alimente la même sélection que la fusion et les cases de la table.
+  const [selectMode, setSelectMode] = useState(false);
+  const [deletingSelection, setDeletingSelection] = useState(false);
   const measure = useMeasurePoints(measureMode);
   const resizeObsRef = useRef<ResizeObserver | null>(null);
   const LRef = useRef<any>(null);
@@ -1134,6 +1147,54 @@ export default function SectionsClient() {
       showUnnumberedOnly ? sections.filter((s) => !s.numSection) : sections,
     [sections, showUnnumberedOnly],
   );
+
+  // ── Outil « Sélectionner » de la carte (comme ArcGIS / QGIS) ──────────────
+  // Leaflet n'a pas de requête « entités sous le curseur » : on teste les
+  // géométries GeoJSON des sections AFFICHÉES, emprises précalculées pour
+  // écarter vite les sections lointaines.
+  const sectionBBoxes = useMemo(
+    () => new Map(displayedSections.map((s) => [s.id, geometryBBox(s.geomGeoJson)])),
+    [displayedSections],
+  );
+  const handleMapSelect = useCallback(
+    (hit: SelectHit, op: SelectOp) => {
+      let ids: number[];
+      if (hit.kind === "point") {
+        const [x, y] = hit.lngLat;
+        // Sections superposées sous le clic : la plus petite, la plus
+        // précise (une grande section englobante reste prenable au rectangle).
+        const under = displayedSections.filter((sec) => {
+          const b = sectionBBoxes.get(sec.id);
+          return !!b && x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3] && pointInGeometry(hit.lngLat, sec.geomGeoJson);
+        });
+        under.sort((a, b) => (a.surfaceM2 ?? Infinity) - (b.surfaceM2 ?? Infinity));
+        ids = under.slice(0, 1).map((sec) => sec.id);
+      } else {
+        ids = displayedSections
+          .filter((sec) => {
+            const b = sectionBBoxes.get(sec.id);
+            return !!b && bboxesIntersect(b, hit.bbox) && geometryIntersectsBBox(sec.geomGeoJson, hit.bbox);
+          })
+          .map((sec) => sec.id);
+      }
+      if (ids.length > MAX_SELECTION) {
+        toast.warning(`Sélection limitée à ${MAX_SELECTION} sections — zoomez ou réduisez le rectangle.`);
+        ids = ids.slice(0, MAX_SELECTION);
+      }
+      setMergeSelection((prev) => {
+        if (op === "replace") return ids;
+        if (op === "remove") {
+          const drop = new Set(ids);
+          return prev.filter((id) => !drop.has(id));
+        }
+        const have = new Set(prev);
+        return [...prev, ...ids.filter((id) => !have.has(id))].slice(0, MAX_SELECTION);
+      });
+    },
+    [displayedSections, sectionBBoxes],
+  );
+  useLeafletSelect({ mapRef, active: selectMode, onSelect: handleMapSelect });
+
   // Débordements administratifs effectivement dessinés/listés — les niveaux
   // masqués (préférence par navigateur) sont retirés. Mémoïsé pour garder une
   // référence stable : plusieurs effets carte en dépendent (dessin,
@@ -1972,6 +2033,68 @@ export default function SectionsClient() {
     });
   }, [activeMergeSelection, sections, performMerge]);
 
+  // ── Suppression des sections sélectionnées (une transaction, une entrée
+  // d'historique restaurable — route `sections/delete`, `sectionIds`) ───────
+  const performDeleteSelection = useCallback(async (ids: number[]) => {
+    if (ids.length === 0) return;
+    setDeletingSelection(true);
+    try {
+      const res = await fetch("/api/cadastre/sections/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sectionIds: ids }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Suppression échouée");
+      const gone = new Set(ids);
+      toast.success(`${data.deleted ?? ids.length} section(s) supprimée(s).`);
+      setSections((prev) => prev.filter((x) => !gone.has(x.id)));
+      setOverlaps((prev) => prev.filter((o) => !gone.has(o.sectionAId) && !gone.has(o.sectionBId)));
+      setSelectedOverlapId((sel) =>
+        overlaps.some((o) => o.id === sel && (gone.has(o.sectionAId) || gone.has(o.sectionBId))) ? null : sel,
+      );
+      setMergeSelection([]);
+      void loadBatches();
+    } catch (err) {
+      toast.error(String(err));
+    } finally {
+      setDeletingSelection(false);
+    }
+  }, [overlaps, loadBatches]);
+
+  const handleDeleteSelection = useCallback(() => {
+    const ids = activeMergeSelection;
+    if (ids.length === 0) return;
+    setConfirmState({
+      title: ids.length > 1 ? `Supprimer ${ids.length} sections` : "Supprimer la section",
+      description:
+        `Supprimer ${ids.length > 1 ? `les ${ids.length} sections sélectionnées` : "la section sélectionnée"} ?\n` +
+        "Restaurable ensuite depuis le panneau Historique.",
+      confirmLabel: "Supprimer",
+      run: () => void performDeleteSelection(ids),
+    });
+  }, [activeMergeSelection, performDeleteSelection]);
+
+  // Raccourcis de l'outil « Sélectionner » (comme QGIS) : Échap désélectionne,
+  // puis quitte l'outil ; Suppr supprime la sélection (après confirmation).
+  useEffect(() => {
+    if (!selectMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (confirmState) return; // la boîte de confirmation gère ses touches
+      if (e.key === "Escape") {
+        if (activeMergeSelection.length > 0) setMergeSelection([]);
+        else setSelectMode(false);
+      } else if (e.key === "Delete" && activeMergeSelection.length > 0) {
+        e.preventDefault();
+        handleDeleteSelection();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectMode, confirmState, activeMergeSelection.length, handleDeleteSelection]);
+
   // ── Suppression du lot chargé (toutes les sections du fichier sélectionné) ─
   // Restreint à EXACTEMENT un lot sélectionné : une suppression multi-lots
   // élargirait sans confirmation explicite la portée d'une action destructive.
@@ -2482,7 +2605,7 @@ export default function SectionsClient() {
           />
           <BasemapSwitcher className="bottom-2 left-2" />
           {/* À droite des boutons de zoom Leaflet (coin haut-gauche). */}
-          <MapToolsBar className="left-14 top-2.5" layersOpen={layersOpen} onToggleLayers={setLayersOpen} measureMode={measureMode} onMeasureMode={setMeasureMode} />
+          <MapToolsBar className="left-14 top-2.5" layersOpen={layersOpen} onToggleLayers={setLayersOpen} measureMode={measureMode} onMeasureMode={setMeasureMode} selectMode={selectMode} onSelectMode={setSelectMode} />
           <MeasurePanel mode={measureMode} pts={measure.pts} onUndo={measure.undo} onClear={measure.clear} className="left-14 top-14" />
           {layersOpen && (
             <LayersPanel
@@ -2516,10 +2639,10 @@ export default function SectionsClient() {
               se fait la sélection au clic. Sibling du conteneur Leaflet : les
               clics n'atteignent pas la carte. */}
           {activeMergeSelection.length > 0 && (
-            <div className="absolute bottom-3 left-3 z-1000 w-72 rounded-xl border border-violet-400/60 bg-background/95 p-3 shadow-lg backdrop-blur">
+            <div className="absolute bottom-3 left-3 z-1000 w-80 max-w-[calc(100%-1.5rem)] rounded-xl border border-violet-400/60 bg-background/95 p-3 shadow-lg backdrop-blur">
               <div className="mb-1.5 flex items-center gap-2 text-xs font-semibold">
                 <Combine className="h-4 w-4 text-violet-400" />
-                Fusion — {activeMergeSelection.length} section
+                Sélection — {activeMergeSelection.length} section
                 {activeMergeSelection.length > 1 ? "s" : ""} sélectionnée
                 {activeMergeSelection.length > 1 ? "s" : ""}
               </div>
@@ -2559,7 +2682,7 @@ export default function SectionsClient() {
                   );
                 })}
               </ul>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Button
                   size="sm"
                   className="h-7 gap-1.5 px-2 text-xs"
@@ -2580,12 +2703,28 @@ export default function SectionsClient() {
                 </Button>
                 <Button
                   size="sm"
+                  variant="destructive"
+                  className="h-7 gap-1.5 px-2 text-xs"
+                  onClick={handleDeleteSelection}
+                  disabled={merging || deletingSelection}
+                  title="Supprimer les sections sélectionnées (Suppr en mode sélection)"
+                >
+                  {deletingSelection ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3.5 w-3.5" />
+                  )}
+                  Supprimer
+                </Button>
+                <Button
+                  size="sm"
                   variant="outline"
                   className="h-7 px-2 text-xs"
                   onClick={() => setMergeSelection([])}
-                  disabled={merging}
+                  disabled={merging || deletingSelection}
+                  title="Désélectionner (Échap en mode sélection)"
                 >
-                  Annuler la sélection
+                  Désélectionner
                 </Button>
               </div>
             </div>

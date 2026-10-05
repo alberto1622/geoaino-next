@@ -6233,6 +6233,39 @@ sélection dédié, avec son curseur, le rectangle et les touches de modificatio
 - **Plafond de 500 parcelles** (`MAX_SELECTION`) : au-delà, la table et la
   requête d'édition (un localisateur par parcelle) deviennent lourdes.
 
+### 74 bis. Même outil sur « Gestion des sections » (carte Leaflet)
+
+**Solution** (`fichier · fonction`) :
+- **Outil** : `lib/leaflet-select.ts · useLeafletSelect`, pendant de
+  `useLeafletMeasure` (§72). Il coupe le déplacement de carte, le
+  zoom-rectangle et le double-clic, et trace le rectangle en DOM. Il renvoie
+  la zone désignée (point ou emprise) et l'opération.
+- **Calcul des sections touchées** (`SectionsClient.tsx · handleMapSelect`) :
+  tests sur les géométries GeoJSON des sections affichées
+  (`lib/map-selection.ts · pointInGeometry`, `geometryIntersectsBBox`), après
+  un tri rapide par emprise précalculée (`sectionBBoxes`).
+- **Sélection** : la même que celle de la fusion et des cases de la table
+  (`mergeSelection`, ordonnée : la première garde ses attributs). Le panneau
+  « Sélection » ajoute Supprimer à Fusionner.
+- **Suppression groupée** : `api/cadastre/sections/delete` accepte
+  `{ sectionIds }` (1 à 500 entiers, réservée aux administrateurs) ;
+  `sections-data.ts · deleteSections` supprime en trois requêtes. Le tout
+  tient en une transaction et une seule entrée d'historique restaurable.
+
+**Pourquoi (pièges inclus)** :
+- **Pas de `queryRenderedFeatures` en Leaflet** : en rendu canevas, aucune API
+  ne dit quelle couche est sous le curseur pour un rectangle. Le calcul se fait
+  donc sur les géométries. La sémantique est « intersecte », comme le
+  rectangle QGIS : sommet du polygone dans le rectangle, coin du rectangle
+  dans le polygone, ou bords qui se croisent. Le troisième cas couvre une
+  grande section traversée par un rectangle étroit sans sommet dedans.
+- **Clic sur des sections superposées** (chevauchements à corriger) : la plus
+  petite est prise, la plus précise. La grande reste sélectionnable au
+  rectangle ou avec Maj.
+- **Mêmes pièges de `pointer-events`** que la mesure : classe
+  `geoaino-selecting` et règle injectée sur `.leaflet-interactive` et le
+  `<canvas>`. Sinon, un clic de sélection ouvrirait la fenêtre de la section.
+
 ---
 
 *En cas de divergence entre ce document et le code (`src/lib/**`), **le code fait
