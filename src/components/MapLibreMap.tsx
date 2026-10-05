@@ -9,7 +9,9 @@ import { errorTypeColor } from "@/lib/utils";
 import { useBasemapStyle } from "@/lib/basemap";
 import { CursorCoordinates, useCursorStore } from "@/components/map/CursorCoordinates";
 import { BasemapSwitcher } from "@/components/map/BasemapSwitcher";
-import { lengthMeters, areaSquareMeters, formatLength, formatArea, type LngLat } from "@/lib/measure";
+import { MeasurePanel } from "@/components/map/MeasurePanel";
+import { MeasureLayers } from "@/components/map/MeasureLayers";
+import { useMeasurePoints, type MeasureMode } from "@/lib/use-measure";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -208,7 +210,7 @@ function computeBbox(features: unknown[]): [[number, number], [number, number]] 
   return found ? [[w, s], [e, n]] : null;
 }
 
-export type MeasureMode = "distance" | "surface" | null;
+export type { MeasureMode } from "@/lib/use-measure";
 
 export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, errors, selectedErrorId, blinkIntense = false, onFeatureClick, selectedNicads = [], searchedNicads = [], focusTarget, conformeHighlight = false, nonConformeNicads = [], occurrences = [], occurrencesBounds = null, occurrenceEditMode = false, onOccurrenceKeep, showSections = false, sansSectionHighlight = false, deletedNicads = [], adminLevels = [], parcellesVisible = true, parcellesOpacity = 0.22, erreursVisible = true, conformesVisible = true, measureMode = null }: Props) {
   const mapRef = useRef<MapRef>(null);
@@ -516,39 +518,12 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
     setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, html: sectionRow + rows });
   }, []);
 
-  // ── Outil de mesure ───────────────────────────────────────────────────────
-  // Points rattachés au mode qui les a saisis : changer de mode repart de zéro
-  // sans effet de synchronisation.
-  const [measure, setMeasure] = useState<{ mode: MeasureMode; pts: LngLat[] }>({ mode: null, pts: [] });
-  const measurePts = useMemo(() => (measureMode && measure.mode === measureMode ? measure.pts : []), [measure, measureMode]);
+  // ── Outil de mesure (état partagé avec les autres cartes, lib/use-measure.ts) ──
+  const measure = useMeasurePoints(measureMode);
   const handleMeasureClick = useCallback(
-    (e: MapLayerMouseEvent) => {
-      setMeasure((m) => ({
-        mode: measureMode,
-        pts: [...(m.mode === measureMode ? m.pts : []), [e.lngLat.lng, e.lngLat.lat] as LngLat],
-      }));
-    },
-    [measureMode],
+    (e: MapLayerMouseEvent) => measure.add([e.lngLat.lng, e.lngLat.lat]),
+    [measure],
   );
-  const measureFc = useMemo<GeoJSON.FeatureCollection>(() => {
-    const features: GeoJSON.Feature[] = measurePts.map((c) => ({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: c } }));
-    if (measurePts.length >= 2) {
-      const line = measureMode === "surface" && measurePts.length >= 3 ? [...measurePts, measurePts[0]] : measurePts;
-      features.push({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: line } });
-    }
-    if (measureMode === "surface" && measurePts.length >= 3) {
-      features.push({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [[...measurePts, measurePts[0]]] } });
-    }
-    return { type: "FeatureCollection", features };
-  }, [measurePts, measureMode]);
-  const measureValue =
-    measureMode === "distance"
-      ? measurePts.length >= 2 ? formatLength(lengthMeters(measurePts)) : null
-      : measureMode === "surface" && measurePts.length >= 3
-        ? formatArea(areaSquareMeters(measurePts))
-        : null;
-  const measurePerimeter =
-    measureMode === "surface" && measurePts.length >= 3 ? formatLength(lengthMeters([...measurePts, measurePts[0]])) : null;
   const errVis = erreursVisible ? "visible" : "none";
 
   return (
@@ -799,13 +774,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
         />
 
         {/* ── Outil de mesure (au-dessus de tout) ── */}
-        {measureMode && measurePts.length > 0 && (
-          <Source id="measure" type="geojson" data={measureFc}>
-            <Layer id="measure-fill" type="fill" filter={["==", ["geometry-type"], "Polygon"] as any} paint={{ "fill-color": "#f59e0b", "fill-opacity": 0.18 }} />
-            <Layer id="measure-line" type="line" filter={["==", ["geometry-type"], "LineString"] as any} paint={{ "line-color": "#f59e0b", "line-width": 2.5, "line-dasharray": [2, 1] }} />
-            <Layer id="measure-pts" type="circle" filter={["==", ["geometry-type"], "Point"] as any} paint={{ "circle-radius": 4, "circle-color": "#ffffff", "circle-stroke-color": "#f59e0b", "circle-stroke-width": 2 }} />
-          </Source>
-        )}
+        <MeasureLayers mode={measureMode} pts={measure.pts} />
 
         {/* ── Annotations des occurrences d'un doublon (centroïdes numérotés) ──
             En mode édition, chaque marqueur est cliquable : « conserver celle-ci »
@@ -917,40 +886,7 @@ export default function MapLibreMap({ analysisId, tilesVersion, initialBounds, e
     </MapErrorBoundary>
 
       {/* ── Résultat de la mesure ── */}
-      {measureMode && (
-        <div className="absolute left-2 top-12 z-10 w-64 rounded-lg border border-border bg-card/95 p-2.5 text-xs shadow-lg backdrop-blur-sm" role="status" aria-live="polite">
-          <div className="font-semibold">{measureMode === "distance" ? "Mesure de distance" : "Mesure de surface"}</div>
-          {measureValue ? (
-            <>
-              <div className="mt-1 font-mono text-sm text-primary">{measureValue}</div>
-              {measurePerimeter && <div className="font-mono text-muted-foreground">Périmètre : {measurePerimeter}</div>}
-            </>
-          ) : (
-            <div className="mt-1 text-muted-foreground">
-              Cliquez sur la carte pour placer {measureMode === "distance" ? "au moins 2 points" : "au moins 3 sommets"}.
-            </div>
-          )}
-          {measurePts.length > 0 && (
-            <div className="mt-2 flex gap-1.5">
-              <button
-                type="button"
-                onClick={() => setMeasure({ mode: measureMode, pts: measurePts.slice(0, -1) })}
-                className="rounded border border-border px-2 py-0.5 hover:bg-muted"
-              >
-                Retirer le dernier point
-              </button>
-              <button
-                type="button"
-                onClick={() => setMeasure({ mode: measureMode, pts: [] })}
-                className="rounded border border-border px-2 py-0.5 hover:bg-muted"
-              >
-                Effacer
-              </button>
-            </div>
-          )}
-          <div className="mt-1.5 text-[10px] text-muted-foreground">Mesure géodésique (WGS84) · {measurePts.length} point(s)</div>
-        </div>
-      )}
+      <MeasurePanel mode={measureMode} pts={measure.pts} onUndo={measure.undo} onClear={measure.clear} className="left-2 top-12" />
 
       {/* ── Légende (petite, dynamique) ── */}
       <div className="pointer-events-none absolute bottom-3 right-3 z-10 max-w-[180px] rounded-lg border border-border/60 bg-background/90 p-2 text-[11px] shadow-md backdrop-blur">

@@ -4,6 +4,11 @@ import "leaflet/dist/leaflet.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { attachLeafletBasemap } from "@/lib/basemap";
 import { BasemapSwitcher } from "@/components/map/BasemapSwitcher";
+import { LayersPanel } from "@/components/map/LayersPanel";
+import { MapToolsBar } from "@/components/map/MapToolsBar";
+import { MeasurePanel } from "@/components/map/MeasurePanel";
+import { useMeasureMode, useMeasurePoints } from "@/lib/use-measure";
+import { useLeafletMeasure } from "@/lib/leaflet-measure";
 import { CursorCoordinates, useCursorStore } from "@/components/map/CursorCoordinates";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CadHistoryPanel } from "@/components/cadastre/CadHistoryPanel";
@@ -293,8 +298,13 @@ export default function SectionsClient() {
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const cursorStore = useCursorStore();
+  // Panneau « Couches » et outil de mesure de la carte.
+  const [layersOpen, setLayersOpen] = useState(false);
+  const [measureMode, setMeasureMode] = useMeasureMode(); // Échap pour quitter
+  const measure = useMeasurePoints(measureMode);
   const resizeObsRef = useRef<ResizeObserver | null>(null);
   const LRef = useRef<any>(null);
+  useLeafletMeasure({ mapRef, LRef, mode: measureMode, pts: measure.pts, onAdd: measure.add });
   const sectionsLayerRef = useRef<any>(null);
   const overlapsLayerRef = useRef<any>(null);
   // Couches par id (sections et intersections) : sélections restylées en place
@@ -2441,6 +2451,31 @@ export default function SectionsClient() {
             className="h-full min-h-125 w-full rounded-xl border border-border/60"
           />
           <BasemapSwitcher className="bottom-2 left-2" />
+          {/* À droite des boutons de zoom Leaflet (coin haut-gauche). */}
+          <MapToolsBar className="left-14 top-2.5" layersOpen={layersOpen} onToggleLayers={setLayersOpen} measureMode={measureMode} onMeasureMode={setMeasureMode} />
+          <MeasurePanel mode={measureMode} pts={measure.pts} onUndo={measure.undo} onClear={measure.clear} className="left-14 top-14" />
+          {layersOpen && (
+            <LayersPanel
+              className="left-14 top-14 z-[1000]"
+              onClose={() => setLayersOpen(false)}
+              groups={[
+                {
+                  title: "Sections",
+                  items: [{ id: "labels", label: "Numéros de section", color: "#ef4444", checked: showSectionLabels, onToggle: setShowSectionLabels }],
+                },
+                {
+                  title: "Limites administratives",
+                  items: ADMIN_LEVELS.map((level) => ({
+                    id: `admin-${level}`,
+                    label: ADMIN_STYLES[level].label,
+                    color: ADMIN_STYLES[level].color,
+                    checked: adminShow[level],
+                    onToggle: (v: boolean) => setAdminShow((prev) => ({ ...prev, [level]: v })),
+                  })),
+                },
+              ]}
+            />
+          )}
           <CursorCoordinates store={cursorStore} className="bottom-11 left-2" />
           {loadingData && (
             <div className="absolute right-3 top-3 rounded-lg bg-background/90 px-3 py-1.5 text-xs shadow">

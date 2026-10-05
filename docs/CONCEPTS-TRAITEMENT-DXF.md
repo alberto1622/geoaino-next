@@ -6116,6 +6116,24 @@ plus, et Échap quitte le mode.
   EPSG:32628 (`ST_Area(ST_Transform(geom, 32628))`).
 - **Rayon** : turf 7 utilise le rayon moyen et non le rayon équatorial
   (6 378 137 m). Avec ce dernier, l'écart montait à 0,22 %.
+- **Quatre cartes, un seul code** : carte d'analyse, visualisation des
+  parcelles, gestion des sections et carte interactive. L'état est dans
+  `lib/use-measure.ts` (mode, Échap, points) ; l'affichage dans `MeasurePanel`,
+  `MeasureLayers` (MapLibre), `lib/leaflet-measure.ts · useLeafletMeasure`
+  (Leaflet) et `MapToolsBar`.
+- **Piège Leaflet** : mettre `pointer-events: none` sur `overlayPane` ne
+  suffit pas. Leaflet pose `pointer-events` explicitement sur chaque
+  `.leaflet-interactive`, ce qui l'emporte sur la valeur héritée : le clic
+  restait capté par la section ou la commune (0 point enregistré sur 3
+  clics). La parade est une classe `geoaino-measuring` sur le conteneur, avec
+  une règle `!important`, injectée par le module lui-même : ajoutée dans
+  `globals.css`, elle n'était pas chargée.
+- **Clics d'identification** : la carte interactive écoute elle-même
+  `map.on("click")` pour identifier une parcelle. Ce gestionnaire ignore le
+  clic tant qu'une mesure est active (`measureActiveRef`).
+- **Liste d'erreurs** (`MapAnalysisClient.tsx`) : quand l'erreur n'a pas de
+  surface propre (ex. NICAD manquant), la ligne affiche la surface de la
+  parcelle, calculée depuis sa géométrie (`geometryAreaSquareMeters`).
 
 ---
 

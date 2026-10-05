@@ -7,6 +7,9 @@ import { errorTypeColor, severityColor } from "@/lib/utils";
 import { useBasemapStyle } from "@/lib/basemap";
 import { CursorCoordinates, useCursorStore } from "@/components/map/CursorCoordinates";
 import { BasemapSwitcher } from "@/components/map/BasemapSwitcher";
+import { MeasurePanel } from "@/components/map/MeasurePanel";
+import { MeasureLayers } from "@/components/map/MeasureLayers";
+import { useMeasurePoints, type MeasureMode } from "@/lib/use-measure";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -57,6 +60,11 @@ interface Props {
   hiddenTypes: Set<string>;
   /** Emprise combinée [w,s,e,n] des fichiers sélectionnés (via map-meta, sans charger la géométrie). */
   fitBounds: [number, number, number, number] | null;
+  /** Panneau « Couches » et outil de mesure (cf. ParcellesVisualisationClient). */
+  parcellesVisible?: boolean;
+  parcellesOpacity?: number;
+  erreursVisible?: boolean;
+  measureMode?: MeasureMode;
 }
 
 /**
@@ -65,11 +73,12 @@ interface Props {
  * GeoJSON d'un fichier chargé côté client. Nécessaire ici plus qu'ailleurs :
  * cette page peut cumuler PLUSIEURS fichiers volumineux à la fois.
  */
-export default function ParcellesMapLibre({ selectedIds, errorsById, hiddenTypes, fitBounds }: Props) {
+export default function ParcellesMapLibre({ selectedIds, errorsById, hiddenTypes, fitBounds, parcellesVisible = true, parcellesOpacity = 0.08, erreursVisible = true, measureMode = null }: Props) {
   const mapRef = useRef<MapRef | null>(null);
   const [mapReady, setMapReady] = useState(false);
   const basemapStyle = useBasemapStyle();
   const cursorStore = useCursorStore();
+  const measure = useMeasurePoints(measureMode);
   const [cursor, setCursor] = useState("grab");
   const [popup, setPopup] = useState<{ lng: number; lat: number; html: string } | null>(null);
 
@@ -166,11 +175,12 @@ export default function ParcellesMapLibre({ selectedIds, errorsById, hiddenTypes
       initialViewState={INITIAL_VIEW}
       style={{ width: "100%", height: "100%" }}
       mapStyle={basemapStyle}
-      onClick={handleClick}
-      interactiveLayerIds={interactiveLayerIds}
+      onClick={measureMode ? (e) => measure.add([e.lngLat.lng, e.lngLat.lat]) : handleClick}
+      interactiveLayerIds={measureMode ? [] : interactiveLayerIds}
+      doubleClickZoom={!measureMode}
       onMouseEnter={() => setCursor("pointer")}
       onMouseLeave={() => setCursor("grab")}
-      cursor={cursor}
+      cursor={measureMode ? "crosshair" : cursor}
       onLoad={() => setMapReady(true)}
       onMouseMove={(e) => cursorStore.set(e.lngLat)}
       onMouseOut={() => cursorStore.set(null)}
@@ -183,8 +193,8 @@ export default function ParcellesMapLibre({ selectedIds, errorsById, hiddenTypes
 
       {selectedIds.map((id) => (
         <Source key={`parcelles-${id}`} id={`parcelles-${id}`} type="vector" tiles={[tilesUrlFor(id)]} minzoom={0} maxzoom={20}>
-          <Layer id={`parcelles-fill-${id}`} source-layer="parcelles" type="fill" paint={{ "fill-color": PARCEL_COLOR, "fill-opacity": 0.08 }} />
-          <Layer id={`parcelles-line-${id}`} source-layer="parcelles" type="line" paint={{ "line-color": PARCEL_COLOR, "line-width": 1, "line-opacity": 0.5 }} />
+          <Layer id={`parcelles-fill-${id}`} source-layer="parcelles" type="fill" layout={{ visibility: parcellesVisible ? "visible" : "none" }} paint={{ "fill-color": PARCEL_COLOR, "fill-opacity": parcellesOpacity }} />
+          <Layer id={`parcelles-line-${id}`} source-layer="parcelles" type="line" layout={{ visibility: parcellesVisible ? "visible" : "none" }} paint={{ "line-color": PARCEL_COLOR, "line-width": 1, "line-opacity": Math.min(1, 0.5 * (parcellesOpacity / 0.08)) }} />
         </Source>
       ))}
 
@@ -193,23 +203,29 @@ export default function ParcellesMapLibre({ selectedIds, errorsById, hiddenTypes
           <Layer
             id={`errors-fill-${id}`}
             type="fill"
+            layout={{ visibility: erreursVisible ? "visible" : "none" }}
             filter={["in", ["geometry-type"], ["literal", POLYGON_TYPES]] as any}
             paint={{ "fill-color": ["get", "_color"], "fill-opacity": 0.45 } as any}
           />
           <Layer
             id={`errors-line-${id}`}
             type="line"
+            layout={{ visibility: erreursVisible ? "visible" : "none" }}
             filter={["in", ["geometry-type"], ["literal", LINE_TYPES]] as any}
             paint={{ "line-color": ["get", "_color"], "line-width": 1.5, "line-opacity": 0.9 } as any}
           />
           <Layer
             id={`errors-circle-${id}`}
             type="circle"
+            layout={{ visibility: erreursVisible ? "visible" : "none" }}
             filter={["in", ["geometry-type"], ["literal", POINT_TYPES]] as any}
             paint={{ "circle-color": ["get", "_color"], "circle-radius": 5, "circle-opacity": 0.7 } as any}
           />
         </Source>
       ))}
+
+      <MeasureLayers mode={measureMode} pts={measure.pts} />
+      <MeasurePanel mode={measureMode} pts={measure.pts} onUndo={measure.undo} onClear={measure.clear} className="left-3 top-14" />
 
       {popup && (
         <Popup longitude={popup.lng} latitude={popup.lat} closeButton onClose={() => setPopup(null)} maxWidth="260px">

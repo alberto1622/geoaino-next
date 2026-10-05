@@ -29,8 +29,6 @@ import {
   ChevronLeft,
   Upload,
   Combine,
-  Ruler,
-  Pentagon,
 } from "lucide-react";
 import { useUndoHistory, useUndoRedoShortcuts } from "@/hooks/use-undo-history";
 import { Button } from "@/components/ui/button";
@@ -46,7 +44,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { NavBar } from "@/components/NavBar";
 import { Markdown } from "@/components/Markdown";
 import { LayersPanel } from "@/components/map/LayersPanel";
-import type { MeasureMode } from "@/components/MapLibreMap";
+import { geometryAreaSquareMeters, formatArea } from "@/lib/measure";
+import { MapToolsBar } from "@/components/map/MapToolsBar";
+import { useMeasureMode } from "@/lib/use-measure";
 import { toast } from "sonner";
 import { toNum, errorTypeColor, errorTypeLabel } from "@/lib/utils";
 import { useAnalysisUpdateListener } from "@/lib/analyses/live-refresh";
@@ -575,16 +575,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
   const [parcellesOpacity, setParcellesOpacity] = useState(0.22);
   const [erreursVisible, setErreursVisible] = useState(true);
   const [conformesVisible, setConformesVisible] = useState(true);
-  const [measureMode, setMeasureMode] = useState<MeasureMode>(null);
-  // Échap quitte l'outil de mesure.
-  useEffect(() => {
-    if (!measureMode) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMeasureMode(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [measureMode]);
+  const [measureMode, setMeasureMode] = useMeasureMode(); // Échap pour quitter
   // Masque/affiche le panneau latéral gauche pour libérer de l'espace carte.
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   // Largeur du panneau latéral (redimensionnable par glisser sur son bord droit).
@@ -2426,13 +2417,23 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
                       </div>
                       {err.nicad1 && (
                         <p className="text-xs font-mono text-muted-foreground truncate">
+                          {/^feature_/.test(err.nicad1) ? "Réf. " : "NICAD "}
                           {err.nicad1}
                           {err.nicad2 ? ` ↔ ${err.nicad2}` : ""}
                         </p>
                       )}
-                      {err.area && (
-                        <p className="text-[10px] text-muted-foreground">
-                          {err.area.toFixed(2)} m²
+                      {(() => {
+                        // Surface de l'erreur si connue (ex. chevauchement), sinon
+                        // surface de la parcelle calculée depuis sa géométrie.
+                        const errArea = err.area != null ? Number(err.area) : null;
+                        const geomArea = errArea == null ? geometryAreaSquareMeters(err.geometry) : null;
+                        if (errArea != null) return <p className="text-[10px] text-muted-foreground">Surface en erreur : {formatArea(errArea)}</p>;
+                        if (geomArea != null && geomArea > 0) return <p className="text-[10px] text-muted-foreground">Parcelle : {formatArea(geomArea)}</p>;
+                        return null;
+                      })()}
+                      {err.description && (
+                        <p className="mt-0.5 line-clamp-2 text-[10px] text-muted-foreground/80" title={err.description}>
+                          {err.description}
                         </p>
                       )}
                     </button>
@@ -3051,7 +3052,13 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
             />
             {/* Annuler/rétablir — coin haut-gauche de la carte, sur la même
                 ligne que le panneau latéral, juste à sa droite. */}
-            <div className="absolute top-2 left-2 z-10 flex items-center gap-1 px-1.5 py-1 rounded-lg border border-border bg-card/90 backdrop-blur-sm shadow-lg">
+            <MapToolsBar
+              className="top-2 left-2"
+              layersOpen={layersOpen}
+              onToggleLayers={setLayersOpen}
+              measureMode={measureMode}
+              onMeasureMode={setMeasureMode}
+            >
               <button
                 onClick={() => void performUndo()}
                 disabled={!mapHistory.canUndo || restoringHistory}
@@ -3068,40 +3075,7 @@ export default function MapAnalysisClient({ user, analysis }: Props) {
               >
                 <Redo2 className="w-3.5 h-3.5" />
               </button>
-              <span className="mx-0.5 h-4 w-px bg-border" aria-hidden="true" />
-              <button
-                type="button"
-                onClick={() => {
-                  setLayersOpen((v) => !v);
-                  setMeasureMode(null);
-                }}
-                aria-pressed={layersOpen}
-                title="Couches"
-                className={`flex items-center gap-1 px-1.5 py-1 rounded text-xs transition-colors cursor-pointer ${layersOpen ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary/40"}`}
-              >
-                <Layers className="w-3.5 h-3.5" />
-                <span>Couches</span>
-              </button>
-              {([
-                ["distance", Ruler, "Mesurer une distance"],
-                ["surface", Pentagon, "Mesurer une surface"],
-              ] as const).map(([mode, Icon, label]) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => {
-                    setMeasureMode((m) => (m === mode ? null : mode));
-                    setLayersOpen(false);
-                  }}
-                  aria-pressed={measureMode === mode}
-                  title={`${label} (Échap pour quitter)`}
-                  aria-label={label}
-                  className={`flex items-center gap-1 px-1.5 py-1 rounded text-xs transition-colors cursor-pointer ${measureMode === mode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-secondary/40"}`}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                </button>
-              ))}
-            </div>
+            </MapToolsBar>
             {layersOpen && (
               <LayersPanel
                 className="top-12 left-2"

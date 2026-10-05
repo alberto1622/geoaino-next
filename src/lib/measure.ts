@@ -58,3 +58,17 @@ export function formatArea(m2: number): string {
     ? `${nf(2).format(m2)} m² (${nf(4).format(ha)} ha)`
     : `${nf(3).format(m2 / 1_000_000)} km² (${nf(2).format(ha)} ha)`;
 }
+
+/**
+ * Aire d'une géométrie GeoJSON Polygon / MultiPolygon (m²) : anneaux
+ * extérieurs moins les trous. `null` pour tout autre type.
+ */
+export function geometryAreaSquareMeters(geom: unknown): number | null {
+  const g = geom as { type?: string; coordinates?: unknown } | null;
+  if (!g || !Array.isArray(g.coordinates)) return null;
+  const polyArea = (rings: LngLat[][]) =>
+    rings.reduce((acc, ring, i) => acc + (i === 0 ? 1 : -1) * areaSquareMeters(ring), 0);
+  if (g.type === "Polygon") return polyArea(g.coordinates as LngLat[][]);
+  if (g.type === "MultiPolygon") return (g.coordinates as LngLat[][][]).reduce((a, p) => a + polyArea(p), 0);
+  return null;
+}

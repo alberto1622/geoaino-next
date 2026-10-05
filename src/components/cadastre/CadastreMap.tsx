@@ -14,6 +14,10 @@ import { NicadDisplay } from "@/components/cadastre/NicadDisplay";
 import { SENEGAL_BBOX } from "@/lib/senegal-bounds";
 import { attachLeafletBasemap } from "@/lib/basemap";
 import { BasemapSwitcher } from "@/components/map/BasemapSwitcher";
+import { MapToolsBar } from "@/components/map/MapToolsBar";
+import { MeasurePanel } from "@/components/map/MeasurePanel";
+import { useMeasureMode, useMeasurePoints } from "@/lib/use-measure";
+import { useLeafletMeasure } from "@/lib/leaflet-measure";
 import { CursorCoordinates, useCursorStore } from "@/components/map/CursorCoordinates";
 
 type Version = "2013" | "2026";
@@ -124,6 +128,14 @@ export default function CadastreMap() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mapRef = useRef<any>(null);
   const cursorStore = useCursorStore();
+  // Outil de mesure : pendant une mesure, le clic place un point au lieu
+  // d'identifier la parcelle (cf. gestionnaire de clic ci-dessous).
+  const [measureMode, setMeasureMode] = useMeasureMode(); // Échap pour quitter
+  const measure = useMeasurePoints(measureMode);
+  const measureActiveRef = useRef(false);
+  useEffect(() => {
+    measureActiveRef.current = measureMode !== null;
+  }, [measureMode]);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const layerRef = useRef<any>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -132,6 +144,7 @@ export default function CadastreMap() {
   const labelGroupRef = useRef<any>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const LRef = useRef<any>(null);
+  useLeafletMeasure({ mapRef, LRef, mode: measureMode, pts: measure.pts, onAdd: measure.add });
 
   const [version, setVersion] = useState<Version>("2013");
   const [regions, setRegions] = useState<string[]>([]);
@@ -162,6 +175,7 @@ export default function CadastreMap() {
 
       // Identification au clic
       map.on("click", async (e: { latlng: { lat: number; lng: number } }) => {
+        if (measureActiveRef.current) return;
         const p = await parcelleByCoords({ lat: e.latlng.lat, lng: e.latlng.lng, radiusKm: 0.3 });
         if (p) setSelected(p);
       });
@@ -513,6 +527,9 @@ export default function CadastreMap() {
         <div className="relative">
           <div ref={mapEl} className="h-[600px] w-full rounded-xl border border-border/60" />
           <BasemapSwitcher className="bottom-2 left-2" />
+          {/* À droite des boutons de zoom Leaflet (coin haut-gauche). */}
+          <MapToolsBar className="left-14 top-2.5" measureMode={measureMode} onMeasureMode={setMeasureMode} />
+          <MeasurePanel mode={measureMode} pts={measure.pts} onUndo={measure.undo} onClear={measure.clear} className="left-14 top-14" />
           <CursorCoordinates store={cursorStore} className="bottom-11 left-2" />
           {loading && (
             <div className="absolute right-3 top-3 rounded-lg bg-background/90 px-3 py-1.5 text-xs shadow">

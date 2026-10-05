@@ -7,6 +7,9 @@ import { Download, Loader2, Eye, EyeOff, MapPinned } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { errorTypeColor } from "@/lib/utils";
 import type { ErrorRow } from "@/components/cadastre/ParcellesMapLibre";
+import { MapToolsBar } from "@/components/map/MapToolsBar";
+import { LayersPanel } from "@/components/map/LayersPanel";
+import { useMeasureMode } from "@/lib/use-measure";
 
 // `react-map-gl`/`maplibre-gl` touchent `window` au chargement → composant
 // client-only (mêmes raisons que `MapLibreMap` dans `MapAnalysisClient.tsx`).
@@ -58,6 +61,12 @@ export default function ParcellesVisualisationClient({ files }: { files: FileIte
   const [metaById, setMetaById] = useState<Map<number, Meta>>(new Map());
   const [loading, setLoading] = useState(false);
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set());
+  // Panneau « Couches » et outil de mesure de la carte.
+  const [layersOpen, setLayersOpen] = useState(false);
+  const [parcellesVisible, setParcellesVisible] = useState(true);
+  const [parcellesOpacity, setParcellesOpacity] = useState(0.08);
+  const [erreursVisible, setErreursVisible] = useState(true);
+  const [measureMode, setMeasureMode] = useMeasureMode(); // Échap pour quitter
   const [exporting, setExporting] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
 
@@ -181,10 +190,35 @@ export default function ParcellesVisualisationClient({ files }: { files: FileIte
 
   return (
     <div className="relative h-[calc(100vh-180px)] min-h-[500px] overflow-hidden rounded-xl border border-border/60">
-      <ParcellesMapLibre selectedIds={selectedIds} errorsById={errorsById} hiddenTypes={hiddenTypes} fitBounds={fitBounds} />
+      <ParcellesMapLibre
+        selectedIds={selectedIds}
+        errorsById={errorsById}
+        hiddenTypes={hiddenTypes}
+        fitBounds={fitBounds}
+        parcellesVisible={parcellesVisible}
+        parcellesOpacity={parcellesOpacity}
+        erreursVisible={erreursVisible}
+        measureMode={measureMode}
+      />
+      <MapToolsBar className="left-3 top-3" layersOpen={layersOpen} onToggleLayers={setLayersOpen} measureMode={measureMode} onMeasureMode={setMeasureMode} />
+      {layersOpen && (
+        <LayersPanel
+          className="left-3 top-14"
+          onClose={() => setLayersOpen(false)}
+          groups={[
+            {
+              title: "Fichiers chargés",
+              items: [
+                { id: "erreurs", label: "Erreurs topologiques", color: errorTypeColor("overlap"), checked: erreursVisible, onToggle: setErreursVisible },
+                { id: "parcelles", label: "Parcelles", color: "#64748b", checked: parcellesVisible, onToggle: setParcellesVisible, opacity: parcellesOpacity, onOpacity: setParcellesOpacity },
+              ],
+            },
+          ]}
+        />
+      )}
 
       {loading && (
-        <div className="absolute left-3 top-3 z-1000 flex items-center gap-2 rounded-lg bg-background/95 px-3 py-1.5 text-xs shadow backdrop-blur">
+        <div className="absolute left-3 top-14 z-1000 flex items-center gap-2 rounded-lg bg-background/95 px-3 py-1.5 text-xs shadow backdrop-blur">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Chargement des fichiers…
         </div>
       )}
